@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuroMatrix AI | 患者信息录入系统</title>
+    <link rel="stylesheet" href="/static/css/contrast_control.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 12px; background: #000; color: #fff; overflow: hidden; height: 100vh; }
+        .top-bar { height: 40px; background: #000; border-bottom: 1px solid #1a1a1a; display: flex; align-items:center; padding:0 16px; justify-content: space-between; }
+        .logo { font-size:13px; color:#fff; font-weight:500; }
+        .patient-info { font-size:11px; color:#808080; }
+        .disclaimer { font-size:11px; color:#ffd43b; background:rgba(255,212,59,0.08); padding:5px 12px; border-left:2px solid #ffd43b; }
+        .tools { display:flex; gap:8px; }
+        .tool-btn { background:transparent; border:1px solid #333; color:#fff; padding:4px 12px; font-size:11px; cursor:pointer; }
+        .tool-btn:hover { border-color:#00a8ff; }
+        .tool-btn.primary { background:#00a8ff; border-color:#00a8ff; }
+        .info-container { display:flex; align-items:center; justify-content:center; height:calc(100vh - 40px); padding:20px; }
+        .info-box { width:680px; background:#0a0a0a; border:1px solid #1a1a1a; padding:32px; }
+        .info-title { font-size:14px; margin-bottom:24px; color:#fff; }
+        .form-group { margin-bottom:20px; border-bottom:1px solid #1a1a1a; padding-bottom:16px; }
+        .group-title { font-size:11px; color:#808080; margin-bottom:12px; }
+        .form-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; }
+        .form-grid-2 { grid-template-columns:repeat(2,1fr); }
+        .form-item { display:flex; flex-direction:column; gap:4px; }
+        .form-label { font-size:11px; color:#808080; }
+        .form-label.required::after { content:'*'; color:#ff6b6b; margin-left:2px; }
+        .form-input, .form-select { background:#000; border:1px solid #333; color:#fff; padding:6px 12px; font-size:11px; outline:none; }
+        .form-input:focus { border-color:#00a8ff; }
+        .dicom-upload-row { display:flex; align-items:center; gap:12px; margin-top:8px; }
+        .file-input { display:none; }
+        .file-select { flex:1; background:#000; border:1px solid #333; color:#808080; padding:6px 12px; font-size:11px; cursor:pointer; }
+        .loading-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.95); display:none; align-items:center; justify-content:center; z-index:1000; }
+        .spinner { width:32px; height:32px; border:2px solid #1a1a1a; border-top-color:#00a8ff; border-radius:50%; animation:spin 0.8s linear infinite; margin:0 auto 16px; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+        .message { position:fixed; top:50px; right:16px; padding:10px 16px; font-size:11px; background:#0a0a0a; border:1px solid; z-index:999; display:none; }
+        .message.success { border-color:#51cf66; color:#51cf66; }
+        .message.error { border-color:#ff6b6b; color:#ff6b6b; }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <div class="logo">NeuroMatrix AI</div>
+        <div class="patient-info">脑卒中患者信息录入系统</div>
+        <div class="disclaimer">⚠️ 数据仅供临床参考</div>
+        <div class="tools">
+            <button class="tool-btn" onclick="resetForm()">重置表单</button>
+            <button class="tool-btn primary" onclick="submitPatientInfo()">提交存储</button>
+        </div>
+    </div>
+
+    <div class="info-container">
+        <div class="info-box">
+            <div class="info-title">患者核心信息录入</div>
+            <form id="patientForm">
+                <div class="form-group">
+                    <div class="group-title">👤 基础信息</div>
+                    <div class="form-grid">
+                        <div class="form-item"><label class="form-label required">姓名</label><input type="text" id="patient_name" class="form-input" required></div>
+                        <div class="form-item"><label class="form-label required">年龄</label><input type="number" id="patient_age" class="form-input" min="0" max="120" required></div>
+                        <div class="form-item"><label class="form-label required">性别</label><select id="patient_sex" class="form-select" required><option value="">请选择</option><option value="男">男</option><option value="女">女</option></select></div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="group-title">⏱️ 病程时间</div>
+                    <div class="form-grid form-grid-2">
+                        <div class="form-item"><label class="form-label required">发病精确时间</label><input type="datetime-local" id="onset_exact_time" class="form-input" required></div>
+                        <div class="form-item"><label class="form-label required">入院时间</label><input type="datetime-local" id="admission_time" class="form-input" required></div>
+                    </div>
+                    <div class="form-item" style="margin-top:12px;"><label class="form-label required">入院-发病时间差</label><input type="text" id="surgery_time" class="form-input" readonly value="选择时间后自动计算"></div>
+                </div>
+                <div class="form-group">
+                    <div class="group-title">📊 评分信息</div>
+                    <div class="form-grid">
+                        <div class="form-item"><label class="form-label required">NIHSS评分 (0-42)</label><input type="number" id="admission_nihss" class="form-input" min="0" max="42" required></div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="group-title">🩻 DICOM影像</div>
+                    <div class="dicom-upload-row">
+                        <label style="width:80px;font-size:11px;color:#808080;">影像文件</label>
+                        <input type="file" id="dicomFile" class="file-input" accept=".dcm">
+                        <button class="file-select" onclick="document.getElementById('dicomFile').click()">选择.dcm文件</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="loading-overlay" id="loadingOverlay"><div><div class="spinner"></div><div>数据提交中...</div></div></div>
+    <div class="message" id="msgBox"></div>
+
+    <!-- ✅ 只加载2个必要JS，绝对无Supabase相关文件！ -->
+    <script src="https://unpkg.com/dicom-parser@1.8.21/dist/dicomParser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+    
+    <script>
+        var dicomMetaData = {};
+        // 页面加载完成初始化
+        document.addEventListener('DOMContentLoaded', function(){
+            initTimeCalculate();
+            initDicomUpload();
+        });
+
+        // 时间差自动计算
+        function initTimeCalculate(){
+            const onset = document.getElementById('onset_exact_time');
+            const admission = document.getElementById('admission_time');
+            const diff = document.getElementById('surgery_time');
+            [onset, admission].forEach(el => el.addEventListener('change', function(){
+                if(onset.value && admission.value){
+                    const d1 = new Date(onset.value);
+                    const d2 = new Date(admission.value);
+                    const ms = d2 - d1;
+                    const h = Math.floor(ms/3600000);
+                    const m = Math.floor((ms%3600000)/60000);
+                    diff.value = `${h}小时 ${m}分钟`;
+                }
+            }));
+        }
+
+        // DICOM文件解析
+        function initDicomUpload(){
+            document.getElementById('dicomFile').addEventListener('change', async function(e){
+                const file = e.target.files[0];
+                if(!file || !file.name.endsWith('.dcm')){
+                    showMessage('请上传有效的.dcm格式影像文件', 'error');
+                    return;
+                }
+                try{
+                    const buffer = await readFileAsArrayBuffer(file);
+                const ds = dicomParser.parseDicom(new Uint8Array(buffer));
+                    dicomMetaData = {
+                        dicom_patient_id: ds.string('x00100020') || '未知ID',
+                        dicom_modality: ds.string('x00080060') || '未知类型'
+                    };
+                    showMessage('DICOM文件解析成功', 'success');
+                }catch(err){
+                    showMessage('DICOM解析失败：'+err.message, 'error');
+                }
+            });
+        }
+
+        // 读取文件
+        function readFileAsArrayBuffer(file) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        // ✅✅✅ 核心提交函数：只请求你的后端，绝对无Supabase！！！
+        function submitPatientInfo(){
+            const form = document.getElementById('patientForm');
+            if(!form.checkValidity()){
+                showMessage('请填写所有带*的必填项', 'error');
+                return;
+            }
+            const loading = document.getElementById('loadingOverlay');
+            loading.style.display = 'flex';
+
+            // 组装提交数据
+            const patientData = {
+                patient_name: document.getElementById('patient_name').value.trim(),
+                patient_age: parseInt(document.getElementById('patient_age').value),
+                patient_sex: document.getElementById('patient_sex').value,
+                onset_exact_time: new Date(document.getElementById('onset_exact_time').value).toISOString(),
+                admission_time: new Date(document.getElementById('admission_time').value).toISOString(),
+                surgery_time: document.getElementById('surgery_time').value,
+                admission_nihss: parseInt(document.getElementById('admission_nihss').value),
+                ...dicomMetaData,
+                create_time: new Date().toISOString()
+            };
+
+            // 唯一请求：只调用你本地的Python后端接口！！！
+            $.ajax({
+                url: 'http://127.0.0.1:5000/api/insert_patient',
+                type: 'POST',
+                contentType: 'application/json;charset=utf-8',
+                data: JSON.stringify(patientData),
+                success: function(res){
+                    loading.style.display = 'none';
+                    showMessage('✅ 提交成功！患者ID：'+res.data.id, 'success');
+                    resetForm();
+                },
+                error: function(err){
+                    loading.style.display = 'none';
+                    const errMsg = err.responseJSON?.message || '提交失败，请检查后端是否启动';
+                    showMessage('❌ '+errMsg, 'error');
+                }
+            });
+        }
+
+        // 重置表单
+        function resetForm(){
+            document.getElementById('patientForm').reset();
+            document.getElementById('surgery_time').value = '选择时间后自动计算';
+            dicomMetaData = {};
+        }
+
+        // 消息提示
+        function showMessage(text, type){
+            const box = document.getElementById('msgBox');
+            box.className = 'message '+type;
+            box.innerHTML = text;
+            box.style.display = 'block';
+            setTimeout(()=>box.style.display='none', 3000);
+        }
+    </script>
+</body>
+</html>
