@@ -13,3 +13,6 @@
 # static
 static/uploads/
 static/processed/
+
+# log日志
+web_system.log
