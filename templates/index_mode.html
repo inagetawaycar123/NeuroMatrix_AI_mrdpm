@@ -410,6 +410,33 @@
             }
         }
 
+        // ==================== 患者灌注图参数更新核心方法 ====================
+        
+        async function saveAnalysisToDB() {
+            if (!analysisResults || !currentPatientId || !currentFileId) return;
+    
+            const payload = {
+                patient_id: currentPatientId,  // 更新已有患者记录
+                core_infarct_volume: analysisResults.report?.summary?.core_volume_ml? parseFloat(analysisResults.report.summary.core_volume_ml.toFixed(1)) : null,
+                penumbra_volume: analysisResults.report?.summary?.penumbra_volume_ml? parseFloat(analysisResults.report.summary.penumbra_volume_ml.toFixed(1)) : null,
+                mismatch_ratio: analysisResults.report?.summary?.mismatch_ratio? parseFloat(analysisResults.report.summary.mismatch_ratio.toFixed(2)) : null,
+                analysis_status: 'completed'
+            };
+    
+            try {
+                const res = await $.ajax({
+                    url: '/api/update_analysis',
+                    type: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify(payload)
+                });
+                showMsg('分析结果已保存', 'success');
+            } catch (err) {
+            showMsg('保存失败: ' + err.message, 'error');
+            }
+        }
+
+
         // ==================== 基础初始化方法 ====================
         function initializeContrastController() {
             contrastController = new ContrastController({
@@ -628,6 +655,8 @@
                     mismatchContainer.classList.remove('warning');
                 }
             }
+
+            saveAnalysisToDB();
         }
         function updateStrokeImage() {
             if(!analysisResults) return;
