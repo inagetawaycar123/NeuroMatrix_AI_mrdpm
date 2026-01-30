@@ -4,7 +4,7 @@ from ai_inference import init_ai_model, get_ai_model
 import os
 from flask import Flask, render_template, request, jsonify, send_file
 
-from palette.core.supabase_client import insert_patient_info
+from core.supabase_client import insert_patient_info
 from extensions import NumpyJSONEncoder
 import os
 import numpy as np
@@ -1677,14 +1677,8 @@ def normalize_slice(slice_data):
 
 @app.route('/')
 def index():
-    # 从环境变量或配置文件获取Supabase凭据
-    # 注意：这里应该使用anon key而不是service_role key
-    supabase_url = os.getenv('SUPABASE_URL', 'https://ppyexzqdbsnwqfyugfvc.supabase.co')
-    supabase_anon_key = os.getenv('SUPABASE_ANON_KEY', 'your-anon-key-here')  # 需要替换为实际的anon key
-
-    return render_template('index_mode.html',
-                         supabase_url=supabase_url,
-                         supabase_anon_key=supabase_anon_key)
+    
+    return render_template('index_mode.html')
 
 
 @app.route('/upload', methods=['POST'])

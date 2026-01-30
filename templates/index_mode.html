@@ -127,7 +127,7 @@
         <div class="disclaimer">⚠️ AI分析结果仅供临床参考 | 请确保输入数据无明显伪影</div>
         <div class="tools" id="patientTools">
             <button class="tool-btn" onclick="resetForm()">重置表单</button>
-            <button class="tool-btn primary" onclick="submitPatientInfo()">提交存储</button>
+            <button class="tool-btn primary" onclick="submitPatientBasicInfo()">提交存储</button>
         </div>
         <div class="tools" id="mainTools" style="display: none;">
             <button class="tool-btn" id="contrastBtn" onclick="toggleContrastPanel()">对比度调节</button>
@@ -374,8 +374,8 @@
             initializeContrastController();
         });
 
-        // ==================== 患者信息提交核心方法 ====================
-        async function submitPatientInfo() {
+        // ==================== 患者基础信息提交核心方法 ====================
+        async function submitPatientBasicInfo() {
             const form = document.getElementById('patientForm');
             if (!form.checkValidity()) { showMsg('请填写完整必填项', 'error'); return; }
             document.getElementById('loadingOverlay').style.display = 'flex';
