@@ -43,3 +43,42 @@ def insert_patient_info(patient_data: dict):
         err_detail = str(e)
         print(f"❌ 写入数据库异常：{err_detail}")
         return (False, f"写入失败：{err_detail}")
+    
+
+
+def update_analysis_result(patient_id: int, analysis_data: dict):
+    """
+    更新患者的分析结果到 patient_info 表
+    :param patient_id: 患者ID
+    :param analysis_data: 分析数据字典 (core_infarct_volume, penumbra_volume, mismatch_ratio, analysis_status)
+    :return: tuple: (是否成功, 结果数据/错误信息)
+    """
+    try:
+        print("=" * 60)
+        print(f"✅ 更新患者分析结果：patient_id={patient_id}, data={analysis_data}")
+        
+        # 组装更新数据
+        update_data = {
+            'core_infarct_volume': analysis_data.get('core_infarct_volume'),
+            'penumbra_volume': analysis_data.get('penumbra_volume'),
+            'mismatch_ratio': analysis_data.get('mismatch_ratio'),
+            'analysis_status': analysis_data.get('analysis_status', 'completed')
+        }
+        
+        # 执行 UPDATE
+        response = supabase.table('patient_info') \
+            .update(update_data) \
+            .eq('id', patient_id) \
+            .execute()
+        
+        print(f"✅ Supabase执行结果：{response.data}")
+        print("=" * 60)
+        
+        if response.data and len(response.data) > 0:
+            return (True, response.data[0])
+        else:
+            return (False, "更新失败：Supabase返回空数据")
+    except Exception as e:
+        err_detail = str(e)
+        print(f"❌ 更新数据库异常：{err_detail}")
+        return (False, f"更新失败：{err_detail}")

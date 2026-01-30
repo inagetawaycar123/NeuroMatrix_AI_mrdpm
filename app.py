@@ -4,7 +4,7 @@ from ai_inference import init_ai_model, get_ai_model
 import os
 from flask import Flask, render_template, request, jsonify, send_file
 
-from core.supabase_client import insert_patient_info
+from core.supabase_client import insert_patient_info, update_analysis_result
 from extensions import NumpyJSONEncoder
 import os
 import numpy as np
@@ -575,6 +575,29 @@ def api_insert_patient():
         # 写入失败：返回错误信息，前端会弹出红色错误提示
         return jsonify({"status": "error", "message": result}), 200
 
+@app.route('/api/update_analysis', methods=['POST'])
+def api_update_analysis():
+    """更新患者的分析结果到 patient_info 表"""
+    data = request.get_json()
+    patient_id = data.get('patient_id')
+    
+    if not patient_id:
+        return jsonify({"status": "error", "message": "缺少 patient_id"}), 400
+    
+    # 调用封装好的函数
+    success, result = update_analysis_result(patient_id, data)
+    
+    if success:
+        return jsonify({
+            "status": "success",
+            "message": "分析结果已更新",
+            "data": result
+        })
+    else:
+        return jsonify({
+            "status": "error",
+            "message": result
+        }), 500
 
 # ==================== 图像对比度调节API ====================
 
