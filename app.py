@@ -1700,8 +1700,22 @@ def normalize_slice(slice_data):
 
 @app.route('/')
 def index():
-    
-    return render_template('index_mode.html')
+    return render_template('patient/index.html')
+
+
+@app.route('/patient')
+def patient_page():
+    return render_template('patient/index.html')
+
+
+@app.route('/upload')
+def upload_page():
+    return render_template('patient/upload/index.html')
+
+
+@app.route('/viewer')
+def viewer_page():
+    return render_template('patient/upload/viewer/index.html')
 
 
 @app.route('/upload', methods=['POST'])

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block tools %}
+<button class="tool-btn" onclick="resetAll()">重新开始</button>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page">
+        <div class="upload-container">
+            <div class="upload-box">
+                <div class="upload-title">上传医学影像文件</div>
+                <div class="file-input-row">
+                    <label class="file-label">CTA文件:</label>
+                    <input type="file" id="mctaFile" class="file-input" accept=".nii,.nii.gz">
+                    <button class="file-select" id="mctaBtn" onclick="document.getElementById('mctaFile').click()">选择文件...</button>
+                </div>
+                <div class="file-input-row">
+                    <label class="file-label">NCCT文件:</label>
+                    <input type="file" id="ncctFile" class="file-input" accept=".nii,.nii.gz">
+                    <button class="file-select" id="ncctBtn" onclick="document.getElementById('ncctFile').click()">选择文件...</button>
+                </div>
+                <div class="file-input-row">
+                    <label class="file-label">模型选择:</label>
+                    <select id="modelSelect" class="form-select" style="width: auto; flex: 1;">
+                        <option value="palette">palette模型</option>
+                        <option value="mrdpm" selected>mrdpm模型 (默认)</option>
+                    </select>
+                </div>
+                <button class="upload-btn" id="uploadBtn" onclick="processFiles()" disabled>开始处理</button>
+                <div class="upload-info">
+                    支持格式: NIfTI (.nii, .nii.gz)<br>
+                    文件大小: 最大 100MB<br>
+                    系统将自动生成: RGB合成、脑部掩码、AI灌注图(CBF/CBV/Tmax)
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/upload.js"></script>
+{% endblock %}

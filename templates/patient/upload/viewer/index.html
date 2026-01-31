@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block tools %}
+<button class="tool-btn" id="contrastBtn" onclick="toggleContrastPanel()">对比度调节</button>
+<button class="tool-btn" id="pseudocolorBtn" onclick="togglePseudocolor()">生成伪彩图</button>
+<button class="tool-btn" onclick="toggleAnalysisPanel()">脑卒中分析</button>
+<button class="tool-btn" onclick="downloadData()">下载</button>
+<button class="tool-btn" onclick="resetAll()">重新开始</button>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page">
+        <div class="viewer-container">
+            <div class="image-grid">
+                <div class="grid-cell" id="cell-cta">
+                    <div class="cell-label">CTA</div>
+                    <div class="cell-status status-ready" id="status-cta" style="display:none;">✓</div>
+                    <div class="contrast-indicator" id="contrast-indicator-cta">W:80 L:40</div>
+                    <img id="img-cta" class="grid-image" src="" alt="CTA">
+                </div>
+                <div class="grid-cell" id="cell-ncct">
+                    <div class="cell-label">NCCT</div>
+                    <div class="cell-status status-ready" id="status-ncct" style="display:none;">✓</div>
+                    <div class="contrast-indicator" id="contrast-indicator-ncct">W:80 L:40</div>
+                    <img id="img-ncct" class="grid-image" src="" alt="NCCT">
+                </div>
+                <div class="grid-cell" id="cell-stroke">
+                    <div class="cell-label">STROKE ANALYSIS</div>
+                    <div class="cell-status" id="status-stroke" style="display:none;">-</div>
+                    <img id="img-stroke" class="grid-image" src="" alt="Stroke">
+                </div>
+                <div class="grid-cell" id="cell-cbf">
+                    <div class="cell-label">CBF</div>
+                    <div class="cell-status" id="status-cbf" style="display:none;">-</div>
+                    <div class="pseudocolor-toggle" id="toggle-cbf" onclick="toggleCellPseudocolor('cbf')">伪彩</div>
+                    <img id="img-cbf" class="grid-image" src="" alt="CBF">
+                </div>
+                <div class="grid-cell" id="cell-cbv">
+                    <div class="cell-label">CBV</div>
+                    <div class="cell-status" id="status-cbv" style="display:none;">-</div>
+                    <div class="pseudocolor-toggle" id="toggle-cbv" onclick="toggleCellPseudocolor('cbv')">伪彩</div>
+                    <img id="img-cbv" class="grid-image" src="" alt="CBV">
+                </div>
+                <div class="grid-cell" id="cell-tmax">
+                    <div class="cell-label">TMAX</div>
+                    <div class="cell-status" id="status-tmax" style="display:none;">-</div>
+                    <div class="pseudocolor-toggle" id="toggle-tmax" onclick="toggleCellPseudocolor('tmax')">伪彩</div>
+                    <img id="img-tmax" class="grid-image" src="" alt="Tmax">
+                </div>
+            </div>
+            <div class="bottom-bar">
+                <div class="slice-controls">
+                    <button class="nav-btn" id="prevBtn" onclick="changeSlice(-1)">◀</button>
+                    <input type="range" class="slice-slider" id="sliceSlider" min="0" max="100" value="0" oninput="updateSlice(this.value)">
+                    <span class="slice-info" id="sliceInfo">1 / 100</span>
+                    <button class="nav-btn" id="nextBtn" onclick="changeSlice(1)">▶</button>
+                </div>
+                <div class="metrics-display" id="metricsDisplay">
+                    <div class="metric-item">
+                        <span>半暗带: <span id="metric-penumbra">--</span> ml</span>
+                    </div>
+                    <div class="metric-item">
+                        <span>核心: <span id="metric-core">--</span> ml</span>
+                    </div>
+                    <div class="metric-item" id="metric-mismatch-container">
+                        <span>不匹配: <span id="metric-mismatch">--</span></span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="analysis-panel" id="analysisPanel">
+    <div class="panel-header">
+        <div class="panel-title">脑卒中分析</div>
+        <button class="close-btn" onclick="toggleAnalysisPanel()">×</button>
+    </div>
+    <div class="panel-section">
+        <div class="section-title">偏侧选择</div>
+        <div class="hemisphere-btns">
+            <button class="hemisphere-btn" data-hemisphere="right">右脑</button>
+            <button class="hemisphere-btn" data-hemisphere="left">左脑</button>
+            <button class="hemisphere-btn active" data-hemisphere="both">双侧</button>
+        </div>
+        <button class="analyze-btn" onclick="startStrokeAnalysis()">开始分析</button>
+    </div>
+    <div class="panel-section analysis-results" id="analysisResults">
+        <div class="section-title">病灶可视化</div>
+        <div class="result-images">
+            <div class="result-img-cell">
+                <div class="result-img-label">半暗带</div>
+                <img id="img-penumbra" src="" alt="Penumbra">
+            </div>
+            <div class="result-img-cell">
+                <div class="result-img-label">核心</div>
+                <img id="img-core" src="" alt="Core">
+            </div>
+            <div class="result-img-cell">
+                <div class="result-img-label">综合</div>
+                <img id="img-combined" src="" alt="Combined">
+            </div>
+        </div>
+    </div>
+    <div class="panel-section analysis-results" id="analysisMetrics">
+        <div class="section-title">量化结果</div>
+        <div class="metrics-list">
+            <div class="metric-row">
+                <span class="metric-label">半暗带体积</span>
+                <span class="metric-value" id="value-penumbra">-- ml</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">核心梗死体积</span>
+                <span class="metric-value" id="value-core">-- ml</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">不匹配比例</span>
+                <span class="metric-value" id="value-ratio">--</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">不匹配状态</span>
+                <span class="metric-value" id="value-status">--</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/viewer.js"></script>
+{% endblock %}
