@@ -1,0 +1,213 @@
+/* ==================== TipTap 编辑器样式 ==================== */
+
+.rich-text-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.editor-toolbar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 8px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  align-items: center;
+}
+
+.format-btn {
+  background: #0a0a0a;
+  border: 1px solid #333;
+  color: #fff;
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.2s;
+  font-weight: 500;
+  white-space: nowrap;
+  min-width: 32px;
+  text-align: center;
+}
+
+.format-btn:hover {
+  border-color: #00a8ff;
+  color: #00a8ff;
+  background: #0a0a0a;
+}
+
+.format-btn.active {
+  background: #00a8ff;
+  border-color: #00a8ff;
+  color: #000;
+}
+
+.toolbar-divider {
+  width: 1px;
+  height: 24px;
+  background: #333;
+  margin: 0 4px;
+}
+
+/* ==================== 编辑器内容 ==================== */
+
+.editor-content {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 0 0 4px 4px;
+  padding: 12px;
+  min-height: 120px;
+  max-height: 400px;
+  overflow-y: auto;
+  font-size: 14px;
+}
+
+.ProseMirror {
+  outline: none;
+}
+
+.ProseMirror > * + * {
+  margin-top: 0.75em;
+}
+
+.ProseMirror ul,
+.ProseMirror ol {
+  padding: 0 1.5em;
+}
+
+.ProseMirror h1,
+.ProseMirror h2,
+.ProseMirror h3 {
+  line-height: 1.1;
+  margin: 0.5em 0 0.25em 0;
+}
+
+.ProseMirror h1 {
+  font-size: 1.8em;
+  font-weight: 700;
+  color: #fff;
+}
+
+.ProseMirror h2 {
+  font-size: 1.4em;
+  font-weight: 600;
+  color: #00a8ff;
+}
+
+.ProseMirror h3 {
+  font-size: 1.1em;
+  font-weight: 600;
+}
+
+.ProseMirror code {
+  background: #0a0a0a;
+  color: #00ff00;
+  padding: 0.2em 0.4em;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9em;
+}
+
+.ProseMirror pre {
+  background: #0a0a0a;
+  border-left: 3px solid #00a8ff;
+  padding: 12px;
+  border-radius: 3px;
+  overflow-x: auto;
+  margin: 1em 0;
+}
+
+.ProseMirror pre code {
+  background: none;
+  color: #fff;
+  padding: 0;
+}
+
+.ProseMirror blockquote {
+  border-left: 3px solid #00a8ff;
+  color: #808080;
+  padding-left: 1em;
+  margin-left: 0;
+  font-style: italic;
+}
+
+.ProseMirror a {
+  color: #00a8ff;
+  cursor: pointer;
+  text-decoration: underline;
+
+  &:hover {
+    color: #0095e0;
+  }
+}
+
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin: 0.5em 0;
+}
+
+.ProseMirror hr {
+  border: none;
+  border-top: 1px solid #333;
+  margin: 1em 0;
+}
+
+/* ==================== 气泡菜单 ==================== */
+
+.bubble-menu {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  background: #1a1a1a;
+  border: 1px solid #333;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+}
+
+.bubble-menu button {
+  background: #0a0a0a;
+  border: 1px solid #333;
+  color: #fff;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+  transition: all 0.2s;
+}
+
+.bubble-menu button:hover {
+  border-color: #00a8ff;
+  color: #00a8ff;
+}
+
+.bubble-menu button.is-active {
+  background: #00a8ff;
+  border-color: #00a8ff;
+  color: #000;
+}
+
+/* ==================== 滚动条美化 ==================== */
+
+.editor-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.editor-content::-webkit-scrollbar-track {
+  background: #1a1a1a;
+  border-radius: 4px;
+}
+
+.editor-content::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 4px;
+}
+
+.editor-content::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
