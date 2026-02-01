@@ -671,7 +671,25 @@ def api_save_report():
 @app.route('/report/<int:patient_id>')
 def report_page(patient_id):
     """渲染报告页面"""
-    return render_template('patient/upload/viewer/report/index.html')
+    import os
+    import re
+    # 检查是否有编译后的生产文件
+    dist_file = os.path.join(app.static_folder, 'dist', 'index.html')
+    if os.path.exists(dist_file):
+        # 生产环境：使用编译后的文件，并修改资源路径
+        with open(dist_file, 'r', encoding='utf-8') as f:
+            html = f.read()
+        
+        # 修改 <link> 标签中的 href 路径：from /assets/ to /static/dist/assets/
+        html = re.sub(r'href="\/assets\/', 'href="/static/dist/assets/', html)
+        
+        # 修改 <script> 标签中的 src 路径：from /assets/ to /static/dist/assets/
+        html = re.sub(r'src="\/assets\/', 'src="/static/dist/assets/', html)
+        
+        return html
+    else:
+        # 开发环境：返回 Vite 开发服务器入口
+        return render_template('patient/upload/viewer/report/vite.html')
 
 # ==================== 图像对比度调节API ====================
 
