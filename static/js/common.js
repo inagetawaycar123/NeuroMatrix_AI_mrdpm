@@ -56,5 +56,16 @@ function updatePatientHeader(patientId) {
 function resetAll() {
     sessionStorage.removeItem('patient_id');
     sessionStorage.removeItem('viewer_data');
+    sessionStorage.removeItem('analysis_data');
     window.location.href = '/patient';
+}
+
+function openReport() {
+    const patientId = getCurrentPatientId();
+    const fileId = sessionStorage.getItem('current_file_id');
+    if (patientId && fileId) {
+        window.open(`/report/${patientId}?file_id=${fileId}`, '_blank');
+    } else {
+        alert('缺少患者ID或文件ID');
+    }
 }

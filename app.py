@@ -599,6 +599,80 @@ def api_update_analysis():
             "message": result
         }), 500
 
+@app.route('/api/get_patient/<int:patient_id>')
+def api_get_patient(patient_id):
+    """获取患者信息"""
+    try:
+        from core.supabase_client import supabase
+        
+        response = supabase.table('patient_info') \
+            .select('*') \
+            .eq('id', patient_id) \
+            .execute()
+        
+        if response.data and len(response.data) > 0:
+            return jsonify({
+                "status": "success",
+                "data": response.data[0]
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": f"未找到ID为 {patient_id} 的患者信息"
+            }), 404
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/api/save_report', methods=['POST'])
+def api_save_report():
+    """保存结构化临床报告"""
+    data = request.get_json()
+    patient_id = data.get('patient_id')
+    file_id = data.get('file_id')
+    
+    if not patient_id or not file_id:
+        return jsonify({"status": "error", "message": "缺少患者ID或文件ID"}), 400
+    
+    try:
+        # 将报告保存到数据库
+        # 这里简化为更新患者记录，实际项目建议新建独立的 reports 表
+        report_notes = f"""
+患者信息：{data.get('patient', {}).get('patient_name', '')}
+核心梗死：{data.get('findings', {}).get('core', '')}
+半暗带：{data.get('findings', {}).get('penumbra', '')}
+血管评估：{data.get('findings', {}).get('vessel', '')}
+灌注分析：{data.get('findings', {}).get('perfusion', '')}
+医生备注：{data.get('notes', '')}
+"""
+        
+        update_data = {
+            'uncertainty_remark': report_notes
+        }
+        
+        response = supabase.table('patient_info') \
+            .update(update_data) \
+            .eq('id', patient_id) \
+            .execute()
+        
+        return jsonify({
+            "status": "success",
+            "message": "报告保存成功",
+            "data": response.data
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+@app.route('/report/<int:patient_id>')
+def report_page(patient_id):
+    """渲染报告页面"""
+    return render_template('patient/upload/viewer/report/index.html')
+
 # ==================== 图像对比度调节API ====================
 
 @app.route('/adjust_contrast/<file_id>/<int:slice_index>/<image_type>')
@@ -1700,11 +1774,6 @@ def normalize_slice(slice_data):
 
 @app.route('/')
 def index():
-    return render_template('patient/index.html')
-
-
-@app.route('/patient')
-def patient_page():
     return render_template('patient/index.html')
 
 
