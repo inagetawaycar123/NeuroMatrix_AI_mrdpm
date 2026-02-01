@@ -45,6 +45,9 @@ function initializeViewer(data) {
     availableModels = data.available_models || [];
     currentSlice = 0;
 
+    // 保存当前文件ID供报告页面使用
+    sessionStorage.setItem('current_file_id', currentFileId);
+
     document.getElementById('sliceSlider').max = totalSlices - 1;
 
     if (contrastController) {
@@ -247,6 +250,15 @@ function displayAnalysisResults() {
             mismatchContainer.classList.remove('warning');
         }
     }
+
+    // 保存分析数据到 sessionStorage，供报告页面使用
+    sessionStorage.setItem('analysis_data', JSON.stringify({
+        core_infarct_volume: analysisResults.report?.summary?.core_volume_ml || 0,
+        penumbra_volume: analysisResults.report?.summary?.penumbra_volume_ml || 0,
+        mismatch_ratio: analysisResults.report?.summary?.mismatch_ratio || 0,
+        has_mismatch: analysisResults.report?.summary?.has_mismatch || false,
+        hemisphere: currentHemisphere
+    }));
 
     saveAnalysisToDB();
 }
