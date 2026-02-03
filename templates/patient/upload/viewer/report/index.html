@@ -32,8 +32,8 @@
         
         const fileId = urlParams.get('file_id') || null;
 
-        // 从 sessionStorage 获取分析数据
-        const viewerData = JSON.parse(sessionStorage.getItem('analysis_data') || '{}');
+        // 从 localStorage 获取分析数据（跨标签页共享）
+        const viewerData = JSON.parse(localStorage.getItem('analysis_data') || '{}');
         const analysisData = {
             core_volume: viewerData.core_infarct_volume || 0,
             penumbra_volume: viewerData.penumbra_volume || 0,

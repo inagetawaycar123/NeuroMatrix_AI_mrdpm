@@ -246,3 +246,46 @@
     min-width: auto;
   }
 }
+
+/* ==================== AI 报告区域 ==================== */
+.action-btn.ai {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  color: #fff;
+}
+
+.action-btn.ai:hover:not(:disabled) {
+  opacity: 0.9;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.ai-report-section {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border: 1px solid #667eea;
+  border-radius: 8px;
+  padding: 20px;
+  margin-top: 20px;
+}
+
+.ai-report-section h3 {
+  color: #667eea;
+  margin: 0 0 16px 0;
+  font-size: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-report-content {
+  background: #0a0a0a;
+  border-radius: 4px;
+  padding: 16px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: #e0e0e0;
+  white-space: pre-wrap;
+}
+
+.ai-report-content p {
+  margin: 0 0 8px 0;
+}
