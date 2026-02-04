@@ -23,7 +23,12 @@ export const DoctorNotesModule: React.FC<DoctorNotesModuleProps> = ({
             placeholder="请输入临床备注、诊断意见、后续建议..."
           />
         ) : (
-          <div className="field-value" dangerouslySetInnerHTML={{ __html: notes || '暂无备注' }} />
+          <div className="field-value" style={{ 
+            color: notes ? '#333' : '#999',
+            fontStyle: notes ? 'normal' : 'italic'
+          }}>
+            {notes || '无'}
+          </div>
         )}
       </div>
     </div>

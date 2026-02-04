@@ -1,11 +1,383 @@
 # app.py - 改进的伪彩图生成版本
 import torch
+import json
 from ai_inference import init_ai_model, get_ai_model
 import os
+import requests  # 添加 requests 导入，用于调用百川 M3 API
 from flask import Flask, render_template, request, jsonify, send_file
-
-from core.supabase_client import insert_patient_info, update_analysis_result
 from extensions import NumpyJSONEncoder
+
+# ==================== Supabase 客户端内联初始化 ====================
+try:
+    from supabase import create_client, Client
+    SUPABASE_URL = "https://ppyexzqdbsnwqfyugfvc.supabase.co"
+    SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBweWV4enFkYnNud3FmeXVnZnZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1Nzc3ODAsImV4cCI6MjA4MzE1Mzc4MH0.EjDH3eufPKBF8MJiHM6SVzPQlsWvGqhLQPKKhVG5Ffo"
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    SUPABASE_AVAILABLE = True
+    print("✓ Supabase 客户端初始化成功")
+except ImportError as e:
+    print(f"✗ Supabase 导入失败: {e}")
+    supabase = None
+    SUPABASE_AVAILABLE = False
+except Exception as e:
+    print(f"✗ Supabase 初始化失败: {e}")
+    supabase = None
+    SUPABASE_AVAILABLE = False
+
+
+# ==================== 封装 Supabase 数据库操作函数 ====================
+def insert_patient_info(patient_data: dict):
+    """
+    插入患者信息到 Supabase 的 patient_info 表
+    """
+    if not SUPABASE_AVAILABLE:
+        return (False, "Supabase 不可用")
+    try:
+        if 'create_time' in patient_data:
+            del patient_data['create_time']
+        response = supabase.table("patient_info").insert([patient_data]).execute()
+        if response.data and len(response.data) > 0:
+            return (True, response.data[0])
+        else:
+            return (False, "写入失败：Supabase 返回空数据")
+    except Exception as e:
+        return (False, f"写入失败：{str(e)}")
+
+
+def update_analysis_result(patient_id: int, analysis_data: dict):
+    """
+    更新患者的分析结果到 patient_info 表
+    """
+    if not SUPABASE_AVAILABLE:
+        return (False, "Supabase 不可用")
+    try:
+        update_data = {
+            'core_infarct_volume': analysis_data.get('core_infarct_volume'),
+            'penumbra_volume': analysis_data.get('penumbra_volume'),
+            'mismatch_ratio': analysis_data.get('mismatch_ratio'),
+            'analysis_status': analysis_data.get('analysis_status', 'completed')
+        }
+        response = supabase.table('patient_info') \
+            .update(update_data) \
+            .eq('id', patient_id) \
+            .execute()
+        if response.data and len(response.data) > 0:
+            return (True, response.data[0])
+        else:
+            return (False, "更新失败：Supabase 返回空数据")
+    except Exception as e:
+        return (False, f"更新失败：{str(e)}")
+
+
+def get_patient_by_id(patient_id: int):
+    """
+    根据 ID 获取患者信息
+    """
+    if not SUPABASE_AVAILABLE:
+        return None
+    try:
+        response = supabase.table('patient_info') \
+            .select('*') \
+            .eq('id', patient_id) \
+            .execute()
+        if response.data and len(response.data) > 0:
+            return response.data[0]
+        return None
+    except Exception as e:
+        print(f"获取患者信息失败: {e}")
+        return None
+
+
+# ==================== 百川 M3 API 配置 ====================
+
+
+# ==================== 百川 M3 API 配置 ====================
+BAICHUAN_API_URL = os.environ.get('BAICHUAN_API_URL', 'https://api.baichuan-ai.com/v1/chat/completions')
+BAICHUAN_API_KEY = os.environ.get('BAICHUAN_API_KEY', '') or os.environ.get('BAICHUAN_AK', '')
+BAICHUAN_MODEL = os.environ.get('BAICHUAN_MODEL', 'Baichuan-M3')
+
+print(f"百川 API URL: {BAICHUAN_API_URL}")
+print(f"百川 API Key: {'***' + BAICHUAN_API_KEY[-4:] if BAICHUAN_API_KEY else '未配置'}")
+print(f"百川模型: {BAICHUAN_MODEL}")
+
+# 尝试从 .env 文件加载
+try:
+    from dotenv import load_dotenv
+    import os as os_module
+    dotenv_path = os_module.path.join(os_module.path.dirname(__file__), '.env')
+    if os_module.path.exists(dotenv_path):
+        load_dotenv(dotenv_path)
+        # 重新加载环境变量
+        BAICHUAN_API_KEY = os.environ.get('BAICHUAN_API_KEY', '') or os.environ.get('BAICHUAN_AK', '')
+        print(f"[DotEnv] 已加载 .env 文件")
+        print(f"[DotEnv] 百川 API Key: {'***' + BAICHUAN_API_KEY[-4:] if BAICHUAN_API_KEY else '未配置'}")
+except ImportError:
+    print("[DotEnv] python-dotenv 未安装，无法从 .env 文件加载")
+except Exception as e:
+    print(f"[DotEnv] 加载 .env 文件失败: {e}")
+
+# 卒中影像报告 Prompt 模板 (Markdown 格式)
+REPORT_PROMPT_TEMPLATE = """
+你是一位专业的神经放射科医生，请基于以下 CTP 灌注成像数据生成详尽的卒中影像诊断报告。
+
+【患者临床与影像数据】
+- 姓名: {patient_name}
+- 年龄: {patient_age}
+- 性别: {patient_sex}
+- 入院 NIHSS 评分: {nihss_score}
+- 发病至入院时间: {onset_to_admission}
+- 核心梗死体积 (Core): {core_volume} ml
+- 半暗带体积 (Penumbra): {penumbra_volume} ml
+- 不匹配比值 (Mismatch Ratio): {mismatch_ratio}
+- 发病侧: {hemisphere}
+
+【重要提示 - 必须严格遵守】
+在诊断意见中，你必须逐一分析以下三个临床数据：
+1. NIHSS评分分析：入院 NIHSS 评分为 {nihss_score}，请详细分析该评分对应的神经功能缺损严重程度（如轻度、中度、重度）
+2. 年龄分析：患者年龄 {patient_age} 岁，请分析年龄对治疗决策的影响
+3. 发病时间分析：发病至入院时间为 {onset_to_admission}，请评估是否在治疗时间窗内
+
+【报告要求】
+1. 符合《中国急性缺血性脑卒中诊治指南》规范
+2. 各章节需详尽描述
+3. 使用医学专业术语
+4. 输出格式为 Markdown
+5. 小标题使用 "🔵" 前缀标记，如 "🔵 检查方法"
+6. 不要使用粗体标记（**文字**），直接使用普通文字描述
+
+【输出格式】
+## 影像诊断报告
+
+🔵 检查方法
+头颅 CT 平扫 (NCCT) + CT 灌注成像 (CTP)
+
+🔵 影像学表现
+1. 核心梗死区：[详细描述位置、体积、CBF/CBV/Tmax 参数异常情况]
+2. 半暗带区：[详细描述范围、与核心梗死区的空间关系]
+3. 不匹配评估：[不匹配比值及临床意义]
+
+🔵 血管评估
+[根据 CTP 推断责任血管]
+
+🔵 诊断意见
+[必须包含以下内容，逐条分析：
+1. NIHSS评分分析：入院 NIHSS 评分为 {nihss_score}，请详细分析该评分对应的神经功能缺损严重程度
+2. 年龄分析：患者年龄 {patient_age} 岁，请分析年龄对治疗决策的影响
+3. 发病时间分析：发病至入院时间为 {onset_to_admission}，请评估是否在治疗时间窗内
+4. 急性缺血性卒中诊断
+5. 核心梗死体积及位置
+6. 半暗带体积及可挽救脑组织评估
+7. 不匹配比值及治疗时间窗判断
+8. 建议进一步行血管内治疗评估]
+
+🔵 治疗建议
+推荐完善头颅 CT 血管成像 (CTA) 或数字减影血管造影 (DSA) 以明确血管闭塞部位及侧支循环情况，并进行多模态影像评估（如 ASPECTS 评分）。结合 NIHSS 评分、患者年龄及发病至入院时间，综合判断血管内治疗可行性。
+
+请根据以上患者数据生成报告：
+"""
+
+# JSON 结构化输出 Prompt
+REPORT_JSON_PROMPT = """
+你是一位专业的神经放射科医生，请基于以下 CTP 灌注成像数据生成规范的卒中影像诊断报告。
+
+【患者影像数据】
+- 核心梗死体积 (Core): {core_volume} ml
+- 半暗带体积 (Penumbra): {penumbra_volume} ml
+- 不匹配比值 (Mismatch Ratio): {mismatch_ratio}
+- 发病侧: {hemisphere}
+
+【输出要求】
+请严格按照以下 JSON 格式输出，**不要包含任何其他文字或代码块标记**：
+
+{{"检查方法": "详细描述CTP扫描参数和对比剂方案", "核心梗死": {{"体积": "核心梗死体积", "位置": "具体脑叶和血管供血区", "CT表现": "NCCT低密度改变情况"}}, "半暗带": {{"体积": "半暗带体积", "位置": "缺血半暗带分布区域", "灌注特征": "CBF降低但CBV相对保留的特点"}}, "血管评估": "根据灌注缺损区域推断责任血管", "诊断意见": "综合诊断意见", "治疗建议": ["建议1", "建议2", "建议3"]}}
+
+请只输出 JSON 对象，确保所有字符串使用双引号包裹。
+"""
+
+
+def generate_report_with_baichuan(structured_data: dict, output_format: str = 'markdown') -> dict:
+    """
+    调用百川 M3 API 生成卒中影像报告
+    """
+    try:
+        # 准备 NIHSS 评分显示
+        nihss_score = structured_data.get('admission_nihss', None)
+        nihss_display = f"{nihss_score} 分" if nihss_score is not None else "未记录"
+        
+        # 准备患者信息显示
+        patient_name = structured_data.get('patient_name', '未知')
+        patient_age = structured_data.get('patient_age', '未知')
+        patient_sex = structured_data.get('patient_sex', '未知')
+        onset_to_admission = structured_data.get('onset_to_admission_hours', None)
+        onset_display = f"{onset_to_admission} 小时" if onset_to_admission is not None else "未记录"
+        
+        # 准备 Prompt
+        if output_format == 'json':
+            prompt = REPORT_JSON_PROMPT.format(
+                core_volume=structured_data.get('core_infarct_volume', 'N/A'),
+                penumbra_volume=structured_data.get('penumbra_volume', 'N/A'),
+                mismatch_ratio=structured_data.get('mismatch_ratio', 'N/A'),
+                hemisphere=structured_data.get('hemisphere', '双侧')
+            )
+        else:
+            from datetime import datetime
+            prompt = REPORT_PROMPT_TEMPLATE.format(
+                patient_name=patient_name,
+                patient_age=patient_age,
+                patient_sex=patient_sex,
+                nihss_score=nihss_display,
+                onset_to_admission=onset_display,
+                core_volume=structured_data.get('core_infarct_volume', 'N/A'),
+                penumbra_volume=structured_data.get('penumbra_volume', 'N/A'),
+                mismatch_ratio=structured_data.get('mismatch_ratio', 'N/A'),
+                hemisphere=structured_data.get('hemisphere', '双侧')
+            )
+        
+        # 检查 API Key
+        if not BAICHUAN_API_KEY:
+            print("⚠ 百川 API Key 未配置，返回模拟报告")
+            mock_report = generate_mock_report(structured_data, output_format)
+            return {
+                'success': True,
+                'report': mock_report,
+                'format': output_format,
+                'is_mock': True,
+                'warning': '使用模拟报告，请配置 BAICHUAN_API_KEY 环境变量'
+            }
+            
+        # 调用百川 M3 API
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {BAICHUAN_API_KEY}'
+        }
+        
+        payload = {
+            'model': BAICHUAN_MODEL,
+            'messages': [
+                {
+                    'role': 'system',
+                    'content': '你是一位专业的神经放射科医生，擅长撰写规范的卒中影像诊断报告。'
+                },
+                {
+                    'role': 'user',
+                    'content': prompt
+                }
+            ],
+            'max_tokens': 4096,
+            'temperature': 0.3,
+            'top_p': 0.9
+        }
+        
+        print(f"调用百川 M3 API... format={output_format}")
+        print(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}...")
+        response = requests.post(BAICHUAN_API_URL, headers=headers, json=payload, timeout=60)
+        
+        print(f"响应状态码: {response.status_code}")
+        print(f"响应内容: {response.text[:1000]}...")
+        
+        if response.status_code == 200:
+            result = response.json()
+            
+            # 百川 M3 API 可能有多种响应格式，尝试多种解析方式
+            report_content = ''
+            
+            # 方式1: OpenAI 格式 (choices[0].message.content)
+            if 'choices' in result and len(result['choices']) > 0:
+                choice = result['choices'][0]
+                if 'message' in choice and 'content' in choice['message']:
+                    report_content = choice['message']['content']
+                elif 'text' in choice:
+                    report_content = choice['text']
+            
+            # 方式2: 直接 content 字段
+            if not report_content and 'content' in result:
+                report_content = result['content']
+            
+            # 方式3: data 字段
+            if not report_content and 'data' in result:
+                data = result['data']
+                if 'content' in data:
+                    report_content = data['content']
+            
+            print(f"✓ 百川 M3 API 调用成功，报告长度: {len(report_content)}")
+            return {
+                'success': True,
+                'report': report_content,
+                'format': output_format,
+                'is_mock': False
+            }
+        else:
+            error_msg = f"API 调用失败: {response.status_code} - {response.text}"
+            print(f"✗ {error_msg}")
+            return {
+                'success': False,
+                'error': error_msg,
+                'format': output_format
+            }
+            
+    except requests.exceptions.Timeout:
+        error_msg = "百川 M3 API 调用超时"
+        print(f"✗ {error_msg}")
+        return {'success': False, 'error': error_msg, 'format': output_format}
+    except Exception as e:
+        error_msg = f"生成报告失败: {str(e)}"
+        print(f"✗ {error_msg}")
+        import traceback
+        traceback.print_exc()
+        return {'success': False, 'error': error_msg, 'format': output_format}
+
+
+def generate_mock_report(structured_data: dict, output_format: str = 'markdown') -> str:
+    """生成模拟报告（当 API Key 未配置时使用）"""
+    core_volume = structured_data.get('core_infarct_volume', 0)
+    penumbra_volume = structured_data.get('penumbra_volume', 0)
+    mismatch_ratio = structured_data.get('mismatch_ratio', 0)
+    hemisphere = structured_data.get('hemisphere', '双侧')
+    
+    mock_report = f"""## 影像诊断报告
+
+### 检查方法
+头颅 CT 平扫 (NCCT) + CT 灌注成像 (CTP)
+
+### 影像学表现
+1. 核心梗死区：位于{hemisphere}大脑半球，体积约 {core_volume} ml。CT 平扫未见明显低密度灶，CTP 显示局部脑血流量 (CBF) 明显降低，脑血容量 (CBV) 轻度降低。
+
+2. 半暗带区域：体积约 {penumbra_volume} ml。CTP 显示达峰时间 (Tmax) 明显延长，CBF 相对保留，提示存在大量可挽救脑组织。
+
+3. 不匹配评估：核心-半暗带不匹配比值为 {mismatch_ratio}，符合血管内治疗适应证。
+
+### 诊断意见
+{hemisphere}大脑半球急性缺血性改变，核心梗死体积约 {core_volume} ml，半暗带体积约 {penumbra_volume} ml，存在显著不匹配。
+
+### 治疗建议
+1. 建议行血管内介入治疗评估
+2. 尽快完善头颈 CTA 检查评估血管情况
+3. 监测生命体征，维持血压稳定"""
+
+    if output_format == 'json':
+        import json
+        return json.dumps(
+            {
+                "检查方法": "头颅 CT 平扫 (NCCT) + CT 灌注成像 (CTP)",
+                "核心梗死": {
+                    "体积": f"{core_volume} ml",
+                    "位置": f"{hemisphere}大脑半球",
+                    "大小": "详见影像学表现"
+                },
+                "半暗带": {
+                    "体积": f"{penumbra_volume} ml",
+                    "位置": f"{hemisphere}大脑半球",
+                    "可挽救区域": "存在显著可挽救脑组织"
+                },
+                "诊断意见": f"{hemisphere}大脑半球急性缺血性改变，核心梗死体积约 {core_volume} ml，半暗带体积约 {penumbra_volume} ml",
+                "治疗建议": "建议行血管内介入治疗评估"
+            },
+            ensure_ascii=False,
+            indent=2
+        )
+    
+    return mock_report
+
 import os
 import numpy as np
 from PIL import Image
@@ -52,14 +424,14 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # AI模型配置 - 扩展为三个模型
 AI_CONFIG_BASE = os.path.join(PROJECT_ROOT, 'palette', 'config')
-AI_WEIGHTS_BASE = os.path.join(PROJECT_ROOT, 'palette', 'weights')
+AI_WEIGHTS_BASE = os.path.join(PROJECT_ROOT, 'mrdpm', 'weights')  # 使用 mrdpm 权重目录
 
 # 三个模型的配置
 MODEL_CONFIGS = {
     'cbf': {
         'name': 'CBF灌注图',
         'config_path': os.path.join(AI_CONFIG_BASE, 'cbf.json'),
-        'weight_base': os.path.join(AI_WEIGHTS_BASE, 'cbf', '150'),
+        'weight_dir': os.path.join(AI_WEIGHTS_BASE, 'cbf'),
         'use_ema': True,
         'color': '#e74c3c',  # 红色
         'description': '脑血流量 (Cerebral Blood Flow)'
@@ -67,7 +439,7 @@ MODEL_CONFIGS = {
     'cbv': {
         'name': 'CBV灌注图',
         'config_path': os.path.join(AI_CONFIG_BASE, 'cbv.json'),
-        'weight_base': os.path.join(AI_WEIGHTS_BASE, 'cbv', '140'),
+        'weight_dir': os.path.join(AI_WEIGHTS_BASE, 'cbv'),
         'use_ema': True,
         'color': '#3498db',  # 蓝色
         'description': '脑血容量 (Cerebral Blood Volume)'
@@ -75,12 +447,57 @@ MODEL_CONFIGS = {
     'tmax': {
         'name': 'Tmax灌注图',
         'config_path': os.path.join(AI_CONFIG_BASE, 'tmax.json'),
-        'weight_base': os.path.join(AI_WEIGHTS_BASE, 'tmax', '160'),
+        'weight_dir': os.path.join(AI_WEIGHTS_BASE, 'tmax'),
         'use_ema': True,
         'color': '#27ae60',  # 绿色
         'description': '达峰时间 (Time to Maximum)'
     }
 }
+
+
+def find_weight_file(weight_dir: str, pattern: str) -> str:
+    """
+    在权重目录中查找匹配的文件
+    
+    Args:
+        weight_dir: 权重目录路径
+        pattern: 文件名模式（如 "200_Network_ema.pth"）
+    
+    Returns:
+        找到的文件路径，或 None
+    """
+    if not os.path.exists(weight_dir):
+        return None
+    
+    # 直接匹配
+    direct_path = os.path.join(weight_dir, pattern)
+    if os.path.exists(direct_path):
+        return direct_path
+    
+    # 查找所有 .pth 文件并匹配前缀
+    for filename in os.listdir(weight_dir):
+        if filename.endswith('.pth') and filename.startswith(pattern.split('_')[0]):
+            return os.path.join(weight_dir, filename)
+    
+    return None
+
+
+def get_weight_base_path(weight_dir: str) -> str:
+    """
+    获取权重文件的基础路径（去掉文件名）
+    权重文件名格式: XXX_Network.pth 或 XXX_Network_ema.pth
+    """
+    if not os.path.exists(weight_dir):
+        return None
+    
+    # 查找权重文件
+    for filename in os.listdir(weight_dir):
+        if filename.endswith('_Network.pth') or filename.endswith('_Network_ema.pth'):
+            # 提取数字部分（如 200）
+            prefix = filename.split('_')[0]
+            return os.path.join(weight_dir, prefix)
+    
+    return None
 
 # 全局模型字典
 ai_models = {}
@@ -111,21 +528,25 @@ def init_ai_models():
     for model_key, config in MODEL_CONFIGS.items():
         print(f"\n初始化 {config['name']} 模型:")
         print(f"  配置路径: {config['config_path']}")
-        print(f"  权重基础: {config['weight_base']}")
+        print(f"  权重目录: {config['weight_dir']}")
 
+        # 使用新的权重检测逻辑
+        weight_base = get_weight_base_path(config['weight_dir'])
+        
         # 检查文件是否存在
         config_exists = os.path.exists(config['config_path'])
-        ema_exists = os.path.exists(f"{config['weight_base']}_Network_ema.pth")
-        normal_exists = os.path.exists(f"{config['weight_base']}_Network.pth")
+        ema_exists = find_weight_file(config['weight_dir'], 'Network_ema.pth') is not None
+        normal_exists = find_weight_file(config['weight_dir'], 'Network.pth') is not None
 
         print(f"  配置文件: {'✓' if config_exists else '✗'}")
+        print(f"  权重基础路径: {weight_base}")
         print(f"  EMA权重: {'✓' if ema_exists else '✗'}")
         print(f"  普通权重: {'✓' if normal_exists else '✗'}")
 
-        if config_exists and (ema_exists or normal_exists):
+        if config_exists and weight_base:
             try:
                 # 这里需要根据您的ai_inference模块调整初始化方式
-                model = init_single_ai_model(config['config_path'], config['weight_base'], config['use_ema'], device=device)
+                model = init_single_ai_model(config['config_path'], weight_base, config['use_ema'], device=device)
                 if model:
                     ai_models[model_key] = {
                         'model': model,
@@ -594,17 +1015,202 @@ def api_update_analysis():
             "data": result
         })
     else:
-        return jsonify({
+        return jsonify({{
             "status": "error",
             "message": result
+        }}), 500
+
+
+# ==================== 百川 M3 AI 报告生成 API ====================
+
+@app.route('/api/generate_report/<int:patient_id>', methods=['GET', 'POST'])
+def api_generate_report(patient_id):
+    """
+    基于患者结构化数据调用百川 M3 生成影像报告
+    """
+    try:
+        # 获取输出格式参数
+        if request.method == 'POST':
+            data = request.get_json() or {{}}
+            output_format = data.get('format', 'markdown')
+        else:
+            output_format = request.args.get('format', 'markdown')
+        
+        # 验证格式参数
+        if output_format not in ['markdown', 'json']:
+            return jsonify({{
+                "status": "error",
+                "message": "无效的输出格式，支持 'markdown' 或 'json'"
+            }}), 400
+        
+        # 从数据库获取患者结构化数据
+        patient_data = get_patient_by_id(patient_id)
+        
+        if not patient_data:
+            return jsonify({
+                "status": "error",
+                "message": f"未找到 ID 为 {patient_id} 的患者信息"
+            }), 404
+        
+        # 提取结构化数据
+        # 获取发病时间和入院时间用于计算发病至入院时长
+        onset_time = patient_data.get('onset_exact_time')
+        admission_time = patient_data.get('admission_time')
+        onset_to_admission_hours = None
+        if onset_time and admission_time:
+            try:
+                from datetime import datetime
+                onset_dt = datetime.fromisoformat(str(onset_time).replace('Z', '+00:00'))
+                admission_dt = datetime.fromisoformat(str(admission_time).replace('Z', '+00:00'))
+                onset_to_admission_hours = round((admission_dt - onset_dt).total_seconds() / 3600, 1)
+            except Exception as e:
+                print(f"计算发病至入院时间失败: {e}")
+        
+        structured_data = {
+            'patient_id': patient_id,
+            'patient_name': patient_data.get('patient_name', ''),
+            'patient_age': patient_data.get('patient_age', ''),
+            'patient_sex': patient_data.get('patient_sex', ''),
+            'admission_nihss': patient_data.get('admission_nihss', None),
+            'onset_to_admission_hours': onset_to_admission_hours,
+            'core_infarct_volume': patient_data.get('core_infarct_volume'),
+            'penumbra_volume': patient_data.get('penumbra_volume'),
+            'mismatch_ratio': patient_data.get('mismatch_ratio'),
+            'hemisphere': patient_data.get('hemisphere', '左侧'),
+            'analysis_status': patient_data.get('analysis_status', 'pending')
+        }
+        
+        # 打印完整的 structured_data 用于调试
+        print("=" * 60)
+        print("【AI 报告生成】完整的 structured_data：")
+        print(json.dumps(structured_data, ensure_ascii=False, indent=2, default=str))
+        print("=" * 60)
+        
+        # 打印日志，证明已成功读取这三个关键数据
+        print("=" * 60)
+        print("【AI 报告生成】已读取的关键临床数据：")
+        print(f"  - 入院 NIHSS 评分: {structured_data.get('admission_nihss')} 分")
+        print(f"  - 患者年龄: {structured_data.get('patient_age')} 岁")
+        print(f"  - 发病至入院时间: {onset_to_admission_hours} 小时")
+        print("=" * 60)
+        
+        # 如果某个关键数据缺失，打印警告
+        if structured_data.get('admission_nihss') is None:
+            print("⚠️ 警告: admission_nihss 字段为空！")
+        if structured_data.get('patient_age') in ['', None]:
+            print("⚠️ 警告: patient_age 字段为空！")
+        if onset_to_admission_hours is None:
+            print("⚠️ 警告: onset_to_admission_hours 字段为空！")
+        
+        # 调用百川 M3 生成报告
+        result = generate_report_with_baichuan(structured_data, output_format)
+        
+        if result['success']:
+            return jsonify({
+                "status": "success",
+                "message": "报告生成成功",
+                "patient_id": patient_id,
+                "format": output_format,
+                "report": result['report'],
+                "is_mock": result.get('is_mock', False),
+                "warning": result.get('warning')
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": result.get('error', '生成报告失败'),
+                "format": output_format
+            }), 500
+            
+    except Exception as e:
+        print(f"生成报告异常: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
         }), 500
+
+
+@app.route('/api/generate_report_from_data', methods=['POST'])
+def api_generate_report_from_data():
+    """
+    直接从传入的结构化数据生成报告（不查询数据库）
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                "status": "error",
+                "message": "请求数据为空"
+            }), 400
+        
+        # 验证必要参数
+        required_fields = ['core_infarct_volume', 'penumbra_volume', 'mismatch_ratio']
+        missing_fields = [f for f in required_fields if f not in data]
+        
+        if missing_fields:
+            return jsonify({
+                "status": "error",
+                "message": f"缺少必要参数: {', '.join(missing_fields)}"
+            }), 400
+        
+        output_format = data.get('format', 'markdown')
+        
+        # 如果前端没有提供 patient_id，尝试从数据库补充 NIHSS、年龄、发病时间
+        patient_id = data.get('patient_id')
+        if patient_id:
+            patient_data = get_patient_by_id(patient_id)
+            if patient_data:
+                # 从数据库补充缺失的字段
+                if data.get('admission_nihss') is None and patient_data.get('admission_nihss') is not None:
+                    data['admission_nihss'] = patient_data.get('admission_nihss')
+                if data.get('patient_age') in ['', None] and patient_data.get('patient_age') is not None:
+                    data['patient_age'] = patient_data.get('patient_age')
+                if data.get('onset_to_admission_hours') is None and patient_data.get('onset_exact_time') and patient_data.get('admission_time'):
+                    try:
+                        from datetime import datetime
+                        onset_dt = datetime.fromisoformat(str(patient_data.get('onset_exact_time')).replace('Z', '+00:00'))
+                        admission_dt = datetime.fromisoformat(str(patient_data.get('admission_time')).replace('Z', '+00:00'))
+                        data['onset_to_admission_hours'] = round((admission_dt - onset_dt).total_seconds() / 3600, 1)
+                    except Exception as e:
+                        print(f"计算发病至入院时间失败: {e}")
+        
+        # 调用百川 M3 生成报告
+        result = generate_report_with_baichuan(data, output_format)
+        
+        if result['success']:
+            return jsonify({
+                "status": "success",
+                "message": "报告生成成功",
+                "format": output_format,
+                "report": result['report'],
+                "is_mock": result.get('is_mock', False),
+                "warning": result.get('warning')
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": result.get('error', '生成报告失败'),
+                "format": output_format
+            }), 500
+            
+    except Exception as e:
+        print(f"生成报告异常: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
+
+
 
 @app.route('/api/get_patient/<int:patient_id>')
 def api_get_patient(patient_id):
     """获取患者信息"""
     try:
-        from core.supabase_client import supabase
-        
         response = supabase.table('patient_info') \
             .select('*') \
             .eq('id', patient_id) \
@@ -1990,3 +2596,56 @@ if __name__ == '__main__':
         print(f"❌ 服务器启动失败: {e}")
         import traceback
         traceback.print_exc()
+
+
+# ==================== 保存报告并生成 AI 诊断报告 ====================
+
+@app.route('/api/save_and_generate_report', methods=['POST'])
+def api_save_and_generate_report():
+    """保存结构化临床报告，同时生成 AI 诊断报告"""
+    data = request.get_json()
+    patient_id = data.get('patient_id')
+    file_id = data.get('file_id')
+    
+    if not patient_id or not file_id:
+        return jsonify({"status": "error", "message": "缺少患者ID或文件ID"}), 400
+    
+    try:
+        # 1. 先保存报告到数据库
+        report_notes = f"""
+        患者信息：{data.get('patient', {}).get('patient_name', '')}
+        核心梗死：{data.get('findings', {}).get('core', '')}
+        半暗带：{data.get('findings', {}).get('penumbra', '')}
+        血管评估：{data.get('findings', {}).get('vessel', '')}
+        灌注分析：{data.get('findings', {}).get('perfusion', '')}
+        医生备注：{data.get('notes', '')}
+        """
+        
+        update_data = {
+            'uncertainty_remark': report_notes
+        }
+        
+        response = supabase.table('patient_info') \
+            .update(update_data) \
+            .eq('id', patient_id) \
+            .execute()
+        
+        # 2. 获取患者结构化数据
+        structured_data = get_patient_by_id(patient_id) or {}
+        
+        # 3. 调用百川 M3 生成 AI 报告
+        print(f"保存报告时自动生成 AI 报告，患者ID: {patient_id}")
+        ai_result = generate_report_with_baichuan(structured_data, output_format='markdown')
+        
+        return jsonify({
+            "status": "success",
+            "message": "报告保存并生成 AI 诊断报告成功",
+            "data": response.data,
+            "ai_report": ai_result.get('report', ''),
+            "ai_generated": True
+        })
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500

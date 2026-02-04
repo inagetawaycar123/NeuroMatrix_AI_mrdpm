@@ -230,6 +230,12 @@
     color: #ff6b6b;
 }
 
+/* 旋转动画 */
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
 /* ==================== 响应式 ==================== */
 @media (max-width: 768px) {
     .report-container {

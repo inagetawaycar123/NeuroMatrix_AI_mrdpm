@@ -61,7 +61,7 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 .nav-btn:disabled { color:#404040; border-color:#1a1a1a; cursor:not-allowed; }
 .slice-slider { width:400px; height:2px; background:#333; outline:none; -webkit-appearance:none; }
 .slice-slider::-webkit-slider-thumb { -webkit-appearance:none; width:12px; height:12px; background:#00a8ff; cursor:pointer; }
-.slice-slider::-moz-range-thumb { width:12px; height:12px; background:#00a8ff; cursor:pointer; border:none; }
+.slice-slider::-moz-range-thumb { width:12px; height:12px; background:#00a8ff; cursor:pointer; border:none; appearance:none; }
 .slice-info { font-size:11px; color:#808080; min-width:60px; }
 .metrics-display { display:flex; gap:20px; font-size:11px; }
 .metric-item { color:#808080; padding:4px 10px; background:#0a0a0a; border-left:2px solid #333; }
@@ -103,3 +103,15 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 
 @media (max-width: 1600px) { .image-grid { grid-template-columns: repeat(3,1fr); grid-template-rows: repeat(3,1fr); } }
 @media (max-width: 1200px) { .image-grid { grid-template-columns: repeat(2,1fr); grid-template-rows: repeat(4,1fr); } }
+
+/* 打印样式 */
+@media print {
+    body { background: white !important; color: #000 !important; }
+    .top-bar, .bottom-bar, .analysis-panel, .loading-overlay, .message { display: none !important; }
+    .container { display: block !important; height: auto !important; }
+    .page { display: block !important; height: auto !important; }
+    .info-box { border: 1px solid #ddd; box-shadow: none; }
+    .image-grid { display: none; }
+    #aiReportSection { display: block !important; border: 1px solid #667eea; padding: 20px; margin: 20px 0; }
+    #aiReportContent { max-height: none !important; overflow: visible !important; }
+}

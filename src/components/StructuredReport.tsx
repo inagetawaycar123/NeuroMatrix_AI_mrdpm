@@ -20,6 +20,28 @@ interface StructuredReportProps {
   analysisData?: any
 }
 
+// Markdown 转 HTML（简单版本）
+const parseMarkdown = (text: string): string => {
+  if (!text) return ''
+  
+  let html = text
+    // 处理带 emoji 的标题（🔵 检查方法 等）- 浅蓝色设计
+    .replace(/^🔵 (.+)$/gm, '<div style="margin: 24px 0 16px 0;"><span style="display: inline-flex; align-items: center; gap: 8px; background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%); color: white; padding: 10px 20px; border-radius: 8px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);">🔵 $1</span></div>')
+    // 处理普通二级标题
+    .replace(/^## (.+)$/gm, '<h2 style="color: #3b82f6; border-bottom: 3px solid #60a5fa; padding-bottom: 10px; margin: 24px 0 16px 0; font-size: 20px; font-weight: 700;">$1</h2>')
+    // 处理普通三级标题
+    .replace(/^### (.+)$/gm, '<h3 style="color: #60a5fa; margin: 20px 0 12px 0; font-size: 17px; font-weight: 600; padding-left: 12px; border-left: 4px solid #93c5fd;">$1</h3>')
+    // 处理粗体标记 - 直接保留普通文字
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    // 处理列表
+    .replace(/^\d+\. (.+)$/gm, '<li style="margin-left: 24px; margin-bottom: 8px; color: #e5e7eb;">$1</li>')
+    .replace(/^- (.+)$/gm, '<li style="margin-left: 24px; margin-bottom: 8px; color: #e5e7eb;">$1</li>')
+    // 处理段落
+    .replace(/\n\n/g, '</p><p style="margin: 10px 0; line-height: 1.9; color: #d1d5db;">')
+  
+  return '<p style="margin: 10px 0; line-height: 1.9; color: #d1d5db;">' + html + '</p>'
+}
+
 export const StructuredReport: React.FC<StructuredReportProps> = ({
   patientId,
   fileId,
@@ -37,8 +59,10 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
   const [notes, setNotes] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [aiReport, setAiReport] = useState<string | null>(null)
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false)
 
-  // 初始化：加载患者信息和自动生成影像描述
+  // 初始化：加载患者信息
   useEffect(() => {
     if (!patientId) {
       setError('缺少患者ID')
@@ -46,6 +70,20 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
       return
     }
     loadPatientInfo()
+    
+    // 监听 storage 事件（跨标签页同步 AI 报告和生成状态）
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'ai_report_generating' && e.newValue === 'true') {
+        setIsGeneratingReport(true)
+      }
+      if (e.key === 'ai_report' && e.newValue) {
+        setAiReport(e.newValue)
+        setIsGeneratingReport(false)
+      }
+    }
+    window.addEventListener('storage', handleStorage)
+    
+    return () => window.removeEventListener('storage', handleStorage)
   }, [patientId])
 
   const loadPatientInfo = async () => {
@@ -149,6 +187,14 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
     alert('PDF导出功能开发中...')
   }
 
+  // 从 localStorage 读取已有的 AI 报告（支持跨标签页同步）
+  useEffect(() => {
+    const savedReport = localStorage.getItem('ai_report')
+    if (savedReport) {
+      setAiReport(savedReport)
+    }
+  }, [])
+
   if (loading) {
     return (
       <div className="report-container">
@@ -205,11 +251,116 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
           isEditing={isEditing}
           onUpdate={handleFindingsUpdate}
         />
+        
         <DoctorNotesModule
           notes={notes}
           isEditing={isEditing}
           onUpdate={setNotes}
         />
+
+        {/* AI 生成的报告展示 */}
+        {!analysisData || analysisData.core_volume === 0 ? (
+          <div style={{ 
+            background: '#1a1a1a', 
+            borderRadius: '12px', 
+            padding: '40px', 
+            marginTop: '20px',
+            border: '1px solid #333',
+            textAlign: 'center'
+          }}>
+            <div style={{ 
+              fontSize: '48px', 
+              marginBottom: '16px'
+            }}>🔍</div>
+            <h3 style={{ 
+              color: '#fff', 
+              fontSize: '18px',
+              marginBottom: '12px'
+            }}>请先完成脑卒中分析</h3>
+            <p style={{ 
+              color: '#888', 
+              fontSize: '14px'
+            }}>请返回 viewer 页面完成分析后，再生成 AI 报告</p>
+          </div>
+        ) : isGeneratingReport ? (
+          <div style={{ 
+            background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)',
+            padding: '40px',
+            borderRadius: '12px',
+            marginTop: '20px',
+            textAlign: 'center'
+          }}>
+            <div style={{ 
+              width: '48px', 
+              height: '48px', 
+              border: '4px solid rgba(255,255,255,0.3)', 
+              borderTop: '4px solid white', 
+              borderRadius: '50%', 
+              animation: 'spin 1s linear infinite',
+              margin: '0 auto 16px'
+            }} />
+            <h3 style={{ 
+              color: '#fff', 
+              fontSize: '18px',
+              marginBottom: '8px'
+            }}>正在生成 AI 报告...</h3>
+            <p style={{ 
+              color: 'rgba(255,255,255,0.8)', 
+              fontSize: '14px'
+            }}>百川 AI 正在分析影像数据</p>
+          </div>
+        ) : aiReport ? (
+          <div className="ai-report-section" style={{ 
+            background: '#1a1a1a', 
+            borderRadius: '12px', 
+            padding: '24px', 
+            marginTop: '20px',
+            border: '1px solid #333'
+          }}>
+            <h3 style={{ 
+              margin: '0 0 16px 0', 
+              color: '#fff', 
+              fontSize: '18px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px'
+            }}>
+              🤖 AI 影像诊断报告
+            </h3>
+            <div 
+              className="ai-report-content"
+              style={{ 
+                lineHeight: '1.8',
+                fontSize: '14px',
+                color: '#e5e5e5'
+              }}
+              dangerouslySetInnerHTML={{ __html: parseMarkdown(aiReport) }}
+            />
+          </div>
+        ) : (
+          <div style={{ 
+            background: '#1a1a1a', 
+            borderRadius: '12px', 
+            padding: '40px', 
+            marginTop: '20px',
+            border: '1px solid #333',
+            textAlign: 'center'
+          }}>
+            <div style={{ 
+              fontSize: '48px', 
+              marginBottom: '16px'
+            }}>🔍</div>
+            <h3 style={{ 
+              color: '#fff', 
+              fontSize: '18px',
+              marginBottom: '12px'
+            }}>请生成 AI 报告</h3>
+            <p style={{ 
+              color: '#888', 
+              fontSize: '14px'
+            }}>请在脑卒中分析页面点击「手动生成 AI 报告」按钮</p>
+          </div>
+        )}
 
         {!isEditing && (
           <div className="report-footer">

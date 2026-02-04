@@ -63,9 +63,12 @@ function resetAll() {
 function openReport() {
     const patientId = getCurrentPatientId();
     const fileId = sessionStorage.getItem('current_file_id');
-    if (patientId && fileId) {
-        window.open(`/report/${patientId}?file_id=${fileId}`, '_blank');
-    } else {
+    
+    if (!patientId || !fileId) {
         alert('缺少患者ID或文件ID');
+        return;
     }
+    
+    // 跳转到完整的结构化报告页面
+    window.open(`/report/${patientId}?file_id=${fileId}`, '_blank');
 }
