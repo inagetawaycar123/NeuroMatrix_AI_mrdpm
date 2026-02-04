@@ -537,8 +537,8 @@ def init_ai_models():
         
         # 检查文件是否存在
         config_exists = os.path.exists(config['config_path'])
-        ema_exists = find_weight_file(config['weight_dir'], 'Network_ema.pth') is not None
-        normal_exists = find_weight_file(config['weight_dir'], 'Network.pth') is not None
+        ema_exists = find_weight_file(config['weight_dir'], '_Network_ema.pth') is not None
+        normal_exists = find_weight_file(config['weight_dir'], '_Network.pth') is not None
 
         print(f"  配置文件: {'✓' if config_exists else '✗'}")
         print(f"  权重基础路径: {weight_base}")
