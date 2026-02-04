@@ -318,13 +318,27 @@ function downloadData() {
 async function saveAnalysisToDB() {
     if (!analysisResults || !currentPatientId || !currentFileId) return;
 
+    // 镜像转换：用户点击图像的左侧 → 实际受累侧是右侧
+    // 按钮 data-hemisphere 值: 'left'(左脑按钮), 'right'(右脑按钮), 'both'(双侧)
+    const hemisphereMap = {
+        'left': 'right',    // 用户点击左脑按钮 → 实际右侧半球
+        'right': 'left',    // 用户点击右脑按钮 → 实际左侧半球
+        'both': 'both'      // 双侧不变
+    };
+    const actualHemisphere = hemisphereMap[currentHemisphere] || 'both';
+    
+    console.log('saveAnalysisToDB - currentHemisphere:', currentHemisphere, '→ actualHemisphere:', actualHemisphere);
+
     const payload = {
         patient_id: currentPatientId,
+        hemisphere: actualHemisphere,  // 镜像后的 hemisphere
         core_infarct_volume: analysisResults.report?.summary?.core_volume_ml ? parseFloat(analysisResults.report.summary.core_volume_ml.toFixed(1)) : null,
         penumbra_volume: analysisResults.report?.summary?.penumbra_volume_ml ? parseFloat(analysisResults.report.summary.penumbra_volume_ml.toFixed(1)) : null,
         mismatch_ratio: analysisResults.report?.summary?.mismatch_ratio ? parseFloat(analysisResults.report.summary.mismatch_ratio.toFixed(2)) : null,
         analysis_status: 'completed'
     };
+
+    console.log('saveAnalysisToDB 发送数据:', payload);
 
     try {
         await $.ajax({
@@ -334,9 +348,8 @@ async function saveAnalysisToDB() {
             data: JSON.stringify(payload)
         });
         showMsg('分析结果已保存', 'success');
-        
-        // 注意：已移除自动调用百川 AI，改为手动触发
     } catch (err) {
+        console.error('saveAnalysisToDB 错误:', err);
         showMsg('保存失败: ' + err.message, 'error');
     }
 }
@@ -365,7 +378,25 @@ async function generateAIReport() {
             `;
         }
         
-        const response = await fetch(`/api/generate_report/${currentPatientId}?format=markdown`);
+        // 使用 POST 请求并传递 hemisphere 参数（镜像转换）
+        // 按钮 data-hemisphere 值: 'left'(左脑按钮), 'right'(右脑按钮), 'both'(双侧)
+        const hemisphereMap = {
+            'left': 'right',    // 用户点击左脑按钮 → 实际右侧半球
+            'right': 'left',    // 用户点击右脑按钮 → 实际左侧半球
+            'both': 'both'       // 双侧不变
+        };
+        const actualHemisphere = hemisphereMap[currentHemisphere] || 'both';
+        
+        console.log('generateAIReport - currentHemisphere:', currentHemisphere, '→ actualHemisphere:', actualHemisphere);
+        
+        const response = await fetch(`/api/generate_report/${currentPatientId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                format: 'markdown',
+                hemisphere: actualHemisphere
+            })
+        });
         const data = await response.json();
         
         console.log('百川 API 响应:', data);

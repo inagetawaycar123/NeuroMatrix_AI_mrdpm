@@ -47,11 +47,13 @@ def insert_patient_info(patient_data: dict):
 def update_analysis_result(patient_id: int, analysis_data: dict):
     """
     更新患者的分析结果到 patient_info 表
+    注意：hemisphere 是镜像后的值（用户点击图像左侧→实际右侧）
     """
     if not SUPABASE_AVAILABLE:
         return (False, "Supabase 不可用")
     try:
         update_data = {
+            'hemisphere': analysis_data.get('hemisphere'),  # 镜像后的 hemisphere
             'core_infarct_volume': analysis_data.get('core_infarct_volume'),
             'penumbra_volume': analysis_data.get('penumbra_volume'),
             'mismatch_ratio': analysis_data.get('mismatch_ratio'),
@@ -1066,6 +1068,10 @@ def api_generate_report(patient_id):
             except Exception as e:
                 print(f"计算发病至入院时间失败: {e}")
         
+        # 从请求中获取 hemisphere（前端已镜像转换）
+        request_data = request.get_json() or {}
+        hemisphere_from_request = request_data.get('hemisphere')
+        
         structured_data = {
             'patient_id': patient_id,
             'patient_name': patient_data.get('patient_name', ''),
@@ -1076,7 +1082,8 @@ def api_generate_report(patient_id):
             'core_infarct_volume': patient_data.get('core_infarct_volume'),
             'penumbra_volume': patient_data.get('penumbra_volume'),
             'mismatch_ratio': patient_data.get('mismatch_ratio'),
-            'hemisphere': patient_data.get('hemisphere', '左侧'),
+            # 优先使用前端传递的 hemisphere（已镜像转换），否则从数据库读取
+            'hemisphere': hemisphere_from_request or patient_data.get('hemisphere', '左侧'),
             'analysis_status': patient_data.get('analysis_status', 'pending')
         }
         
