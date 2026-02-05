@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { PatientInfoModule } from './PatientInfoModule'
 import { ImageFindingsModule } from './ImageFindingsModule'
 import { DoctorNotesModule } from './DoctorNotesModule'
+import { MedicalAIChat } from './MedicalAIChat'
 import '../styles/report.css'
 
 interface PatientData {
@@ -61,6 +62,7 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
   const [error, setError] = useState<string | null>(null)
   const [aiReport, setAiReport] = useState<string | null>(null)
   const [isGeneratingReport, setIsGeneratingReport] = useState(false)
+  const [showAIChat, setShowAIChat] = useState(false)
 
   // 初始化：加载患者信息
   useEffect(() => {
@@ -236,6 +238,12 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
               📄 导出PDF
             </button>
           )}
+          <button
+            className="action-btn ai-consult-btn"
+            onClick={() => setShowAIChat(!showAIChat)}
+          >
+            🤖 AI问诊
+          </button>
         </div>
       </div>
 
@@ -307,7 +315,7 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
             <p style={{ 
               color: 'rgba(255,255,255,0.8)', 
               fontSize: '14px'
-            }}>百川 AI 正在分析影像数据</p>
+            }}>NeuroMatrix AI 正在分析影像数据</p>
           </div>
         ) : aiReport ? (
           <div className="ai-report-section" style={{ 
@@ -371,6 +379,14 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
           </div>
         )}
       </div>
+
+      {/* 医疗AI聊天组件 */}
+      <MedicalAIChat
+        isVisible={showAIChat}
+        onClose={() => setShowAIChat(false)}
+        sessionId={`session-${patientId || 'default'}`}
+        userId={`user-${Date.now()}`}
+      />
     </div>
   )
 }

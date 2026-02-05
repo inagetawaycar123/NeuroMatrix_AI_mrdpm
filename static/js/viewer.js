@@ -341,7 +341,7 @@ async function saveAnalysisToDB() {
     }
 }
 
-// 调用百川 AI 生成报告
+// 调用 NeuroMatrix AI 生成报告
 async function generateAIReport() {
     if (!currentPatientId) {
         console.warn('没有患者ID，跳过AI报告生成');
@@ -349,7 +349,7 @@ async function generateAIReport() {
     }
 
     try {
-        console.log('正在调用百川 AI 生成报告...');
+        console.log('正在调用 NeuroMatrix AI 生成报告...');
         
         // 显示加载动画
         const aiReportSection = document.getElementById('aiReportSection');
@@ -359,7 +359,7 @@ async function generateAIReport() {
             aiReportContent.innerHTML = `
                 <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px; border-radius: 12px; text-align: center;">
                     <div style="border: 4px solid rgba(255,255,255,0.3); border-top: 4px solid white; border-radius: 50%; width: 48px; height: 48px; animation: spin 1s linear infinite; margin: 0 auto 16px;"></div>
-                    <p style="color: white; font-size: 16px; font-weight: 600; margin: 0;">百川 AI 正在生成诊断意见...</p>
+                    <p style="color: white; font-size: 16px; font-weight: 600; margin: 0;">NeuroMatrix AI 正在生成诊断意见...</p>
                     <p style="color: rgba(255,255,255,0.8); font-size: 13px; margin-top: 8px;">正在分析患者影像数据，请稍候...</p>
                 </div>
             `;
@@ -368,13 +368,13 @@ async function generateAIReport() {
         const response = await fetch(`/api/generate_report/${currentPatientId}?format=markdown`);
         const data = await response.json();
         
-        console.log('百川 API 响应:', data);
+        console.log('NeuroMatrix API 响应:', data);
         
         if (data.status === 'success') {
-            // 将百川报告保存到 localStorage（跨标签页共享）
+            // 将 NeuroMatrix 报告保存到 localStorage（跨标签页共享）
             localStorage.setItem('ai_report', data.report);
             
-            // 在分析面板中显示百川报告
+            // 在分析面板中显示 NeuroMatrix 报告
             displayAIReport(data.report, data.is_mock);
             
             showMsg('AI 报告已生成' + (data.is_mock ? '（模拟模式）' : ''), 'success');
@@ -405,7 +405,7 @@ async function generateAIReport() {
     }
 }
 
-// 在分析面板中显示百川报告
+// 在分析面板中显示 NeuroMatrix 报告
 function displayAIReport(report, isMock) {
     const aiReportSection = document.getElementById('aiReportSection');
     const aiReportContent = document.getElementById('aiReportContent');
@@ -415,7 +415,7 @@ function displayAIReport(report, isMock) {
         aiReportContent.innerHTML = `
             <div style="background: #eff6ff; padding: 12px; border-radius: 6px; border-left: 3px solid #2563eb; margin-bottom: 8px;">
                 <div style="font-size: 11px; font-weight: 600; color: #2563eb; margin-bottom: 8px;">
-                    百川 AI 专业诊断报告 ${isMock ? '<span style="background: #ffd700; padding: 1px 6px; border-radius: 8px; font-size: 10px;">模拟</span>' : ''}
+                    NeuroMatrix AI 专业诊断报告 ${isMock ? '<span style="background: #ffd700; padding: 1px 6px; border-radius: 8px; font-size: 10px;">模拟</span>' : ''}
                 </div>
                 <div style="font-size: 12px; line-height: 1.8; color: #333;">${parseMarkdown(report)}</div>
             </div>

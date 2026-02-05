@@ -1,0 +1,49 @@
+# 环境变量文件（包含敏感信息）
+.env
+.env.local
+.env.*.local
+.env.production
+
+# Node依赖
+node_modules/
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# 构建输出
+.next/
+out/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# 缓存
+.turbo/
+.cache/
+
+# 测试覆盖率
+coverage/
+.nyc_output/
+
+# 敏感文件
+*.key
+*.pem
+*.p12
+*.pfx
+secrets.json
+credentials.json
+
+# 操作系统特定文件
+Thumbs.db
+.DS_Store
+
+# 本地开发文件
+.env.local.*.backup
+debug.log

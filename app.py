@@ -424,7 +424,7 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 # AI模型配置 - 扩展为三个模型
 AI_CONFIG_BASE = os.path.join(PROJECT_ROOT, 'palette', 'config')
-AI_WEIGHTS_BASE = os.path.join(PROJECT_ROOT, 'mrdpm', 'weights')  # 使用 mrdpm 权重目录
+AI_WEIGHTS_BASE = os.path.join(PROJECT_ROOT, 'palette', 'weights')  
 
 # 三个模型的配置
 MODEL_CONFIGS = {
@@ -535,8 +535,8 @@ def init_ai_models():
         
         # 检查文件是否存在
         config_exists = os.path.exists(config['config_path'])
-        ema_exists = find_weight_file(config['weight_dir'], 'Network_ema.pth') is not None
-        normal_exists = find_weight_file(config['weight_dir'], 'Network.pth') is not None
+        ema_exists = find_weight_file(config['weight_dir'], '_Network_ema.pth') is not None
+        normal_exists = find_weight_file(config['weight_dir'], '_Network.pth') is not None
 
         print(f"  配置文件: {'✓' if config_exists else '✗'}")
         print(f"  权重基础路径: {weight_base}")
@@ -1244,7 +1244,6 @@ def api_save_report():
     
     try:
         # 将报告保存到数据库
-        # 这里简化为更新患者记录，实际项目建议新建独立的 reports 表
         report_notes = f"""
 患者信息：{data.get('patient', {}).get('patient_name', '')}
 核心梗死：{data.get('findings', {}).get('core', '')}
@@ -1269,9 +1268,83 @@ def api_save_report():
             "data": response.data
         })
     except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+
+# 简单的测试路由
+@app.route('/test')
+def test_page():
+    """测试路由"""
+    return "Test page works!"
+
+@app.route('/chat')
+def chat_page():
+    """渲染AI问诊页面"""
+    return render_template('patient/upload/viewer/chat.html')
+
+
+@app.route('/api/chat/clinical/', methods=['POST'])
+def api_chat_clinical():
+    """医疗AI临床聊天接口"""
+    try:
+        data = request.get_json()
+        session_id = data.get('sessionId')
+        question = data.get('question')
+        images = data.get('images', [])
+        patient_context = data.get('patientContext', {})
+        
+        if not session_id or not question:
+            return jsonify({
+                "success": False,
+                "error": "缺少会话ID或问题"
+            }), 400
+        
+        # 调用百川API进行临床问答
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {BAICHUAN_API_KEY}'
+        }
+        
+        payload = {
+            'model': BAICHUAN_MODEL,
+            'messages': [
+                {
+                    'role': 'system',
+                    'content': '你是一位专业的神经放射科医生，擅长脑卒中影像诊断和分析。'
+                },
+                {
+                    'role': 'user',
+                    'content': question
+                }
+            ],
+            'max_tokens': 1000,
+            'temperature': 0.3
+        }
+        
+        response = requests.post(BAICHUAN_API_URL, headers=headers, json=payload, timeout=60)
+        
+        if response.status_code == 200:
+            result = response.json()
+            ai_response = result.get('choices', [{}])[0].get('message', {}).get('content', '')
+            
+            return jsonify({
+                "success": True,
+                "message": {
+                    "role": "assistant",
+                    "content": ai_response
+                }
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": f"API调用失败: {response.status_code}"
+            }), 500
+            
+    except Exception as e:
+        print(f"聊天错误: {e}")
         return jsonify({
-            "status": "error",
-            "message": str(e)
+            "success": False,
+            "error": str(e)
         }), 500
 
 @app.route('/report/<int:patient_id>')
@@ -2113,6 +2186,9 @@ def process_rgb_synthesis(mcta_path, ncct_path, output_dir, model_type='mrdpm'):
 
         # 检查AI模型可用性
         available_models = get_available_models()
+        # MRDPM 推理只需要 CBF/CBV/TMAX 三类子模型，过滤掉占位的 mrdpm 标识
+        if model_type == 'mrdpm':
+            available_models = [key for key in available_models if key in MODEL_CONFIGS]
         models_available = len(available_models) > 0
 
         print(f"AI模型可用性: {models_available}")

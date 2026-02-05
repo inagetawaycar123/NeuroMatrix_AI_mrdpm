@@ -259,6 +259,18 @@
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
 
+.action-btn.ai-consult-btn {
+  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+  border: none;
+  color: #000;
+  font-weight: 600;
+}
+
+.action-btn.ai-consult-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+}
+
 .ai-report-section {
   background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
   border: 1px solid #667eea;
