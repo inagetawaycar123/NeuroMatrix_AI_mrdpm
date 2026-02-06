@@ -208,6 +208,7 @@
     flex-direction: column;
     background: #0a0a0a;
     min-height: 0;
+    min-width: 1400px;
 }
 
 .chat-header {
@@ -1134,7 +1135,9 @@ function removeImage(index) {
 
 // 智能分析医疗内容的函数
 function analyzeMedicalContent(content) {
-    const hasStroke = /卒中|stroke|中风|脑梗|脑出血|缺血性|出血性/i.test(content);
+    const hasStroke = /卒中|stroke|中风|脑梗|脑出血|缺血性|出血性|蛛网膜下腔出血|短暂性脑缺血发作|TIA/i.test(content);
+    const hasIschemicStroke = /缺血性|脑梗|脑血栓|脑栓塞/i.test(content);
+    const hasHemorrhagicStroke = /出血性|脑出血|蛛网膜下腔出血/i.test(content);
     const hasCardiac = /心脏|心梗|心肌梗死|心律失常|心力衰竭/i.test(content);
     const hasRespiratory = /呼吸|肺炎|哮喘|呼吸衰竭|肺部/i.test(content);
     const hasNeurological = /神经|癫痫|帕金森|阿尔茨海默/i.test(content);
@@ -1143,12 +1146,22 @@ function analyzeMedicalContent(content) {
     const hasCancer = /肿瘤|癌症|恶性|癌/i.test(content);
 
     if (hasStroke) {
+        const risks = [
+            { level: 'high', description: '急性脑卒中风险', suggestion: '立即评估NIHSS评分，考虑急诊溶栓/取栓治疗' },
+            { level: 'medium', description: '并发症风险', suggestion: '监测血压、血糖，预防肺炎和深静脉血栓' }
+        ];
+        
+        if (hasIschemicStroke) {
+            risks.push({ level: 'high', description: '缺血性脑卒中风险', suggestion: '评估时间窗，考虑静脉溶栓或血管内取栓' });
+        }
+        
+        if (hasHemorrhagicStroke) {
+            risks.push({ level: 'high', description: '出血性脑卒中风险', suggestion: '控制血压，评估手术指征，预防再出血' });
+        }
+        
         return {
-            risks: [
-                { level: 'high', description: '急性脑卒中风险', suggestion: '立即评估NIHSS评分，考虑急诊溶栓治疗' },
-                { level: 'medium', description: '并发症风险', suggestion: '监测血压、血糖，预防肺炎和深静脉血栓' }
-            ],
-            keypoints: ['神经功能评估', '生命体征监测', '实验室检查', '影像学检查', '早期康复']
+            risks: risks,
+            keypoints: ['神经功能评估', '生命体征监测', '实验室检查', '影像学检查', '早期康复', '二级预防']
         };
     }
 
@@ -1239,7 +1252,7 @@ function generateSafetyAnalysis(content, userInput = '', conversation = null) {
         hasMedicalSignals: false,
         triggerMessage: {
             id: 'msg-' + Date.now(),
-            content: content,
+            content: userInput || content,
             timestamp: new Date().toISOString()
         },
         timestamp: new Date().toISOString(),
@@ -1247,20 +1260,8 @@ function generateSafetyAnalysis(content, userInput = '', conversation = null) {
         confidence: 0
     };
 
-    // 收集所有相关内容进行分析
-    let allContent = content;
-    if (userInput) {
-        allContent += ' ' + userInput;
-    }
-    
-    // 如果提供了对话历史，也分析对话历史
-    if (conversation && conversation.messages && conversation.messages.length > 0) {
-        // 分析最近的几条消息
-        const recentMessages = conversation.messages.slice(-5); // 分析最近5条消息
-        recentMessages.forEach(msg => {
-            allContent += ' ' + msg.content;
-        });
-    }
+    // 仅分析本次用户输入，避免历史对话干扰主题
+    const allContent = userInput || '';
 
     // 使用智能分析函数
     const medicalAnalysis = analyzeMedicalContent(allContent);
@@ -1272,7 +1273,6 @@ function generateSafetyAnalysis(content, userInput = '', conversation = null) {
         // 检测到的主题
         analysis.detectedTopics = detectMedicalTopics(allContent);
         analysis.confidence = calculateConfidence(analysis.detectedTopics);
-        
         // 生成其他类型的安全提示
         analysis.guidelines = generateClinicalGuidelines(analysis.detectedTopics);
         analysis.recommendations = generateRecommendations(analysis.detectedTopics);
@@ -1362,9 +1362,12 @@ function generateClinicalGuidelines(topics) {
     }
     
     if (topics.includes('脑血管疾病')) {
-        guidelines.push('定期进行神经系统检查');
-        guidelines.push('控制血压、血糖和血脂水平');
-        guidelines.push('避免吸烟和过量饮酒');
+        guidelines.push('脑卒中分类与分型：缺血性（脑血栓形成、脑栓塞、腔隙性梗死）、出血性（脑出血、蛛网膜下腔出血）、短暂性脑缺血发作（TIA）');
+        guidelines.push('缺血性脑卒中急性期治疗时间窗：静脉溶栓（发病4.5小时内）、血管内取栓（前循环6-8小时，部分可延长至24小时）');
+        guidelines.push('出血性脑卒中治疗原则：控制血压（目标140-160/90-100mmHg）、降低颅内压、防治并发症');
+        guidelines.push('二级预防：抗血小板治疗（阿司匹林/氯吡格雷）、他汀类药物、血压控制（目标<140/90mmHg）、血糖管理');
+        guidelines.push('康复治疗：早期康复介入（病情稳定24-48小时后）、个体化康复方案、长期功能训练');
+        guidelines.push('定期进行神经系统检查和影像学随访');
     }
     
     if (topics.includes('糖尿病')) {
@@ -1393,9 +1396,13 @@ function generateRecommendations(topics) {
     }
     
     if (topics.includes('脑血管疾病')) {
-        recommendations.push('头颅CT或MRI检查');
-        recommendations.push('颈动脉超声检查');
-        recommendations.push('凝血功能检查');
+        recommendations.push('头颅CT平扫：排除出血性脑卒中，评估早期缺血改变（岛带征、豆状核模糊、脑沟消失）');
+        recommendations.push('头颅CTA：评估脑血管狭窄、闭塞和动脉瘤等血管病变');
+        recommendations.push('头颅MRI：DWI序列显示超早期缺血病灶，FLAIR评估梗死范围，SWI检测微出血');
+        recommendations.push('灌注成像（CTP/MRP）：评估脑血流灌注情况，指导取栓决策');
+        recommendations.push('颈动脉+椎动脉超声：评估颅外血管狭窄和斑块性质');
+        recommendations.push('心脏检查：心电图、超声心动图（评估心源性栓塞风险）');
+        recommendations.push('实验室检查：血常规、凝血功能、血糖、血脂、肝肾功能');
     }
     
     if (topics.includes('糖尿病')) {
@@ -1424,9 +1431,12 @@ function generateHealthTips(topics) {
     }
     
     if (topics.includes('脑血管疾病')) {
-        tips.push('保持良好的睡眠质量');
-        tips.push('避免过度劳累和精神压力');
-        tips.push('定期进行颈部和肩部的放松运动');
+        tips.push('控制危险因素：高血压、糖尿病、高脂血症、心房颤动等');
+        tips.push('生活方式调整：戒烟限酒、均衡饮食（低盐低脂）、适量运动（每周至少150分钟中等强度运动）');
+        tips.push('早期识别脑卒中症状：FAST原则（面部下垂、手臂无力、言语困难、时间就是大脑）');
+        tips.push('保持良好的睡眠质量（7-8小时/天），避免过度劳累和精神压力');
+        tips.push('定期体检：监测血压、血糖、血脂水平，评估心脑血管健康状况');
+        tips.push('遵医嘱服药：抗血小板药物、他汀类药物等二级预防药物');
     }
     
     if (topics.includes('糖尿病')) {
@@ -1605,7 +1615,7 @@ function sendMessage(event) {
             currentConversation.updatedAt = new Date().toISOString();
 
             // 生成安全分析
-            const analysis = generateSafetyAnalysis(data.message.content, message, currentConversation);
+            const analysis = generateSafetyAnalysis(message, message, currentConversation);
             if (!currentConversation.analysisHistory) {
                 currentConversation.analysisHistory = [];
             }
@@ -1786,6 +1796,42 @@ function updateSafetyCard(conversation) {
             </div>
         `;
         safetyContent.appendChild(healthTipsCard);
+    }
+
+    // 添加脑卒中专业知识卡片
+    if (latestAnalysis.detectedTopics && latestAnalysis.detectedTopics.includes('脑血管疾病')) {
+        const strokeKnowledgeCard = document.createElement('div');
+        strokeKnowledgeCard.className = 'safety-card';
+        strokeKnowledgeCard.innerHTML = `
+            <div class="safety-card-header">
+                <div class="safety-card-icon">🧠</div>
+                <div class="safety-card-title">脑卒中专业知识</div>
+            </div>
+            <div class="safety-card-content">
+                <div><strong>发病机制与病因：</strong></div>
+                <div>- 缺血性：动脉粥样硬化、心源性栓塞、小血管病、动脉夹层、血液高凝状态</div>
+                <div>- 出血性：高血压性脑出血、动脉瘤破裂、血管畸形、凝血功能障碍</div>
+                <div>- 蛛网膜下腔出血：颅内动脉瘤、动静脉畸形、外伤</div>
+                <div><strong>危险因素与高危人群：</strong></div>
+                <div>- 不可控：年龄、男性、家族史</div>
+                <div>- 可控：高血压、糖尿病、高脂血症、吸烟、酗酒、肥胖、缺乏运动、心房颤动</div>
+                <div><strong>典型与非典型临床表现：</strong></div>
+                <div>- 典型：突发面部下垂、肢体无力、言语困难、视力障碍、眩晕</div>
+                <div>- 非典型：头痛、意识障碍、认知障碍、精神行为异常、癫痫发作</div>
+                <div><strong>影像学鉴别诊断：</strong></div>
+                <div>- 缺血性：CT低密度灶，MRI DWI高信号，FLAIR高信号</div>
+                <div>- 出血性：CT高密度灶，MRI T1高信号，T2低信号，SWI低信号</div>
+                <div>- 蛛网膜下腔出血：CT脑沟脑池高密度，CTA可显示动脉瘤</div>
+                <div><strong>急性期诊疗要点：</strong></div>
+                <div>- 缺血性：静脉溶栓（rt-PA）、血管内取栓、抗血小板治疗</div>
+                <div>- 出血性：控制血压、降低颅内压、手术治疗（必要时）</div>
+                <div>- 并发症：脑水肿、颅内高压、脑疝、感染、深静脉血栓</div>
+                <div><strong>二级预防与康复：</strong></div>
+                <div>- 药物：抗血小板、他汀、降压、降糖</div>
+                <div>- 康复：早期介入、综合康复、长期随访</div>
+            </div>
+        `;
+        safetyContent.appendChild(strokeKnowledgeCard);
     }
 
     // 添加主题识别信息
