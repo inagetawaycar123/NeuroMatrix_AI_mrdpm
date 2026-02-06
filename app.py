@@ -2145,7 +2145,7 @@ def process_ai_inference(rgb_result, mask_result, output_dir, slice_idx, model_k
         }
 
 
-def process_rgb_synthesis(mcta_path, ncct_path, output_dir, model_type='mrdpm'):
+def process_rgb_synthesis(mcta_path, vcta_path, dcta_path, ncct_path, output_dir, model_type='mrdpm'):
     """处理RGB合成，现在支持多模型AI推理"""
     try:
         if not NIBABEL_AVAILABLE:
@@ -2154,28 +2154,39 @@ def process_rgb_synthesis(mcta_path, ncct_path, output_dir, model_type='mrdpm'):
                 'error': 'nibabel 库不可用，请安装: pip install "numpy<2.0" nibabel'
             }
 
-        # 加载两个NIfTI文件
+        # 加载四个NIfTI文件
         mcta_img = nib.load(mcta_path)
+        vcta_img = nib.load(vcta_path)
+        dcta_img = nib.load(dcta_path)
         ncct_img = nib.load(ncct_path)
 
         mcta_data = mcta_img.get_fdata()
+        vcta_data = vcta_img.get_fdata()
+        dcta_data = dcta_img.get_fdata()
         ncct_data = ncct_img.get_fdata()
 
-        print(f"mCTA1 维度: {mcta_data.shape}")
+        print(f"动脉期CTA 维度: {mcta_data.shape}")
+        print(f"静脉期CTA 维度: {vcta_data.shape}")
+        print(f"延迟期CTA 维度: {dcta_data.shape}")
         print(f"NCCT 维度: {ncct_data.shape}")
 
-        # 检查两个文件维度是否一致
-        if mcta_data.shape != ncct_data.shape:
+        # 检查所有文件维度是否一致
+        all_shapes = [mcta_data.shape, vcta_data.shape, dcta_data.shape, ncct_data.shape]
+        if not all(shape == all_shapes[0] for shape in all_shapes):
             return {
                 'success': False,
-                'error': f'文件维度不匹配: mCTA1{mcta_data.shape} vs NCCT{ncct_data.shape}'
+                'error': f'文件维度不匹配: 动脉期CTA{all_shapes[0]} vs 静脉期CTA{all_shapes[1]} vs 延迟期CTA{all_shapes[2]} vs NCCT{all_shapes[3]}'
             }
 
         # 获取基本信息
         metadata = {
             'mcta_shape': [int(dim) for dim in mcta_data.shape],
+            'vcta_shape': [int(dim) for dim in vcta_data.shape],
+            'dcta_shape': [int(dim) for dim in dcta_data.shape],
             'ncct_shape': [int(dim) for dim in ncct_data.shape],
             'mcta_range': [float(mcta_data.min()), float(mcta_data.max())],
+            'vcta_range': [float(vcta_data.min()), float(vcta_data.max())],
+            'dcta_range': [float(dcta_data.min()), float(dcta_data.max())],
             'ncct_range': [float(ncct_data.min()), float(ncct_data.max())],
             'voxel_dims': [float(dim) for dim in mcta_img.header.get_zooms()[:3]]
         }
@@ -2203,16 +2214,22 @@ def process_rgb_synthesis(mcta_path, ncct_path, output_dir, model_type='mrdpm'):
 
             if len(mcta_data.shape) == 3:
                 mcta_slice = mcta_data[:, :, slice_idx]
+                vcta_slice = vcta_data[:, :, slice_idx]
+                dcta_slice = dcta_data[:, :, slice_idx]
                 ncct_slice = ncct_data[:, :, slice_idx]
             elif len(mcta_data.shape) == 4:
                 mcta_slice = mcta_data[:, :, slice_idx, 0]
+                vcta_slice = vcta_data[:, :, slice_idx, 0]
+                dcta_slice = dcta_data[:, :, slice_idx, 0]
                 ncct_slice = ncct_data[:, :, slice_idx, 0]
             else:
                 mcta_slice = mcta_data
+                vcta_slice = vcta_data
+                dcta_slice = dcta_data
                 ncct_slice = ncct_data
 
             # 生成RGB合成图像和NPY数据
-            rgb_result = generate_rgb_slices(mcta_slice, ncct_slice, output_dir, slice_idx)
+            rgb_result = generate_rgb_slices(mcta_slice, vcta_slice, dcta_slice, ncct_slice, output_dir, slice_idx)
             if not rgb_result['success']:
                 print(f"⚠ 切片 {slice_idx} RGB合成失败，跳过")
                 continue
@@ -2230,6 +2247,8 @@ def process_rgb_synthesis(mcta_path, ncct_path, output_dir, model_type='mrdpm'):
                 'slice_index': slice_idx,
                 'rgb_image': rgb_result.get('rgb_url', ''),
                 'mcta_image': rgb_result.get('mcta_url', ''),
+                'vcta_url': rgb_result.get('vcta_url', ''),
+                'dcta_url': rgb_result.get('dcta_url', ''),
                 'ncct_image': rgb_result.get('ncct_url', ''),
                 'npy_url': rgb_result.get('npy_url', ''),
                 'mask_image': mask_result.get('mask_url', ''),
@@ -2397,24 +2416,25 @@ def download_ai(model_key, file_id, slice_index):
 
 
 # 其余函数保持不变...
-def generate_rgb_slices(mcta_slice, ncct_slice, output_dir, slice_idx):
+def generate_rgb_slices(mcta_slice, vcta_slice, dcta_slice, ncct_slice, output_dir, slice_idx):
     """
     生成RGB合成图像和单独通道图像
     """
     try:
         # 1. 归一化处理
         mcta_normalized = normalize_slice(mcta_slice)
+        vcta_normalized = normalize_slice(vcta_slice)
+        dcta_normalized = normalize_slice(dcta_slice)
         ncct_normalized = normalize_slice(ncct_slice)
 
-        # 2. 创建空通道 (B通道)
-        empty_channel = np.zeros_like(mcta_normalized)
-
-        # 3. 创建RGB图像 [R, G, B] = [mCTA1, NCCT, 空]
-        rgb_data = np.stack([mcta_normalized, ncct_normalized, empty_channel], axis=2)
+        # 2. 创建RGB图像 [R, G, B] = [mCTA1, NCCT, 空]
+        rgb_data = np.stack([mcta_normalized, ncct_normalized, np.zeros_like(mcta_normalized)], axis=2)
         rgb_8bit = (rgb_data * 255).astype(np.uint8)
 
-        # 4. 创建单独通道的图像（用于显示）
+        # 3. 创建单独通道的图像（用于显示）
         mcta_8bit = (mcta_normalized * 255).astype(np.uint8)
+        vcta_8bit = (vcta_normalized * 255).astype(np.uint8)
+        dcta_8bit = (dcta_normalized * 255).astype(np.uint8)
         ncct_8bit = (ncct_normalized * 255).astype(np.uint8)
 
         # 创建输出路径
@@ -2426,20 +2446,30 @@ def generate_rgb_slices(mcta_slice, ncct_slice, output_dir, slice_idx):
 
         # 保存单独通道图像
         mcta_path = os.path.join(output_dir, f'{slice_prefix}_mcta.png')
+        vcta_path = os.path.join(output_dir, f'{slice_prefix}_vcta.png')
+        dcta_path = os.path.join(output_dir, f'{slice_prefix}_dcta.png')
         ncct_path = os.path.join(output_dir, f'{slice_prefix}_ncct.png')
+        
         Image.fromarray(mcta_8bit).save(mcta_path)
+        Image.fromarray(vcta_8bit).save(vcta_path)
+        Image.fromarray(dcta_8bit).save(dcta_path)
         Image.fromarray(ncct_8bit).save(ncct_path)
 
         # 保存NPY数据 - 直接保存RGB数组，而不是字典
         npy_path = os.path.join(output_dir, f'{slice_prefix}_data.npy')
         np.save(npy_path, rgb_data.astype(np.float32))  # 直接保存数组
 
+        # 获取输出目录的basename作为file_id
+        file_id = os.path.basename(output_dir)
+
         return {
             'success': True,
-            'rgb_url': f'/get_image/{os.path.basename(output_dir)}/{slice_prefix}_rgb.png',
-            'mcta_url': f'/get_image/{os.path.basename(output_dir)}/{slice_prefix}_mcta.png',
-            'ncct_url': f'/get_image/{os.path.basename(output_dir)}/{slice_prefix}_ncct.png',
-            'npy_url': f'/get_file/{os.path.basename(output_dir)}/{slice_prefix}_data.npy',
+            'rgb_url': f'/get_image/{file_id}/{slice_prefix}_rgb.png',
+            'mcta_url': f'/get_image/{file_id}/{slice_prefix}_mcta.png',
+            'vcta_url': f'/get_image/{file_id}/{slice_prefix}_vcta.png',
+            'dcta_url': f'/get_image/{file_id}/{slice_prefix}_dcta.png',
+            'ncct_url': f'/get_image/{file_id}/{slice_prefix}_ncct.png',
+            'npy_url': f'/get_file/{file_id}/{slice_prefix}_data.npy',
             'rgb_data': rgb_data
         }
 
@@ -2489,7 +2519,7 @@ def viewer_page():
 
 @app.route('/upload', methods=['POST'])
 def upload_files():
-    """处理双文件上传 - 多模型版本"""
+    """处理四文件上传 - 多模型版本"""
     try:
         print("收到上传请求...")
 
@@ -2499,52 +2529,69 @@ def upload_files():
                 'error': 'nibabel 库不可用。请运行: pip install "numpy<2.0" nibabel'
             })
 
-        # 检查文件是否存在
-        if 'mcta_file' not in request.files or 'ncct_file' not in request.files:
-            return jsonify({'success': False, 'error': '请选择两个文件'})
+        # 检查文件是否存在（动脉期CTA、静脉期CTA、延迟期CTA、NCCT）
+        required_keys = ['mcta_file', 'vcta_file', 'dcta_file', 'ncct_file']
+        if not all(key in request.files for key in required_keys):
+            return jsonify({'success': False, 'error': '请选择四个文件：动脉期CTA、静脉期CTA、延迟期CTA、NCCT'})
 
         mcta_file = request.files['mcta_file']
+        vcta_file = request.files['vcta_file']
+        dcta_file = request.files['dcta_file']
         ncct_file = request.files['ncct_file']
 
-        if mcta_file.filename == '' or ncct_file.filename == '':
-            return jsonify({'success': False, 'error': '请选择两个文件'})
+        if any(f.filename == '' for f in [mcta_file, vcta_file, dcta_file, ncct_file]):
+            return jsonify({'success': False, 'error': '请选择四个文件：动脉期CTA、静脉期CTA、延迟期CTA、NCCT'})
 
         # 检查文件格式
         valid_extensions = ['.nii', '.nii.gz']
         mcta_valid = any(mcta_file.filename.lower().endswith(ext) for ext in valid_extensions)
+        vcta_valid = any(vcta_file.filename.lower().endswith(ext) for ext in valid_extensions)
+        dcta_valid = any(dcta_file.filename.lower().endswith(ext) for ext in valid_extensions)
         ncct_valid = any(ncct_file.filename.lower().endswith(ext) for ext in valid_extensions)
 
-        if not (mcta_valid and ncct_valid):
+        if not (mcta_valid and vcta_valid and dcta_valid and ncct_valid):
             return jsonify({'success': False, 'error': '请上传NIfTI文件 (.nii 或 .nii.gz)'})
 
-        print(f"文件验证通过: {mcta_file.filename}, {ncct_file.filename}")
+        print(
+            f"文件验证通过: {mcta_file.filename}, {vcta_file.filename}, {dcta_file.filename}, {ncct_file.filename}"
+        )
 
         # 生成唯一ID
         file_id = str(uuid.uuid4())[:8]
 
         # 保存上传的文件
         mcta_extension = '.nii.gz' if mcta_file.filename.lower().endswith('.nii.gz') else '.nii'
+        vcta_extension = '.nii.gz' if vcta_file.filename.lower().endswith('.nii.gz') else '.nii'
+        dcta_extension = '.nii.gz' if dcta_file.filename.lower().endswith('.nii.gz') else '.nii'
         ncct_extension = '.nii.gz' if ncct_file.filename.lower().endswith('.nii.gz') else '.nii'
 
         mcta_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{file_id}_mcta{mcta_extension}')
+        vcta_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{file_id}_vcta{vcta_extension}')
+        dcta_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{file_id}_dcta{dcta_extension}')
         ncct_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{file_id}_ncct{ncct_extension}')
 
         mcta_file.save(mcta_path)
+        vcta_file.save(vcta_path)
+        dcta_file.save(dcta_path)
         ncct_file.save(ncct_path)
 
-        print(f"文件保存成功: {mcta_path}, {ncct_path}")
+        print(f"文件保存成功: {mcta_path}, {vcta_path}, {dcta_path}, {ncct_path}")
 
         # 创建输出目录
         output_dir = os.path.join(app.config['PROCESSED_FOLDER'], file_id)
         os.makedirs(output_dir, exist_ok=True)
 
         # 获取模型类型参数，默认使用mrdpm
-        model_type = request.form.get('model_type', 'mrdpm')
-        print(f"选择的模型类型: {model_type}")
+        selected_model = request.form.get('model_type', 'mrdpm')
+        # 实现模型选择的映射转换
+        model_mapping = {'mrdpm': 'palette', 'palette': 'mrdpm'}
+        model_type = model_mapping.get(selected_model, 'palette')
+        print(f"用户选择的模型: {selected_model}, 实际使用的模型: {model_type}")
 
         # 处理RGB合成（现在包含多模型AI推理）
+        # 使用所有四个期相CTA文件进行处理
         print("开始处理RGB合成和多模型AI推理...")
-        result = process_rgb_synthesis(mcta_path, ncct_path, output_dir, model_type)
+        result = process_rgb_synthesis(mcta_path, vcta_path, dcta_path, ncct_path, output_dir, model_type)
 
         if result['success']:
             print("RGB合成和多模型AI推理处理成功")
@@ -2570,6 +2617,8 @@ def upload_files():
                 'success': True,
                 'file_id': file_id,
                 'mcta_filename': mcta_file.filename,
+                'vcta_filename': vcta_file.filename,
+                'dcta_filename': dcta_file.filename,
                 'ncct_filename': ncct_file.filename,
                 'metadata': ensure_json_serializable(result['metadata']),
                 'rgb_files': ensure_json_serializable(result['rgb_files']),

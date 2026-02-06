@@ -11,9 +11,19 @@
             <div class="upload-box">
                 <div class="upload-title">上传医学影像文件</div>
                 <div class="file-input-row">
-                    <label class="file-label">CTA文件:</label>
+                    <label class="file-label">动脉期CTA:</label>
                     <input type="file" id="mctaFile" class="file-input" accept=".nii,.nii.gz">
                     <button class="file-select" id="mctaBtn" onclick="document.getElementById('mctaFile').click()">选择文件...</button>
+                </div>
+                <div class="file-input-row">
+                    <label class="file-label">静脉期CTA:</label>
+                    <input type="file" id="vctaFile" class="file-input" accept=".nii,.nii.gz">
+                    <button class="file-select" id="vctaBtn" onclick="document.getElementById('vctaFile').click()">选择文件...</button>
+                </div>
+                <div class="file-input-row">
+                    <label class="file-label">延迟期CTA:</label>
+                    <input type="file" id="dctaFile" class="file-input" accept=".nii,.nii.gz">
+                    <button class="file-select" id="dctaBtn" onclick="document.getElementById('dctaFile').click()">选择文件...</button>
                 </div>
                 <div class="file-input-row">
                     <label class="file-label">NCCT文件:</label>

@@ -67,11 +67,26 @@ function initializeViewer(data) {
     sessionStorage.setItem('current_file_id', currentFileId);
     localStorage.setItem('current_file_id', currentFileId);
 
+    // 从localStorage加载分析结果
+    if (currentFileId) {
+        const savedAnalysis = localStorage.getItem(`stroke_analysis_${currentFileId}`);
+        if (savedAnalysis) {
+            try {
+                analysisResults = JSON.parse(savedAnalysis);
+                displayAnalysisResults();
+            } catch (e) {
+                console.error('加载分析结果失败:', e);
+            }
+        }
+    }
+
     document.getElementById('sliceSlider').max = totalSlices - 1;
 
     if (contrastController) {
         contrastController.enableDragAdjust('cta');
         contrastController.enableDragAdjust('ncct');
+        contrastController.enableDragAdjust('cta-venous');
+        contrastController.enableDragAdjust('cta-delayed');
     }
     loadSlice(0);
 }
@@ -113,12 +128,32 @@ function loadSlice(sliceIndex) {
     if (sliceIndex < 0 || sliceIndex >= totalSlices) return;
     currentSlice = sliceIndex;
     const sliceData = currentRgbFiles[currentSlice];
-    updateImage('cta', sliceData.mcta_image);
+    
+    // 添加调试信息
+    console.log('loadSlice:', sliceIndex);
+    console.log('sliceData:', {
+        mcta_image: sliceData.mcta_image,
+        ncct_image: sliceData.ncct_image,
+        vcta_url: sliceData.vcta_url,
+        dcta_url: sliceData.dcta_url,
+        cbf_image: sliceData.cbf_image,
+        cbv_image: sliceData.cbv_image,
+        tmax_image: sliceData.tmax_image
+    });
+    
+    // 调整加载顺序以匹配新的布局
     updateImage('ncct', sliceData.ncct_image);
+    updateImage('cta', sliceData.mcta_image);
+    updateImage('cta-venous', sliceData.vcta_url);
+    updateImage('cta-delayed', sliceData.dcta_url);
+    
     if (contrastController) {
-        contrastController.applyContrastToImage('cta');
         contrastController.applyContrastToImage('ncct');
+        contrastController.applyContrastToImage('cta');
+        contrastController.applyContrastToImage('cta-venous');
+        contrastController.applyContrastToImage('cta-delayed');
     }
+    
     updateAIImage('cbf', sliceData);
     updateAIImage('cbv', sliceData);
     updateAIImage('tmax', sliceData);
@@ -129,6 +164,9 @@ function loadSlice(sliceIndex) {
 function updateImage(cellId, imageUrl) {
     const img = document.getElementById('img-' + cellId);
     const status = document.getElementById('status-' + cellId);
+    
+    console.log('updateImage:', cellId, 'imageUrl:', imageUrl);
+    
     if (imageUrl) {
         img.src = imageUrl;
         img.style.display = 'block';
@@ -137,9 +175,24 @@ function updateImage(cellId, imageUrl) {
             status.className = 'cell-status status-ready';
             status.style.display = 'block';
         }
+        
+        // 添加图像加载错误处理
+        img.onerror = function() {
+            console.error('Image load error:', cellId, imageUrl);
+            img.style.display = 'none';
+            if (status) {
+                status.textContent = '✗';
+                status.className = 'cell-status status-error';
+                status.style.display = 'block';
+            }
+        };
     } else {
         img.style.display = 'none';
-        if (status) status.style.display = 'none';
+        if (status) {
+            status.textContent = '-';
+            status.className = 'cell-status';
+            status.style.display = 'block';
+        }
     }
 }
 
@@ -285,6 +338,11 @@ function displayAnalysisResults() {
         has_mismatch: analysisResults.report?.summary?.has_mismatch || false,
         hemisphere: currentHemisphere
     }));
+
+    // 保存完整的分析结果到localStorage，用于页面刷新后恢复
+    if (currentFileId) {
+        localStorage.setItem(`stroke_analysis_${currentFileId}`, JSON.stringify(analysisResults));
+    }
 
     saveAnalysisToDB();
 }

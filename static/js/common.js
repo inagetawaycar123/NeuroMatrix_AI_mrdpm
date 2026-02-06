@@ -54,6 +54,11 @@ function updatePatientHeader(patientId) {
 }
 
 function resetAll() {
+    // 清除localStorage中的分析结果
+    const currentFileId = sessionStorage.getItem('current_file_id');
+    if (currentFileId) {
+        localStorage.removeItem(`stroke_analysis_${currentFileId}`);
+    }
     sessionStorage.removeItem('patient_id');
     sessionStorage.removeItem('viewer_data');
     sessionStorage.removeItem('analysis_data');

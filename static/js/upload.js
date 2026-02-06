@@ -16,6 +16,8 @@ document.addEventListener('DOMContentLoaded', function() {
     updatePatientHeader(patientId);
 
     const mctaInput = document.getElementById('mctaFile');
+    const vctaInput = document.getElementById('vctaFile');
+    const dctaInput = document.getElementById('dctaFile');
     const ncctInput = document.getElementById('ncctFile');
 
     mctaInput.addEventListener('change', function(e) {
@@ -23,6 +25,26 @@ document.addEventListener('DOMContentLoaded', function() {
             const mctaFile = e.target.files[0];
             const btn = document.getElementById('mctaBtn');
             btn.textContent = mctaFile.name;
+            btn.classList.add('selected');
+            checkFilesReady();
+        }
+    });
+
+    vctaInput.addEventListener('change', function(e) {
+        if (e.target.files.length > 0) {
+            const vctaFile = e.target.files[0];
+            const btn = document.getElementById('vctaBtn');
+            btn.textContent = vctaFile.name;
+            btn.classList.add('selected');
+            checkFilesReady();
+        }
+    });
+
+    dctaInput.addEventListener('change', function(e) {
+        if (e.target.files.length > 0) {
+            const dctaFile = e.target.files[0];
+            const btn = document.getElementById('dctaBtn');
+            btn.textContent = dctaFile.name;
             btn.classList.add('selected');
             checkFilesReady();
         }
@@ -41,18 +63,24 @@ document.addEventListener('DOMContentLoaded', function() {
 
 function checkFilesReady() {
     const mctaFile = document.getElementById('mctaFile').files[0];
+    const vctaFile = document.getElementById('vctaFile').files[0];
+    const dctaFile = document.getElementById('dctaFile').files[0];
     const ncctFile = document.getElementById('ncctFile').files[0];
-    document.getElementById('uploadBtn').disabled = !(mctaFile && ncctFile);
+    document.getElementById('uploadBtn').disabled = !(mctaFile && vctaFile && dctaFile && ncctFile);
 }
 
 function processFiles() {
     const patientId = getCurrentPatientId();
     const mctaFile = document.getElementById('mctaFile').files[0];
+    const vctaFile = document.getElementById('vctaFile').files[0];
+    const dctaFile = document.getElementById('dctaFile').files[0];
     const ncctFile = document.getElementById('ncctFile').files[0];
-    if (!mctaFile || !ncctFile || !patientId) return;
+    if (!mctaFile || !vctaFile || !dctaFile || !ncctFile || !patientId) return;
 
     const formData = new FormData();
     formData.append('mcta_file', mctaFile);
+    formData.append('vcta_file', vctaFile);
+    formData.append('dcta_file', dctaFile);
     formData.append('ncct_file', ncctFile);
     formData.append('patient_id', patientId);
     const modelType = document.getElementById('modelSelect').value;

@@ -15,22 +15,29 @@
     <div class="page">
         <div class="viewer-container">
             <div class="image-grid">
-                <div class="grid-cell" id="cell-cta">
-                    <div class="cell-label">CTA</div>
-                    <div class="cell-status status-ready" id="status-cta" style="display:none;">✓</div>
-                    <div class="contrast-indicator" id="contrast-indicator-cta">W:80 L:40</div>
-                    <img id="img-cta" class="grid-image" src="" alt="CTA">
-                </div>
                 <div class="grid-cell" id="cell-ncct">
                     <div class="cell-label">NCCT</div>
                     <div class="cell-status status-ready" id="status-ncct" style="display:none;">✓</div>
                     <div class="contrast-indicator" id="contrast-indicator-ncct">W:80 L:40</div>
                     <img id="img-ncct" class="grid-image" src="" alt="NCCT">
                 </div>
-                <div class="grid-cell" id="cell-stroke">
-                    <div class="cell-label">STROKE ANALYSIS</div>
-                    <div class="cell-status" id="status-stroke" style="display:none;">-</div>
-                    <img id="img-stroke" class="grid-image stroke-image" src="" alt="Stroke">
+                <div class="grid-cell" id="cell-cta">
+                    <div class="cell-label">动脉期CTA</div>
+                    <div class="cell-status status-ready" id="status-cta" style="display:none;">✓</div>
+                    <div class="contrast-indicator" id="contrast-indicator-cta">W:80 L:40</div>
+                    <img id="img-cta" class="grid-image" src="" alt="动脉期CTA">
+                </div>
+                <div class="grid-cell" id="cell-cta-venous">
+                    <div class="cell-label">静脉期CTA</div>
+                    <div class="cell-status status-ready" id="status-cta-venous" style="display:none;">✓</div>
+                    <div class="contrast-indicator" id="contrast-indicator-cta-venous">W:80 L:40</div>
+                    <img id="img-cta-venous" class="grid-image" src="" alt="静脉期CTA">
+                </div>
+                <div class="grid-cell" id="cell-cta-delayed">
+                    <div class="cell-label">延迟期CTA</div>
+                    <div class="cell-status status-ready" id="status-cta-delayed" style="display:none;">✓</div>
+                    <div class="contrast-indicator" id="contrast-indicator-cta-delayed">W:80 L:40</div>
+                    <img id="img-cta-delayed" class="grid-image" src="" alt="延迟期CTA">
                 </div>
                 <div class="grid-cell" id="cell-cbf">
                     <div class="cell-label">CBF</div>
@@ -49,6 +56,11 @@
                     <div class="cell-status" id="status-tmax" style="display:none;">-</div>
                     <div class="pseudocolor-toggle" id="toggle-tmax" onclick="toggleCellPseudocolor('tmax')">伪彩</div>
                     <img id="img-tmax" class="grid-image" src="" alt="Tmax">
+                </div>
+                <div class="grid-cell" id="cell-stroke">
+                    <div class="cell-label">STROKE ANALYSIS</div>
+                    <div class="cell-status" id="status-stroke" style="display:none;">-</div>
+                    <img id="img-stroke" class="grid-image stroke-image" src="" alt="Stroke">
                 </div>
             </div>
             <div class="bottom-bar">
