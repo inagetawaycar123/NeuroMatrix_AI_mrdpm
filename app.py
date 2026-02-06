@@ -1,4 +1,3 @@
-# app.py - 改进的伪彩图生成版本
 import torch
 import json
 from ai_inference import init_ai_model, get_ai_model
@@ -92,6 +91,21 @@ def get_patient_by_id(patient_id: int):
 
 
 # ==================== 百川 M3 API 配置 ====================
+# 首先尝试从 .env 文件加载环境变量
+try:
+    from dotenv import load_dotenv
+    dotenv_path = os.path.join(os.path.dirname(__file__), '.env')
+    if os.path.exists(dotenv_path):
+        load_dotenv(dotenv_path)
+        print(f"✓ 已从 .env 文件加载环境变量")
+    else:
+        print(f"⚠ .env 文件不存在: {dotenv_path}")
+except ImportError:
+    print("⚠ python-dotenv 未安装，无法从 .env 文件加载")
+except Exception as e:
+    print(f"✗ 加载 .env 文件失败: {e}")
+
+# 然后读取环境变量（已从.env加载或系统环境变量）
 BAICHUAN_API_URL = os.environ.get('BAICHUAN_API_URL', 'https://api.baichuan-ai.com/v1/chat/completions')
 BAICHUAN_API_KEY = os.environ.get('BAICHUAN_API_KEY', '') or os.environ.get('BAICHUAN_AK', '')
 BAICHUAN_MODEL = os.environ.get('BAICHUAN_MODEL', 'Baichuan-M3')
@@ -99,22 +113,6 @@ BAICHUAN_MODEL = os.environ.get('BAICHUAN_MODEL', 'Baichuan-M3')
 print(f"百川 API URL: {BAICHUAN_API_URL}")
 print(f"百川 API Key: {'***' + BAICHUAN_API_KEY[-4:] if BAICHUAN_API_KEY else '未配置'}")
 print(f"百川模型: {BAICHUAN_MODEL}")
-
-# 尝试从 .env 文件加载
-try:
-    from dotenv import load_dotenv
-    import os as os_module
-    dotenv_path = os_module.path.join(os_module.path.dirname(__file__), '.env')
-    if os_module.path.exists(dotenv_path):
-        load_dotenv(dotenv_path)
-        # 重新加载环境变量
-        BAICHUAN_API_KEY = os.environ.get('BAICHUAN_API_KEY', '') or os.environ.get('BAICHUAN_AK', '')
-        print(f"[DotEnv] 已加载 .env 文件")
-        print(f"[DotEnv] 百川 API Key: {'***' + BAICHUAN_API_KEY[-4:] if BAICHUAN_API_KEY else '未配置'}")
-except ImportError:
-    print("[DotEnv] python-dotenv 未安装，无法从 .env 文件加载")
-except Exception as e:
-    print(f"[DotEnv] 加载 .env 文件失败: {e}")
 
 # 卒中影像报告 Prompt 模板 (Markdown 格式)
 REPORT_PROMPT_TEMPLATE = """
@@ -1317,7 +1315,7 @@ def api_chat_clinical():
                     'content': question
                 }
             ],
-            'max_tokens': 1000,
+            'max_tokens': 8192,
             'temperature': 0.3
         }
         
@@ -2698,13 +2696,13 @@ if __name__ == '__main__':
         hostname = socket.gethostname()
         local_ip = socket.gethostbyname(hostname)
         print(f"🌐 本机IP地址: {local_ip}")
-        print(f"🔗 局域网访问地址: http://{local_ip}:5000")
+        print(f"🔗 局域网访问地址: http://{local_ip}:8765")
     except:
         local_ip = '0.0.0.0'
         print("⚠ 无法获取本机IP，使用默认配置")
 
-    print("📱 本地访问地址: http://127.0.0.1:5000")
-    print("🌍 服务器监听: 所有网络接口 (0.0.0.0:5000)")
+    print("📱 本地访问地址: http://127.0.0.1:8765")
+    print("🌍 服务器监听: 所有网络接口 (0.0.0.0:8765)")
     print("⏹️ 按 Ctrl+C 停止服务器")
     print("=" * 60)
 
@@ -2712,7 +2710,7 @@ if __name__ == '__main__':
         # 关键修改：使用明确的参数启动
         app.run(
             host='0.0.0.0',      # 监听所有网络接口
-            port=5000,           # 明确指定端口
+            port=8765,           # 明确指定端口
             debug=True,          # 调试模式
             threaded=True,       # 多线程
             use_reloader=False   # 关闭自动重载，避免重复初始化

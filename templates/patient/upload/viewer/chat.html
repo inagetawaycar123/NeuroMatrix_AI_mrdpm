@@ -344,6 +344,65 @@
     word-wrap: break-word;
 }
 
+/* Markdown rendering inside messages */
+.message-text p {
+    margin: 0 0 8px 0;
+}
+
+.message-text strong {
+    font-weight: 700;
+}
+
+.message-text em {
+    font-style: italic;
+}
+
+.message-text ul,
+.message-text ol {
+    padding-left: 18px;
+    margin: 8px 0;
+}
+
+.message-text li {
+    margin: 4px 0;
+}
+
+.message-text code {
+    background: #0a0a0a;
+    color: #9fe6ff;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-family: "Courier New", monospace;
+    font-size: 12px;
+}
+
+.message-text pre {
+    background: #0a0a0a;
+    border: 1px solid #333;
+    padding: 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 8px 0;
+}
+
+.message-text pre code {
+    background: transparent;
+    color: #e6e6e6;
+    padding: 0;
+}
+
+.message-text a {
+    color: #4facfe;
+    text-decoration: underline;
+}
+
+.message-text blockquote {
+    border-left: 3px solid #4facfe;
+    margin: 8px 0;
+    padding-left: 10px;
+    color: #bbb;
+}
+
 .message-time {
     font-size: 10px;
     opacity: 0.5;
@@ -743,10 +802,31 @@
 }
 </style>
 
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+
 <script>
 // 对话数据
 let conversations = JSON.parse(localStorage.getItem('neuromatrix-conversations') || '[]');
 let currentConversationId = localStorage.getItem('neuromatrix-current-conversation') || null;
+
+function escapeHtml(value) {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function renderMarkdown(content) {
+    const safeContent = content || '';
+    if (window.marked) {
+        const html = marked.parse(safeContent, { breaks: true, gfm: true });
+        return window.DOMPurify ? DOMPurify.sanitize(html) : html;
+    }
+    return escapeHtml(safeContent).replace(/\n/g, '<br>');
+}
 
 // 初始化
 function initChat() {
@@ -885,7 +965,7 @@ function loadConversation(id) {
                     <div class="message-avatar">${avatarText}</div>
                     <div class="message-author">${authorText}</div>
                 </div>
-                <div class="message-text">${message.content}</div>
+                <div class="message-text">${renderMarkdown(message.content)}</div>
                 <div class="message-time">${new Date(message.timestamp).toLocaleTimeString()}</div>
             </div>
         `;
@@ -1443,7 +1523,7 @@ function sendMessage(event) {
     
     // 添加文本内容
     if (message) {
-        messageHtml += `<div class="message-text">${message}</div>`;
+        messageHtml += `<div class="message-text">${renderMarkdown(message)}</div>`;
     }
     
     messageHtml += `
@@ -1543,7 +1623,7 @@ function sendMessage(event) {
                         <div class="message-avatar">AI</div>
                         <div class="message-author">NeuroMatrix AI</div>
                     </div>
-                    <div class="message-text">${data.message.content}</div>
+                    <div class="message-text">${renderMarkdown(data.message.content)}</div>
                     <div class="message-time">${new Date().toLocaleTimeString()}</div>
                 </div>
             `;
