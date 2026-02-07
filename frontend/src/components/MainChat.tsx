@@ -263,14 +263,26 @@ export function MainChat({ conversation, onUpdateConversation, onAnalysisUpdate 
     setSelectedImages([])
 
     try {
-      // 调用医学问诊 API
       console.log('📤 准备发送API请求:', {
         sessionId: conversation.id,
         question: questionText,
         imagesCount: imagesToSend.length
       })
 
-      const response = await fetch('/api/chat/clinical/', {
+      let aiContent = ''
+      const updateConversationWithAI = (content: string) => {
+        const streamingMessages = [...updatedMessages, { role: 'assistant', content }]
+        onUpdateConversation({
+          ...conversation,
+          messages: streamingMessages,
+          title: conversation.title === '新对话' ? generateTitle(streamingMessages) : conversation.title,
+          analysisHistory: tempConversation.analysisHistory
+        })
+      }
+
+      updateConversationWithAI('')
+
+      const response = await fetch('/api/chat/clinical/stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -297,23 +309,48 @@ export function MainChat({ conversation, onUpdateConversation, onAnalysisUpdate 
         throw new Error(`API error: ${response.status} - ${errorText}`)
       }
 
-      const data = await response.json()
-      console.log('✅ API返回数据:', data)
-      
-      if (!data.success) {
-        throw new Error(data.error || 'API request failed')
+      if (!response.body) {
+        throw new Error('Streaming response not supported')
       }
-      const aiMessage = { role: 'assistant', content: data.message.content }
 
-      // 更新对话（包含AI响应）
-      const finalMessages = [...updatedMessages, aiMessage]
-      const finalConversation = {
-        ...conversation,
-        messages: finalMessages,
-        title: conversation.title === '新对话' ? generateTitle(finalMessages) : conversation.title,
-        analysisHistory: tempConversation.analysisHistory
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder('utf-8')
+      let buffer = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        const events = buffer.split('\n\n')
+        buffer = events.pop() || ''
+
+        for (const event of events) {
+          const lines = event.split('\n')
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue
+            const dataStr = line.slice(5).trim()
+            if (!dataStr || dataStr === '[DONE]') continue
+
+            let payload: { type?: string; content?: string; error?: string } | null = null
+            try {
+              payload = JSON.parse(dataStr)
+            } catch {
+              payload = null
+            }
+
+            if (!payload) continue
+            if (payload.type === 'delta' && payload.content) {
+              aiContent += payload.content
+              updateConversationWithAI(aiContent)
+            }
+            if (payload.type === 'error' && payload.error) {
+              aiContent += `\n\n⚠️ ${payload.error}`
+              updateConversationWithAI(aiContent)
+            }
+          }
+        }
       }
-      onUpdateConversation(finalConversation)
     } catch (error) {
       console.error('❌ Chat错误:', error)
       console.error('错误详情:', error instanceof Error ? error.message : String(error))

@@ -1578,8 +1578,8 @@ function sendMessage(event) {
         .map(file => file.data)
         .filter(data => data);
 
-    // 调用后端API
-    fetch('/api/chat/clinical/', {
+    // 调用后端API (SSE流式)
+    fetch('/api/chat/clinical/stream', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json'
@@ -1597,76 +1597,116 @@ function sendMessage(event) {
             }
         })
     })
-    .then(response => response.json())
-    .then(data => {
-        // 移除加载状态
-        loadingElement.remove();
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('API调用失败: ' + response.status);
+        }
 
-        // 添加AI回复
-        if (data.success) {
+        if (!response.body) {
+            throw new Error('浏览器不支持流式响应');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        let aiContent = '';
+        let aiMessageReady = false;
+
+        const ensureAiMessage = () => {
+            if (aiMessageReady) return;
+            loadingElement.innerHTML = `
+                <div class="message-content">
+                    <div class="message-header">
+                        <div class="message-avatar">AI</div>
+                        <div class="message-author">NeuroMatrix AI</div>
+                    </div>
+                    <div class="message-text"></div>
+                    <div class="message-time">${new Date().toLocaleTimeString()}</div>
+                </div>
+            `;
+            aiMessageReady = true;
+        };
+
+        const updateAiMessage = (delta) => {
+            aiContent += delta;
+            ensureAiMessage();
+            const messageText = loadingElement.querySelector('.message-text');
+            if (messageText) {
+                messageText.innerHTML = renderMarkdown(aiContent);
+            }
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        };
+
+        const finalizeAiMessage = () => {
+            if (!aiContent) {
+                loadingElement.remove();
+                return;
+            }
+
             const aiMessage = {
                 id: 'msg-' + Date.now(),
                 role: 'assistant',
-                content: data.message.content,
+                content: aiContent,
                 timestamp: new Date().toISOString()
             };
 
             currentConversation.messages.push(aiMessage);
             currentConversation.updatedAt = new Date().toISOString();
 
-            // 生成安全分析
             const analysis = generateSafetyAnalysis(message, message, currentConversation);
             if (!currentConversation.analysisHistory) {
                 currentConversation.analysisHistory = [];
             }
             currentConversation.analysisHistory.push(analysis);
 
-            // 保存对话
             saveConversations();
-
-            // 添加AI回复到界面
-            const aiMessageElement = document.createElement('div');
-            aiMessageElement.className = 'message ai';
-            aiMessageElement.innerHTML = `
-                <div class="message-content">
-                    <div class="message-header">
-                        <div class="message-avatar">AI</div>
-                        <div class="message-author">NeuroMatrix AI</div>
-                    </div>
-                    <div class="message-text">${renderMarkdown(data.message.content)}</div>
-                    <div class="message-time">${new Date().toLocaleTimeString()}</div>
-                </div>
-            `;
-            messagesContainer.appendChild(aiMessageElement);
-
-            // 更新安全卡
             updateSafetyCard(currentConversation);
-        } else {
-            // 显示错误消息
-            const errorMessageElement = document.createElement('div');
-            errorMessageElement.className = 'message ai';
-            errorMessageElement.innerHTML = `
-                <div class="message-content">
-                    <div class="message-header">
-                        <div class="message-avatar">AI</div>
-                        <div class="message-author">NeuroMatrix AI</div>
-                    </div>
-                    <div class="message-text">错误：${data.error || '网络错误，请稍后重试'}</div>
-                    <div class="message-time">${new Date().toLocaleTimeString()}</div>
-                </div>
-            `;
-            messagesContainer.appendChild(errorMessageElement);
-        }
+            loadConversations();
+        };
 
-        // 滚动到底部
-        messagesContainer.scrollTop = messagesContainer.scrollHeight;
-        loadConversations();
+        const readStream = () => {
+            return reader.read().then(({ value, done }) => {
+                if (done) {
+                    finalizeAiMessage();
+                    return;
+                }
+
+                buffer += decoder.decode(value, { stream: true });
+                const events = buffer.split('\n\n');
+                buffer = events.pop() || '';
+
+                events.forEach(event => {
+                    event.split('\n').forEach(line => {
+                        if (!line.startsWith('data:')) return;
+                        const dataStr = line.slice(5).trim();
+                        if (!dataStr || dataStr === '[DONE]') return;
+
+                        let payload = null;
+                        try {
+                            payload = JSON.parse(dataStr);
+                        } catch (e) {
+                            payload = null;
+                        }
+
+                        if (!payload) return;
+                        if (payload.type === 'delta' && payload.content) {
+                            updateAiMessage(payload.content);
+                        }
+                        if (payload.type === 'error' && payload.error) {
+                            updateAiMessage('\n\n错误：' + payload.error);
+                        }
+                    });
+                });
+
+                return readStream();
+            });
+        };
+
+        return readStream();
     })
     .catch(error => {
-        // 移除加载状态
         loadingElement.remove();
 
-        // 显示错误消息
         const errorMessageElement = document.createElement('div');
         errorMessageElement.className = 'message ai';
         errorMessageElement.innerHTML = `
@@ -1675,13 +1715,11 @@ function sendMessage(event) {
                     <div class="message-avatar">AI</div>
                     <div class="message-author">NeuroMatrix AI</div>
                 </div>
-                <div class="message-text">错误：网络错误，请稍后重试</div>
+                <div class="message-text">错误：${error.message || '网络错误，请稍后重试'}</div>
                 <div class="message-time">${new Date().toLocaleTimeString()}</div>
             </div>
         `;
         messagesContainer.appendChild(errorMessageElement);
-
-        // 滚动到底部
         messagesContainer.scrollTop = messagesContainer.scrollHeight;
     });
 }
