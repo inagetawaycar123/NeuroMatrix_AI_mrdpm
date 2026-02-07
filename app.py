@@ -1,5 +1,7 @@
 import torch
 import json
+import base64
+import time
 from ai_inference import init_ai_model, get_ai_model
 import os
 import requests  # 添加 requests 导入，用于调用百川 M3 API
@@ -109,6 +111,14 @@ except Exception as e:
 BAICHUAN_API_URL = os.environ.get('BAICHUAN_API_URL', 'https://api.baichuan-ai.com/v1/chat/completions')
 BAICHUAN_API_KEY = os.environ.get('BAICHUAN_API_KEY', '') or os.environ.get('BAICHUAN_AK', '')
 BAICHUAN_MODEL = os.environ.get('BAICHUAN_MODEL', 'Baichuan-M3')
+
+def _get_baichuan_api_base() -> str:
+    env_base = os.environ.get('BAICHUAN_API_BASE')
+    if env_base:
+        return env_base.rstrip('/')
+    if '/v1/' in BAICHUAN_API_URL:
+        return BAICHUAN_API_URL.split('/v1/')[0] + '/v1'
+    return 'https://api.baichuan-ai.com/v1'
 
 print(f"百川 API URL: {BAICHUAN_API_URL}")
 print(f"百川 API Key: {'***' + BAICHUAN_API_KEY[-4:] if BAICHUAN_API_KEY else '未配置'}")
@@ -1285,6 +1295,118 @@ def _sse_format(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+def _truncate_text(text: str, max_chars: int = 6000) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n\n[内容过长，已截断]"
+
+
+def _decode_data_uri(data_uri: str):
+    if not data_uri or not isinstance(data_uri, str):
+        return None, None
+    if not data_uri.startswith('data:'):
+        return None, None
+    try:
+        header, b64_data = data_uri.split(',', 1)
+    except ValueError:
+        return None, None
+    mime = header.split(';')[0].replace('data:', '').strip()
+    try:
+        file_bytes = base64.b64decode(b64_data)
+    except Exception:
+        return None, None
+    return file_bytes, mime
+
+
+def _upload_baichuan_file(file_bytes: bytes, filename: str, purpose: str = 'medical') -> str:
+    if not BAICHUAN_API_KEY:
+        return ''
+    api_base = _get_baichuan_api_base()
+    url = f"{api_base}/files"
+    headers = {
+        'Authorization': f'Bearer {BAICHUAN_API_KEY}'
+    }
+    files = {
+        'file': (filename, file_bytes)
+    }
+    data = {
+        'purpose': purpose
+    }
+    response = requests.post(url, headers=headers, files=files, data=data, timeout=60)
+    if response.status_code != 200:
+        return ''
+    result = response.json() or {}
+    return result.get('id', '')
+
+
+def _fetch_baichuan_parsed_content(file_id: str, timeout_seconds: int = 30, interval_seconds: int = 2) -> str:
+    if not file_id or not BAICHUAN_API_KEY:
+        return ''
+    api_base = _get_baichuan_api_base()
+    url = f"{api_base}/files/{file_id}/parsed-content"
+    headers = {
+        'Authorization': f'Bearer {BAICHUAN_API_KEY}'
+    }
+    start_time = time.time()
+    while True:
+        response = requests.get(url, headers=headers, timeout=30)
+        if response.status_code != 200:
+            return ''
+        result = response.json() or {}
+        status = result.get('status')
+        if status == 'online':
+            return result.get('content', '')
+        if status in ('fail', 'unsafe'):
+            return ''
+        if time.time() - start_time > timeout_seconds:
+            return ''
+        time.sleep(interval_seconds)
+
+
+def _collect_pdf_parsed_text(images) -> str:
+    if not images:
+        return ''
+    parsed_blocks = []
+    for idx, item in enumerate(images, start=1):
+        data_uri = None
+        filename = f"upload_{idx}.pdf"
+        mime = ''
+
+        if isinstance(item, dict):
+            data_uri = item.get('data')
+            filename = item.get('name') or filename
+            mime = item.get('type') or ''
+        elif isinstance(item, str):
+            data_uri = item
+
+        if not data_uri:
+            continue
+
+        file_bytes, detected_mime = _decode_data_uri(data_uri)
+        if not file_bytes:
+            continue
+
+        mime = mime or detected_mime
+        if mime != 'application/pdf':
+            continue
+
+        file_id = _upload_baichuan_file(file_bytes, filename, purpose='medical')
+        if not file_id:
+            continue
+
+        parsed_content = _fetch_baichuan_parsed_content(file_id)
+        if not parsed_content:
+            continue
+
+        parsed_blocks.append(
+            f"[PDF文件: {filename}]\n{_truncate_text(parsed_content)}"
+        )
+
+    if not parsed_blocks:
+        return ''
+    return "\n\n".join(parsed_blocks)
+
+
 @app.route('/api/chat/clinical/stream', methods=['POST'])
 def api_chat_clinical_stream():
     """医疗AI临床聊天接口 - 流式响应 (SSE)"""
@@ -1312,18 +1434,25 @@ def api_chat_clinical_stream():
             'Authorization': f'Bearer {BAICHUAN_API_KEY}'
         }
 
+        parsed_text = _collect_pdf_parsed_text(images)
+        system_content = '你是一位专业的神经放射科医生，擅长脑卒中影像诊断和分析。'
+        if parsed_text:
+            system_content += f"\n\n以下是用户上传PDF的解析内容，请结合回答：\n\n{parsed_text}"
+
+        messages = [
+            {
+                'role': 'system',
+                'content': system_content
+            },
+            {
+                'role': 'user',
+                'content': question
+            }
+        ]
+
         payload = {
             'model': BAICHUAN_MODEL,
-            'messages': [
-                {
-                    'role': 'system',
-                    'content': '你是一位专业的神经放射科医生，擅长脑卒中影像诊断和分析。'
-                },
-                {
-                    'role': 'user',
-                    'content': question
-                }
-            ],
+            'messages': messages,
             'max_tokens': 8192,
             'temperature': 0.3,
             'stream': True
@@ -1419,18 +1548,25 @@ def api_chat_clinical():
             'Authorization': f'Bearer {BAICHUAN_API_KEY}'
         }
         
+        parsed_text = _collect_pdf_parsed_text(images)
+        system_content = '你是一位专业的神经放射科医生，擅长脑卒中影像诊断和分析。'
+        if parsed_text:
+            system_content += f"\n\n以下是用户上传PDF的解析内容，请结合回答：\n\n{parsed_text}"
+
+        messages = [
+            {
+                'role': 'system',
+                'content': system_content
+            },
+            {
+                'role': 'user',
+                'content': question
+            }
+        ]
+
         payload = {
             'model': BAICHUAN_MODEL,
-            'messages': [
-                {
-                    'role': 'system',
-                    'content': '你是一位专业的神经放射科医生，擅长脑卒中影像诊断和分析。'
-                },
-                {
-                    'role': 'user',
-                    'content': question
-                }
-            ],
+            'messages': messages,
             'max_tokens': 8192,
             'temperature': 0.3
         }
