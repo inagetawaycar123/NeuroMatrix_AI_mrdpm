@@ -1544,6 +1544,16 @@ function sendMessage(event) {
     userMessageElement.innerHTML = messageHtml;
     messagesContainer.appendChild(userMessageElement);
 
+    // 准备发送的图片数据
+    const imagesToSend = selectedImages
+        .map(file => ({
+            data: file.data,
+            type: file.type,
+            name: file.name,
+            isPDF: file.isPDF
+        }))
+        .filter(file => file.data);
+
     // 清空输入框和图片
     input.value = '';
     selectedImages = [];
@@ -1572,11 +1582,6 @@ function sendMessage(event) {
     `;
     messagesContainer.appendChild(loadingElement);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
-
-    // 准备发送的图片数据
-    const imagesToSend = selectedImages
-        .map(file => file.data)
-        .filter(data => data);
 
     // 调用后端API (SSE流式)
     fetch('/api/chat/clinical/stream', {
