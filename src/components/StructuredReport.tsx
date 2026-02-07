@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react'
+import { X, Star } from 'lucide-react'
 import { PatientInfoModule } from './PatientInfoModule'
 import { ImageFindingsModule } from './ImageFindingsModule'
 import { DoctorNotesModule } from './DoctorNotesModule'
@@ -26,11 +27,12 @@ const parseMarkdown = (text: string): string => {
   if (!text) return ''
   
   let html = text
-    // 处理带 emoji 的标题（🔵 检查方法 等）- 浅蓝色设计
-    .replace(/^🔵 (.+)$/gm, '<div style="margin: 24px 0 16px 0;"><span style="display: inline-flex; align-items: center; gap: 8px; background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%); color: white; padding: 10px 20px; border-radius: 8px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);">🔵 $1</span></div>')
+    // 处理标题 - 简洁样式（检查方法、影像学表现、血管评估、诊断意见、治疗建议）
+    .replace(/^## (检查方法|影像学表现|血管评估|诊断意见|治疗建议|影像诊断报告)$/gm, 
+      '<div style="margin: 20px 0 12px 0; padding-bottom: 8px; border-bottom: 2px solid #3b82f6; color: #3b82f6; font-size: 18px; font-weight: 600;">$1</div>')
     // 处理普通二级标题
     .replace(/^## (.+)$/gm, '<h2 style="color: #3b82f6; border-bottom: 3px solid #60a5fa; padding-bottom: 10px; margin: 24px 0 16px 0; font-size: 20px; font-weight: 700;">$1</h2>')
-    // 处理普通三级标题
+    // 处理三级标题
     .replace(/^### (.+)$/gm, '<h3 style="color: #60a5fa; margin: 20px 0 12px 0; font-size: 17px; font-weight: 600; padding-left: 12px; border-left: 4px solid #93c5fd;">$1</h3>')
     // 处理粗体标记 - 直接保留普通文字
     .replace(/\*\*(.+?)\*\*/g, '$1')
@@ -208,7 +210,7 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
   if (error) {
     return (
       <div className="report-container">
-        <div className="error">❌ {error}</div>
+        <div className="error"><X className="inline w-4 h-4 mr-1" /> {error}</div>
       </div>
     )
   }
@@ -216,7 +218,16 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
   return (
     <div className="report-container">
       <div className="report-header">
-        <h2>脑卒中临床诊断报告</h2>
+        <h2 style={{ 
+          background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)', 
+          color: 'white',
+          padding: '16px 24px',
+          borderRadius: '12px',
+          margin: 0,
+          fontSize: '20px',
+          fontWeight: 600,
+          boxShadow: '0 4px 12px rgba(59, 130, 246, 0.4)'
+        }}>脑卒中临床诊断报告</h2>
         <div className="report-actions">
           <button
             className={`action-btn ${isEditing ? 'cancel' : 'primary'}`}
@@ -235,14 +246,14 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
           )}
           {!isEditing && (
             <button className="action-btn" onClick={exportPDF}>
-              📄 导出PDF
+              导出PDF
             </button>
           )}
           <button
             className="action-btn ai-consult-btn"
             onClick={() => setShowAIChat(!showAIChat)}
           >
-            🤖 AI问诊
+            AI问诊
           </button>
         </div>
       </div>
@@ -277,9 +288,10 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
             textAlign: 'center'
           }}>
             <div style={{ 
-              fontSize: '48px', 
               marginBottom: '16px'
-            }}>🔍</div>
+            }}>
+              <Star style={{ fontSize: 48, color: '#60a5fa' }} />
+            </div>
             <h3 style={{ 
               color: '#fff', 
               fontSize: '18px',
@@ -326,14 +338,18 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
             border: '1px solid #333'
           }}>
             <h3 style={{ 
-              margin: '0 0 16px 0', 
+              margin: '0 0 20px 0', 
               color: '#fff', 
               fontSize: '18px',
               display: 'flex',
               alignItems: 'center',
-              gap: '8px'
+              gap: '8px',
+              background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)',
+              padding: '12px 16px',
+              borderRadius: '8px',
+              fontWeight: 600
             }}>
-              🤖 AI 影像诊断报告
+              AI 影像诊断报告
             </h3>
             <div 
               className="ai-report-content"
@@ -355,9 +371,10 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({
             textAlign: 'center'
           }}>
             <div style={{ 
-              fontSize: '48px', 
               marginBottom: '16px'
-            }}>🔍</div>
+            }}>
+              <Star style={{ fontSize: 48, color: '#60a5fa' }} />
+            </div>
             <h3 style={{ 
               color: '#fff', 
               fontSize: '18px',

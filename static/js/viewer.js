@@ -16,8 +16,8 @@ let contrastController = null;
 function parseMarkdown(text) {
     if (!text) return '';
     let html = text
-        // 处理 emoji 标题
-        .replace(/^🔵 (.+)$/gm, '<div style="margin: 16px 0 12px 0;"><span style="display: inline-flex; align-items: center; gap: 6px; background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%); color: white; padding: 8px 16px; border-radius: 6px; font-size: 14px; font-weight: 600;">🔵 $1</span></div>')
+        // 处理标题
+        .replace(/^## (.+)$/gm, '<div style="margin: 16px 0 12px 0;"><span style="display: inline-flex; align-items: center; gap: 6px; background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%); color: white; padding: 8px 16px; border-radius: 6px; font-size: 14px; font-weight: 600;">$1</span></div>')
         // 处理二级标题
         .replace(/^## (.+)$/gm, '<h2 style="color: #3b82f6; font-size: 16px; font-weight: 700; margin: 16px 0 10px 0; padding-bottom: 6px; border-bottom: 2px solid #60a5fa;">$1</h2>')
         // 处理粗体标记 - 直接移除

@@ -14,7 +14,7 @@ export const DoctorNotesModule: React.FC<DoctorNotesModuleProps> = ({
 }) => {
   return (
     <div className="report-module">
-      <div className="module-header">💬 医生备注</div>
+      <div className="module-header" style={{ background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' }}>医生备注</div>
       <div className="module-content">
         {isEditing ? (
           <RichTextEditor

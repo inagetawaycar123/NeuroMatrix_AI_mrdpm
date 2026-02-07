@@ -126,18 +126,20 @@ print(f"百川模型: {BAICHUAN_MODEL}")
 
 # 卒中影像报告 Prompt 模板 (Markdown 格式)
 REPORT_PROMPT_TEMPLATE = """
-你是一位专业的神经放射科医生，请基于以下 CTP 灌注成像数据生成详尽的卒中影像诊断报告。
+你是一位专业的神经放射科医生。AI 系统基于患者 NCCT + 动脉期 CTA + 静脉期 CTA + 延迟期 CTA（4 通道 mCTA）影像，通过 MRDPM 扩散模型生成 CBF/CBV/Tmax 灌注参数图，请综合分析这 4 类影像的灌注特征，生成符合卒中诊疗规范的影像诊断报告。
 
 【患者临床与影像数据】
+- 患者ID: {patient_id}
 - 姓名: {patient_name}
 - 年龄: {patient_age}
 - 性别: {patient_sex}
 - 入院 NIHSS 评分: {nihss_score}
 - 发病至入院时间: {onset_to_admission}
-- 核心梗死体积 (Core): {core_volume} ml
-- 半暗带体积 (Penumbra): {penumbra_volume} ml
-- 不匹配比值 (Mismatch Ratio): {mismatch_ratio}
-- 发病侧: {hemisphere}
+- 基于 NCCT + 动脉期/静脉期/延迟期 mCTA 生成的灌注参数：
+  • 核心梗死体积 (Core): {core_volume} ml
+  • 半暗带体积 (Penumbra): {penumbra_volume} ml
+  • 不匹配比值 (Mismatch Ratio): {mismatch_ratio}
+  • 发病侧: {hemisphere}
 
 【重要提示 - 必须严格遵守】
 在诊断意见中，你必须逐一分析以下三个临床数据：
@@ -150,54 +152,63 @@ REPORT_PROMPT_TEMPLATE = """
 2. 各章节需详尽描述
 3. 使用医学专业术语
 4. 输出格式为 Markdown
-5. 小标题使用 "🔵" 前缀标记，如 "🔵 检查方法"
+5. 小标题使用 "##" 前缀标记，如 "## 检查方法"
 6. 不要使用粗体标记（**文字**），直接使用普通文字描述
 
 【输出格式】
-## 影像诊断报告
+· 影像诊断报告
 
-🔵 检查方法
-头颅 CT 平扫 (NCCT) + CT 灌注成像 (CTP)
+· 检查方法
+头颅 CT 平扫 (NCCT) + 三期 CT 血管成像 (mCTA：动脉期、静脉期、延迟期)
 
-🔵 影像学表现
-1. 核心梗死区：[详细描述位置、体积、CBF/CBV/Tmax 参数异常情况]
-2. 半暗带区：[详细描述范围、与核心梗死区的空间关系]
-3. 不匹配评估：[不匹配比值及临床意义]
+· 影像学表现
+基于 NCCT + 动脉期/静脉期/延迟期 mCTA 综合分析：
+1. 核心梗死区：[结合 CBF/CBV/Tmax 参数，根据 DEFUSE 3 标准（rCBF<30%、Tmax>6s）详细描述位置、体积、灌注异常情况]
+2. 半暗带区：[详细描述范围、与核心梗死区的空间关系、Tmax 延迟程度]
+3. 左右脑不对称分析：[比较患侧与健侧的 CBF/CBV 差异，量化不对称指数]
+4. 不匹配评估：[不匹配比值及临床意义]
 
-🔵 血管评估
-[根据 CTP 推断责任血管]
+· 血管评估
+[根据三期 CTA 的动脉-静脉显影差异，推断责任血管及侧支循环情况]
 
-🔵 诊断意见
+· 诊断意见
 [必须包含以下内容，逐条分析：
 1. NIHSS评分分析：入院 NIHSS 评分为 {nihss_score}，请详细分析该评分对应的神经功能缺损严重程度
 2. 年龄分析：患者年龄 {patient_age} 岁，请分析年龄对治疗决策的影响
 3. 发病时间分析：发病至入院时间为 {onset_to_admission}，请评估是否在治疗时间窗内
 4. 急性缺血性卒中诊断
-5. 核心梗死体积及位置
-6. 半暗带体积及可挽救脑组织评估
-7. 不匹配比值及治疗时间窗判断
+5. 核心梗死体积及位置（基于 rCBF<30% 阈值）
+6. 半暗带体积及可挽救脑组织评估（基于 Tmax>6s 阈值）
+7. 不匹配比值及 DEFUSE 3 入选标准判断
 8. 建议进一步行血管内治疗评估]
 
-🔵 治疗建议
-推荐完善头颅 CT 血管成像 (CTA) 或数字减影血管造影 (DSA) 以明确血管闭塞部位及侧支循环情况，并进行多模态影像评估（如 ASPECTS 评分）。结合 NIHSS 评分、患者年龄及发病至入院时间，综合判断血管内治疗可行性。
+· 治疗建议
+推荐完善数字减影血管造影 (DSA) 以明确血管闭塞部位及侧支循环情况。综合 NIHSS 评分、患者年龄及发病至入院时间以及核心梗死/半暗带体积比值，判断血管内治疗指征。若符合 DEFUSE 3 标准，建议积极行血管内治疗。
 
 请根据以上患者数据生成报告：
 """
 
 # JSON 结构化输出 Prompt
 REPORT_JSON_PROMPT = """
-你是一位专业的神经放射科医生，请基于以下 CTP 灌注成像数据生成规范的卒中影像诊断报告。
+你是一位专业的神经放射科医生。AI 系统基于患者 NCCT + 动脉期 CTA + 静脉期 CTA + 延迟期 CTA（4 通道 mCTA）影像，通过 MRDPM 扩散模型生成 CBF/CBV/Tmax 灌注参数图，请综合分析生成规范的卒中影像诊断报告 JSON。
 
 【患者影像数据】
-- 核心梗死体积 (Core): {core_volume} ml
-- 半暗带体积 (Penumbra): {penumbra_volume} ml
-- 不匹配比值 (Mismatch Ratio): {mismatch_ratio}
-- 发病侧: {hemisphere}
+- 患者ID: {patient_id}
+- 基于 NCCT + 动脉期/静脉期/延迟期 mCTA 生成的灌注参数：
+  • 核心梗死体积 (Core): {core_volume} ml
+  • 半暗带体积 (Penumbra): {penumbra_volume} ml
+  • 不匹配比值 (Mismatch Ratio): {mismatch_ratio}
+  • 发病侧: {hemisphere}
+
+【临床诊断标准】
+- 核心梗死：rCBF < 30%（相对脑血流量）
+- 半暗带：Tmax > 6 秒
+- DEFUSE 3 标准：不匹配体积 ≥ 15ml 且不匹配比值 ≥ 1.8
 
 【输出要求】
 请严格按照以下 JSON 格式输出，**不要包含任何其他文字或代码块标记**：
 
-{{"检查方法": "详细描述CTP扫描参数和对比剂方案", "核心梗死": {{"体积": "核心梗死体积", "位置": "具体脑叶和血管供血区", "CT表现": "NCCT低密度改变情况"}}, "半暗带": {{"体积": "半暗带体积", "位置": "缺血半暗带分布区域", "灌注特征": "CBF降低但CBV相对保留的特点"}}, "血管评估": "根据灌注缺损区域推断责任血管", "诊断意见": "综合诊断意见", "治疗建议": ["建议1", "建议2", "建议3"]}}
+{{"检查方法": "头颅CT平扫(NCCT)+三期CTA(mCTA:动脉期、静脉期、延迟期)", "核心梗死": {{"体积": "核心梗死体积ml", "位置": "具体脑叶和血管供血区", "CT表现": "NCCT低密度改变情况", "灌注标准": "rCBF<30%"}}, "半暗带": {{"体积": "半暗带体积ml", "位置": "缺血半暗带分布区域", "灌注特征": "Tmax>6s, CBF降低但CBV相对保留", "与核心关系": "空间关系描述"}}, "左右脑不对称分析": {{"患侧": "患侧灌注参数", "健侧": "健侧灌注参数", "不对称指数": "量化值"}}, "血管评估": "根据三期CTA推断责任血管和侧支循环情况", "DEFUSE3评估": {{"不匹配体积": "体积ml", "不匹配比值": "比值", "是否入选": "是/否"}}, "诊断意见": "综合诊断意见", "治疗建议": ["建议1", "建议2", "建议3"]}}
 
 请只输出 JSON 对象，确保所有字符串使用双引号包裹。
 """
@@ -213,6 +224,7 @@ def generate_report_with_baichuan(structured_data: dict, output_format: str = 'm
         nihss_display = f"{nihss_score} 分" if nihss_score is not None else "未记录"
         
         # 准备患者信息显示
+        patient_id = structured_data.get('id', structured_data.get('ID', '未知'))
         patient_name = structured_data.get('patient_name', '未知')
         patient_age = structured_data.get('patient_age', '未知')
         patient_sex = structured_data.get('patient_sex', '未知')
@@ -222,6 +234,7 @@ def generate_report_with_baichuan(structured_data: dict, output_format: str = 'm
         # 准备 Prompt
         if output_format == 'json':
             prompt = REPORT_JSON_PROMPT.format(
+                patient_id=patient_id,
                 core_volume=structured_data.get('core_infarct_volume', 'N/A'),
                 penumbra_volume=structured_data.get('penumbra_volume', 'N/A'),
                 mismatch_ratio=structured_data.get('mismatch_ratio', 'N/A'),
@@ -230,6 +243,7 @@ def generate_report_with_baichuan(structured_data: dict, output_format: str = 'm
         else:
             from datetime import datetime
             prompt = REPORT_PROMPT_TEMPLATE.format(
+                patient_id=patient_id,
                 patient_name=patient_name,
                 patient_age=patient_age,
                 patient_sex=patient_sex,
@@ -337,6 +351,7 @@ def generate_report_with_baichuan(structured_data: dict, output_format: str = 'm
 
 def generate_mock_report(structured_data: dict, output_format: str = 'markdown') -> str:
     """生成模拟报告（当 API Key 未配置时使用）"""
+    patient_id = structured_data.get('id', structured_data.get('ID', '未知'))
     core_volume = structured_data.get('core_infarct_volume', 0)
     penumbra_volume = structured_data.get('penumbra_volume', 0)
     mismatch_ratio = structured_data.get('mismatch_ratio', 0)
@@ -344,20 +359,22 @@ def generate_mock_report(structured_data: dict, output_format: str = 'markdown')
     
     mock_report = f"""## 影像诊断报告
 
-### 检查方法
-头颅 CT 平扫 (NCCT) + CT 灌注成像 (CTP)
+患者ID: {patient_id}
 
-### 影像学表现
-1. 核心梗死区：位于{hemisphere}大脑半球，体积约 {core_volume} ml。CT 平扫未见明显低密度灶，CTP 显示局部脑血流量 (CBF) 明显降低，脑血容量 (CBV) 轻度降低。
+· 检查方法
+头颅 CT 平扫 (NCCT) + 三期 CT 血管成像 (mCTA：动脉期、静脉期、延迟期)
 
-2. 半暗带区域：体积约 {penumbra_volume} ml。CTP 显示达峰时间 (Tmax) 明显延长，CBF 相对保留，提示存在大量可挽救脑组织。
+· 影像学表现
+基于 NCCT + 动脉期/静脉期/延迟期 mCTA 综合分析：
+1. 核心梗死区：根据 rCBF<30% 确定，体积约 {core_volume} ml，位于 {hemisphere} 大脑半球
+2. 半暗带区：根据 Tmax>6s 确定，体积约 {penumbra_volume} ml
+3. 左右脑不对称分析：患侧与健侧 CBF/CBV 差异显著
+4. 不匹配评估：不匹配比值约 {mismatch_ratio}
 
-3. 不匹配评估：核心-半暗带不匹配比值为 {mismatch_ratio}，符合血管内治疗适应证。
+· 诊断意见
+{hemisphere} 大脑半球急性缺血性改变，核心梗死体积约 {core_volume} ml，半暗带体积约 {penumbra_volume} ml，不匹配比值约 {mismatch_ratio}
 
-### 诊断意见
-{hemisphere}大脑半球急性缺血性改变，核心梗死体积约 {core_volume} ml，半暗带体积约 {penumbra_volume} ml，存在显著不匹配。
-
-### 治疗建议
+· 治疗建议
 1. 建议行血管内介入治疗评估
 2. 尽快完善头颈 CTA 检查评估血管情况
 3. 监测生命体征，维持血压稳定"""
@@ -366,16 +383,30 @@ def generate_mock_report(structured_data: dict, output_format: str = 'markdown')
         import json
         return json.dumps(
             {
-                "检查方法": "头颅 CT 平扫 (NCCT) + CT 灌注成像 (CTP)",
+                "ID": patient_id,
+                "检查方法": "头颅CT平扫(NCCT)+三期CTA(mCTA:动脉期、静脉期、延迟期)",
                 "核心梗死": {
                     "体积": f"{core_volume} ml",
                     "位置": f"{hemisphere}大脑半球",
-                    "大小": "详见影像学表现"
+                    "CT表现": "NCCT未见明显低密度灶",
+                    "灌注标准": "rCBF<30%"
                 },
                 "半暗带": {
                     "体积": f"{penumbra_volume} ml",
                     "位置": f"{hemisphere}大脑半球",
-                    "可挽救区域": "存在显著可挽救脑组织"
+                    "灌注特征": "Tmax>6s, CBF降低但CBV相对保留",
+                    "与核心关系": "相邻区域"
+                },
+                "左右脑不对称分析": {
+                    "患侧": "CBF/CBV降低",
+                    "健侧": "正常范围",
+                    "不对称指数": "显著"
+                },
+                "血管评估": "根据三期CTA推断责任血管",
+                "DEFUSE3评估": {
+                    "不匹配体积": f"{penumbra_volume} ml",
+                    "不匹配比值": f"{mismatch_ratio}",
+                    "是否入选": "是" if penumbra_volume >= 15 and mismatch_ratio >= 1.8 else "否"
                 },
                 "诊断意见": f"{hemisphere}大脑半球急性缺血性改变，核心梗死体积约 {core_volume} ml，半暗带体积约 {penumbra_volume} ml",
                 "治疗建议": "建议行血管内介入治疗评估"
@@ -1075,7 +1106,8 @@ def api_generate_report(patient_id):
                 print(f"计算发病至入院时间失败: {e}")
         
         structured_data = {
-            'patient_id': patient_id,
+            'id': patient_data.get('id'),
+            'ID': patient_data.get('id'),
             'patient_name': patient_data.get('patient_name', ''),
             'patient_age': patient_data.get('patient_age', ''),
             'patient_sex': patient_data.get('patient_sex', ''),
