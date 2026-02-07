@@ -81,9 +81,23 @@ export const MedicalAIChat: React.FC<MedicalAIChatProps> = ({
     setInput('')
     setIsLoading(true)
 
+    let aiMessageId: string | null = null
+
     try {
-      // 调用医疗AI聊天API
-      const response = await fetch('/api/chat/clinical/', {
+      aiMessageId = `msg-${Date.now()}-ai`
+      const aiMessage: Message = {
+        id: aiMessageId,
+        role: 'assistant',
+        content: '',
+        timestamp: new Date()
+      }
+
+      setConversation(prev => ({
+        ...prev,
+        messages: [...prev.messages, aiMessage]
+      }))
+
+      const response = await fetch('/api/chat/clinical/stream', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -105,26 +119,71 @@ export const MedicalAIChat: React.FC<MedicalAIChatProps> = ({
         throw new Error(`API error: ${response.status}`)
       }
 
-      const data = await response.json()
-      
-      if (data.success) {
-        const aiMessage: Message = {
-          id: `msg-${Date.now()}-ai`,
-          role: 'assistant',
-          content: data.message.content,
-          timestamp: new Date()
-        }
+      if (!response.body) {
+        throw new Error('Streaming response not supported')
+      }
 
-        // 添加AI回复
-        setConversation(prev => ({
-          ...prev,
-          messages: [...prev.messages, aiMessage]
-        }))
-      } else {
-        throw new Error(data.error || 'API request failed')
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder('utf-8')
+      let buffer = ''
+
+      while (true) {
+        const { value, done } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        const events = buffer.split('\n\n')
+        buffer = events.pop() || ''
+
+        for (const event of events) {
+          const lines = event.split('\n')
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue
+            const dataStr = line.slice(5).trim()
+            if (!dataStr || dataStr === '[DONE]') continue
+
+            let payload: { type?: string; content?: string; error?: string } | null = null
+            try {
+              payload = JSON.parse(dataStr)
+            } catch {
+              payload = null
+            }
+
+            if (!payload) continue
+            if (payload.type === 'delta' && payload.content) {
+              const delta = payload.content
+              setConversation(prev => ({
+                ...prev,
+                messages: prev.messages.map(msg =>
+                  msg.id === aiMessageId
+                    ? { ...msg, content: msg.content + delta }
+                    : msg
+                )
+              }))
+            }
+
+            if (payload.type === 'error' && payload.error) {
+              setConversation(prev => ({
+                ...prev,
+                messages: prev.messages.map(msg =>
+                  msg.id === aiMessageId
+                    ? { ...msg, content: msg.content + `\n\n错误：${payload.error}` }
+                    : msg
+                )
+              }))
+            }
+          }
+        }
       }
     } catch (error) {
       console.error('Chat error:', error)
+
+      if (aiMessageId) {
+        setConversation(prev => ({
+          ...prev,
+          messages: prev.messages.filter(message => message.id !== aiMessageId)
+        }))
+      }
       
       const errorMessage: Message = {
         id: `msg-${Date.now()}-error`,

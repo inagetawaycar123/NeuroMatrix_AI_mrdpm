@@ -3,7 +3,7 @@ import json
 from ai_inference import init_ai_model, get_ai_model
 import os
 import requests  # 添加 requests 导入，用于调用百川 M3 API
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
 from extensions import NumpyJSONEncoder
 
 # ==================== Supabase 客户端内联初始化 ====================
@@ -1279,6 +1279,122 @@ def test_page():
 def chat_page():
     """渲染AI问诊页面"""
     return render_template('patient/upload/viewer/chat.html')
+
+
+def _sse_format(payload: dict) -> str:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.route('/api/chat/clinical/stream', methods=['POST'])
+def api_chat_clinical_stream():
+    """医疗AI临床聊天接口 - 流式响应 (SSE)"""
+    data = request.get_json() or {}
+    session_id = data.get('sessionId')
+    question = data.get('question')
+    images = data.get('images', [])
+    patient_context = data.get('patientContext', {})
+
+    if not session_id or not question:
+        return jsonify({
+            "success": False,
+            "error": "缺少会话ID或问题"
+        }), 400
+
+    def generate_stream():
+        if not BAICHUAN_API_KEY:
+            mock_text = "当前未配置 BAICHUAN_API_KEY，无法进行实时问答。"
+            yield _sse_format({"type": "delta", "content": mock_text})
+            yield _sse_format({"type": "done"})
+            return
+
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': f'Bearer {BAICHUAN_API_KEY}'
+        }
+
+        payload = {
+            'model': BAICHUAN_MODEL,
+            'messages': [
+                {
+                    'role': 'system',
+                    'content': '你是一位专业的神经放射科医生，擅长脑卒中影像诊断和分析。'
+                },
+                {
+                    'role': 'user',
+                    'content': question
+                }
+            ],
+            'max_tokens': 8192,
+            'temperature': 0.3,
+            'stream': True
+        }
+
+        try:
+            response = requests.post(
+                BAICHUAN_API_URL,
+                headers=headers,
+                json=payload,
+                timeout=60,
+                stream=True
+            )
+        except Exception as e:
+            yield _sse_format({"type": "error", "error": f"API请求失败: {e}"})
+            yield _sse_format({"type": "done"})
+            return
+
+        if response.status_code != 200:
+            error_text = response.text[:2000]
+            yield _sse_format({
+                "type": "error",
+                "error": f"API调用失败: {response.status_code}"
+            })
+            if error_text:
+                yield _sse_format({"type": "delta", "content": error_text})
+            yield _sse_format({"type": "done"})
+            return
+
+        for line in response.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            if not line.startswith('data:'):
+                continue
+
+            data_str = line[len('data:'):].strip()
+            if data_str == '[DONE]':
+                yield _sse_format({"type": "done"})
+                break
+
+            try:
+                chunk = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            delta = ''
+            if isinstance(chunk, dict):
+                if 'choices' in chunk and chunk['choices']:
+                    choice = chunk['choices'][0]
+                    if isinstance(choice, dict):
+                        if 'delta' in choice and isinstance(choice['delta'], dict):
+                            delta = choice['delta'].get('content', '')
+                        elif 'message' in choice and isinstance(choice['message'], dict):
+                            delta = choice['message'].get('content', '')
+                        elif 'text' in choice:
+                            delta = choice.get('text', '')
+                elif 'content' in chunk:
+                    delta = chunk.get('content', '')
+
+            if delta:
+                yield _sse_format({"type": "delta", "content": delta})
+
+    return Response(
+        stream_with_context(generate_stream()),
+        content_type='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no'
+        }
+    )
 
 
 @app.route('/api/chat/clinical/', methods=['POST'])
