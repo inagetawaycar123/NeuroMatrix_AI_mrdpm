@@ -32,7 +32,7 @@ export const PatientInfoModule: React.FC<PatientInfoModuleProps> = ({
 
   return (
     <div className="report-module">
-      <div className="module-header">📋 患者基本信息</div>
+      <div className="module-header" style={{ background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' }}>患者基本信息</div>
       <div className="module-content">
         <div className="report-field">
           <span className="field-label">姓名</span>

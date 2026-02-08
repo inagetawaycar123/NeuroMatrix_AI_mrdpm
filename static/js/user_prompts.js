@@ -66,7 +66,7 @@ const confirmationModalHTML = `
             justify-content: center;
             gap: 10px;
         ">
-            🔍 图像质量确认
+            图像质量确认
         </h3>
 
         <div style="
@@ -116,7 +116,7 @@ const confirmationModalHTML = `
                 box-shadow: 0 4px 15px rgba(39, 174, 96, 0.3);
                 min-width: 150px;
             ">
-                ✅ 开始AI推理
+                开始AI推理
             </button>
 
             <button id="cancelAIProcessing" style="
@@ -132,7 +132,7 @@ const confirmationModalHTML = `
                 box-shadow: 0 4px 15px rgba(231, 76, 60, 0.3);
                 min-width: 150px;
             ">
-                ❌ 放弃AI推理
+                放弃AI推理
             </button>
         </div>
 

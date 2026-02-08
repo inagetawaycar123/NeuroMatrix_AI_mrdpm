@@ -11,7 +11,7 @@ const PatientInfoModule = ({ data, isEditing, onUpdate }) => {
         return new Date(dateStr).toLocaleString('zh-CN');
     };
     return React.createElement("div", { className: "report-module" },
-        React.createElement("div", { className: "module-header" }, "📋 患者基本信息"),
+        React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "患者基本信息"),
         React.createElement("div", { className: "module-content" },
             React.createElement("div", { className: "report-field" },
                 React.createElement("span", { className: "field-label" }, "姓名"),
@@ -64,7 +64,7 @@ const ImageFindingsModule = ({ data, findings, isEditing, onUpdate }) => {
         return React.createElement("div", { className: "module-empty" }, "加载影像分析数据中...");
     }
     return React.createElement("div", { className: "report-module" },
-        React.createElement("div", { className: "module-header" }, "🖼️ 影像发现"),
+        React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "影像发现"),
         React.createElement("div", { className: "module-content" },
             React.createElement("div", { className: "report-field full-width" },
                 React.createElement("span", { className: "field-label" }, "核心梗死区"),
@@ -115,7 +115,7 @@ const ImageFindingsModule = ({ data, findings, isEditing, onUpdate }) => {
 
 const DoctorNotesModule = ({ notes, isEditing, onUpdate }) => {
     return React.createElement("div", { className: "report-module" },
-        React.createElement("div", { className: "module-header" }, "💬 医生备注"),
+        React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "医生备注"),
         React.createElement("div", { className: "module-content" },
             isEditing
                 ? React.createElement("textarea", { className: "field-edit-area", rows: 4, value: notes, onChange: (e) => onUpdate(e.target.value), placeholder: "请输入临床备注、诊断意见、后续建议..." })
@@ -132,8 +132,9 @@ function renderMarkdownToHtml(markdown) {
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
-    // 处理带 emoji 的标题（🔵 检查方法 等）- 浅蓝色设计
-    html = html.replace(/^🔵 (.+)$/gm, '<div style="margin: 24px 0 16px 0;"><span style="display: inline-flex; align-items: center; gap: 8px; background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%); color: white; padding: 10px 20px; border-radius: 8px; font-size: 16px; font-weight: 600; box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);">🔵 $1</span></div>');
+    // 处理标题 - 简洁样式（检查方法、影像学表现、血管评估、诊断意见、治疗建议）
+    html = html.replace(/^## (检查方法|影像学表现|血管评估|诊断意见|治疗建议|影像诊断报告)$/gm, 
+        '<div style="margin: 20px 0 12px 0; padding-bottom: 8px; border-bottom: 2px solid #3b82f6; color: #3b82f6; font-size: 18px; font-weight: 600;">$1</div>');
     // 处理普通二级标题
     html = html.replace(/^## (.+)$/gm, '<h2 style="color: #3b82f6; border-bottom: 3px solid #60a5fa; padding-bottom: 10px; margin: 24px 0 16px 0; font-size: 20px; font-weight: 700;">$1</h2>');
     // 处理普通三级标题
@@ -293,17 +294,26 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
     }
     if (error) {
         return React.createElement("div", { className: "report-container" },
-            React.createElement("div", { className: "error" }, "❌ ", error)
+            React.createElement("div", { className: "error" }, "错误: ", error)
         );
     }
     
     return React.createElement("div", { className: "report-container" },
         React.createElement("div", { className: "report-header" },
-            React.createElement("h2", null, "脑卒中临床诊断报告"),
+            React.createElement("h2", { style: { 
+                background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)', 
+                color: 'white',
+                padding: '16px 24px',
+                borderRadius: '12px',
+                margin: 0,
+                fontSize: '20px',
+                fontWeight: 600,
+                boxShadow: '0 4px 12px rgba(59, 130, 246, 0.4)'
+            } }, "脑卒中临床诊断报告"),
             React.createElement("div", { className: "report-actions" },
                 React.createElement("button", { className: `action-btn ${isEditing ? 'cancel' : 'primary'}`, onClick: () => setIsEditing(!isEditing) }, isEditing ? '取消编辑' : '编辑报告'),
                 isEditing && React.createElement("button", { className: "action-btn primary", onClick: saveReport, disabled: isSaving }, isSaving ? '保存中...' : '保存报告'),
-                !isEditing && React.createElement("button", { className: "action-btn", onClick: exportPDF }, "📄 导出PDF")
+                !isEditing && React.createElement("button", { className: "action-btn", onClick: exportPDF }, "导出PDF")
             )
         ),
         React.createElement("div", { className: "report-body" },
@@ -313,7 +323,7 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
             // 百川 AI 诊断意见模块 - 四种状态显示
             !analysisData || analysisData.core_volume === 0 ?
                 React.createElement("div", { className: "report-module", style: { background: '#1a1a1a', borderRadius: '12px', padding: '40px', marginTop: '20px', border: '1px solid #333', textAlign: 'center' } },
-                    React.createElement("div", { style: { fontSize: '48px', marginBottom: '16px' } }, "🔍"),
+                    React.createElement("div", { style: { fontSize: '48px', marginBottom: '16px', color: '#60a5fa' } }, "✦"),
                     React.createElement("h3", { style: { color: '#fff', fontSize: '18px', marginBottom: '12px' } }, "请先完成脑卒中分析"),
                     React.createElement("p", { style: { color: '#888', fontSize: '14px' } }, "请返回 viewer 页面完成分析后，再生成 AI 报告")
                 )
@@ -335,7 +345,7 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
                 )
             : aiReport ?
                 React.createElement("div", { className: "report-module" },
-                    React.createElement("div", { className: "module-header" }, "🤖 NeuroMatrix AI 诊断意见"),
+                    React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "NeuroMatrix AI 诊断意见"),
                     React.createElement("div", {
                         className: "ai-report-content",
                         style: {
@@ -351,7 +361,7 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
                 )
             :
                 React.createElement("div", { className: "report-module", style: { background: '#1a1a1a', borderRadius: '12px', padding: '40px', marginTop: '20px', border: '1px solid #333', textAlign: 'center' } },
-                    React.createElement("div", { style: { fontSize: '48px', marginBottom: '16px' } }, "🔍"),
+                    React.createElement("div", { style: { fontSize: '48px', marginBottom: '16px', color: '#60a5fa' } }, "✦"),
                     React.createElement("h3", { style: { color: '#fff', fontSize: '18px', marginBottom: '12px' } }, "请生成 AI 报告"),
                     React.createElement("p", { style: { color: '#888', fontSize: '14px' } }, "请在脑卒中分析页面点击「手动生成 AI 报告」按钮")
                 ),

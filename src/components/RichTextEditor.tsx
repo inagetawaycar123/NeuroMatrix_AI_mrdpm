@@ -4,6 +4,7 @@ import Link from '@tiptap/extension-link'
 import Image from '@tiptap/extension-image'
 import React from 'react'
 import '../styles/editor.css'
+import { Link as LinkIcon, Image as ImageIcon, RotateCcw, RotateCw } from 'lucide-react'
 
 interface RichTextEditorProps {
   value: string
@@ -128,10 +129,10 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
         <div className="toolbar-divider" />
 
         <button onClick={addLink} className="format-btn" title="插入链接">
-          🔗
+          <LinkIcon className="w-4 h-4" />
         </button>
         <button onClick={addImage} className="format-btn" title="插入图片">
-          🖼️
+          <ImageIcon className="w-4 h-4" />
         </button>
 
         <div className="toolbar-divider" />
@@ -141,14 +142,14 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           className="format-btn"
           title="撤销"
         >
-          ↶
+          <RotateCcw className="w-4 h-4" />
         </button>
         <button
           onClick={() => editor.chain().focus().redo().run()}
           className="format-btn"
           title="重做"
         >
-          ↷
+          <RotateCw className="w-4 h-4" />
         </button>
       </div>
 
