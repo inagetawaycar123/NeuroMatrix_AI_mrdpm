@@ -376,11 +376,20 @@ function downloadData() {
 async function saveAnalysisToDB() {
     if (!analysisResults || !currentPatientId || !currentFileId) return;
 
+    // 镜像逻辑：前端选择left → 病灶在right（发病侧）
+    const hemisphereMap = {
+        'left': 'right',
+        'right': 'left',
+        'both': 'both'
+    };
+    const lesionHemisphere = hemisphereMap[currentHemisphere] || 'both';
+
     const payload = {
         patient_id: currentPatientId,
         core_infarct_volume: analysisResults.report?.summary?.core_volume_ml ? parseFloat(analysisResults.report.summary.core_volume_ml.toFixed(1)) : null,
         penumbra_volume: analysisResults.report?.summary?.penumbra_volume_ml ? parseFloat(analysisResults.report.summary.penumbra_volume_ml.toFixed(1)) : null,
         mismatch_ratio: analysisResults.report?.summary?.mismatch_ratio ? parseFloat(analysisResults.report.summary.mismatch_ratio.toFixed(2)) : null,
+        hemisphere: lesionHemisphere,
         analysis_status: 'completed'
     };
 
