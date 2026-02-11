@@ -324,19 +324,27 @@ function displayAnalysisResults() {
     }
 
     // 保存分析数据到 localStorage，供报告页面使用（跨标签页共享）
+    // 镜像逻辑：前端选择left → 病灶在right（发病侧）
+    const hemisphereMap = {
+        'left': 'right',
+        'right': 'left',
+        'both': 'both'
+    };
+    const lesionHemisphere = hemisphereMap[currentHemisphere] || 'both';
+    
     sessionStorage.setItem('analysis_data', JSON.stringify({
         core_infarct_volume: analysisResults.report?.summary?.core_volume_ml || 0,
         penumbra_volume: analysisResults.report?.summary?.penumbra_volume_ml || 0,
         mismatch_ratio: analysisResults.report?.summary?.mismatch_ratio || 0,
         has_mismatch: analysisResults.report?.summary?.has_mismatch || false,
-        hemisphere: currentHemisphere
+        hemisphere: lesionHemisphere
     }));
     localStorage.setItem('analysis_data', JSON.stringify({
         core_infarct_volume: analysisResults.report?.summary?.core_volume_ml || 0,
         penumbra_volume: analysisResults.report?.summary?.penumbra_volume_ml || 0,
         mismatch_ratio: analysisResults.report?.summary?.mismatch_ratio || 0,
         has_mismatch: analysisResults.report?.summary?.has_mismatch || false,
-        hemisphere: currentHemisphere
+        hemisphere: lesionHemisphere
     }));
 
     // 保存完整的分析结果到localStorage，用于页面刷新后恢复
