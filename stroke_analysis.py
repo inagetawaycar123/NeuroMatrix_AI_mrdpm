@@ -22,9 +22,9 @@ class StrokeAnalysis:
         self.voxel_volume = np.prod(voxel_spacing)
 
         # 分析参数配置
-        self.penumbra_threshold_pred = 6  # 预测半暗带阈值
+        self.penumbra_threshold_pred = 9  # 预测半暗带阈值
         self.penumbra_threshold_gt = 9  # 真实半暗带阈值
-        self.core_threshold_pred = 9  # 预测核心梗死阈值
+        self.core_threshold_pred = 12  # 预测核心梗死阈值
         self.core_threshold_gt = 12  # 真实核心梗死阈值
 
         # 后处理参数

@@ -2865,9 +2865,8 @@ def upload_files():
 
         # 获取模型类型参数，默认使用mrdpm
         selected_model = request.form.get('model_type', 'mrdpm')
-        # 实现模型选择的映射转换
-        model_mapping = {'mrdpm': 'palette', 'palette': 'mrdpm'}
-        model_type = model_mapping.get(selected_model, 'palette')
+        # 直接使用用户选择的模型，不再进行映射转换
+        model_type = selected_model
         print(f"用户选择的模型: {selected_model}, 实际使用的模型: {model_type}")
 
         # 处理RGB合成（现在包含多模型AI推理）
