@@ -56,6 +56,7 @@ def update_analysis_result(patient_id: int, analysis_data: dict):
             'core_infarct_volume': analysis_data.get('core_infarct_volume'),
             'penumbra_volume': analysis_data.get('penumbra_volume'),
             'mismatch_ratio': analysis_data.get('mismatch_ratio'),
+            'hemisphere': analysis_data.get('hemisphere'),
             'analysis_status': analysis_data.get('analysis_status', 'completed')
         }
         response = supabase.table('patient_info') \
@@ -156,7 +157,6 @@ REPORT_PROMPT_TEMPLATE = """
 6. 不要使用粗体标记（**文字**），直接使用普通文字描述
 
 【输出格式】
-· 影像诊断报告
 
 · 检查方法
 头颅 CT 平扫 (NCCT) + 三期 CT 血管成像 (mCTA：动脉期、静脉期、延迟期)
@@ -357,7 +357,7 @@ def generate_mock_report(structured_data: dict, output_format: str = 'markdown')
     mismatch_ratio = structured_data.get('mismatch_ratio', 0)
     hemisphere = structured_data.get('hemisphere', '双侧')
     
-    mock_report = f"""## 影像诊断报告
+    mock_report = f"""影像诊断报告
 
 患者ID: {patient_id}
 

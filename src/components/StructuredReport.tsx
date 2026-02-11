@@ -7,6 +7,7 @@ import { MedicalAIChat } from './MedicalAIChat'
 import '../styles/report.css'
 
 interface PatientData {
+  id: number
   patient_name: string
   patient_age: number
   patient_sex: string

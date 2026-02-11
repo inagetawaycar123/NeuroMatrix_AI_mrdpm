@@ -1,6 +1,7 @@
 import React from 'react'
 
 interface PatientData {
+  id: number
   patient_name: string
   patient_age: number
   patient_sex: string
@@ -34,6 +35,11 @@ export const PatientInfoModule: React.FC<PatientInfoModuleProps> = ({
     <div className="report-module">
       <div className="module-header" style={{ background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' }}>患者基本信息</div>
       <div className="module-content">
+        <div className="report-field">
+          <span className="field-label">ID</span>
+          <span className="field-value">{data.id || '--'}</span>
+        </div>
+
         <div className="report-field">
           <span className="field-label">姓名</span>
           {isEditing ? (

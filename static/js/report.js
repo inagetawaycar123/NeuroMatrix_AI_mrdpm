@@ -14,6 +14,10 @@ const PatientInfoModule = ({ data, isEditing, onUpdate }) => {
         React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "患者基本信息"),
         React.createElement("div", { className: "module-content" },
             React.createElement("div", { className: "report-field" },
+                React.createElement("span", { className: "field-label" }, "ID"),
+                React.createElement("span", { className: "field-value" }, data.id || '--')
+            ),
+            React.createElement("div", { className: "report-field" },
                 React.createElement("span", { className: "field-label" }, "姓名"),
                 isEditing
                     ? React.createElement("input", { type: "text", className: "field-edit", value: data.patient_name, onChange: (e) => onUpdate('patient_name', e.target.value) })
