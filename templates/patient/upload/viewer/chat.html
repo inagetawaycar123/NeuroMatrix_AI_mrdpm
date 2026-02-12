@@ -44,7 +44,30 @@
                         <input type="text" id="message-input" placeholder="输入您的临床问题...">
                         <button type="submit">发送</button>
                     </form>
-                    <p class="chat-hint">支持脑卒中诊断、CTP参数解读、治疗方案建议等专业问题</p>
+                    <div class="chat-input-footer">
+                        <div class="kb-panel">
+                            <button type="button" class="kb-toggle" onclick="toggleKbPanel()" title="查看权威医学文献">权威文献库</button>
+                            <div class="kb-caption">点击查看指南/共识/文献 PDF</div>
+                            <div class="kb-list" id="kb-list" style="display: none;">
+                                <div class="kb-loading" id="kb-loading">加载中...</div>
+                                <div class="kb-empty" id="kb-empty" style="display: none;">暂无文献</div>
+                                <div class="kb-items" id="kb-items"></div>
+                            </div>
+                        </div>
+                        <p class="chat-hint">支持脑卒中诊断、CTP参数解读、治疗方案建议等专业问题</p>
+                    </div>
+                </div>
+                <div class="kb-preview-overlay" id="kb-preview-overlay" style="display: none;">
+                    <div class="kb-preview-card">
+                        <div class="kb-preview-header">
+                            <span class="kb-preview-title" id="kb-preview-title"></span>
+                            <div class="kb-preview-actions">
+                                <a class="kb-preview-link" id="kb-preview-open" target="_blank" rel="noreferrer">新窗口</a>
+                                <button type="button" class="kb-preview-close" onclick="closeKbPreview()">关闭</button>
+                            </div>
+                        </div>
+                        <iframe class="kb-preview-frame" id="kb-preview-frame" title="knowledge-base"></iframe>
+                    </div>
                 </div>
             </div>
 
@@ -209,6 +232,7 @@
     background: #0a0a0a;
     min-height: 0;
     min-width: 1400px;
+    position: relative;
 }
 
 .chat-header {
@@ -452,6 +476,156 @@
     padding: 16px;
     border-top: 1px solid #333;
     background: #1a1a1a;
+}
+
+.chat-input-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.kb-panel {
+    position: relative;
+}
+
+.kb-caption {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #7b8794;
+}
+
+.kb-toggle {
+    padding: 6px 12px;
+    background: linear-gradient(135deg, #1f2a44 0%, #0f1c2e 100%);
+    border: 1px solid #2f3b52;
+    color: #dfe9f3;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.kb-toggle:hover {
+    border-color: #4facfe;
+}
+
+.kb-list {
+    position: absolute;
+    left: 0;
+    bottom: 36px;
+    width: 220px;
+    background: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    z-index: 20;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.kb-loading,
+.kb-empty {
+    font-size: 12px;
+    color: #888;
+    padding: 6px 4px;
+}
+
+.kb-item-btn {
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: #9fe6ff;
+    text-align: left;
+    padding: 6px 4px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kb-item-btn:hover {
+    color: #4facfe;
+    background: rgba(79, 172, 254, 0.1);
+    border-radius: 4px;
+}
+
+.kb-preview-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.72);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 30;
+    padding: 16px;
+}
+
+.kb-preview-card {
+    width: min(960px, 92%);
+    height: min(640px, 90%);
+    background: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.kb-preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid #333;
+    background: #111;
+    gap: 12px;
+}
+
+.kb-preview-title {
+    font-size: 13px;
+    color: #e5e5e5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kb-preview-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.kb-preview-link {
+    font-size: 12px;
+    color: #9fe6ff;
+    text-decoration: none;
+}
+
+.kb-preview-link:hover {
+    color: #4facfe;
+}
+
+.kb-preview-close {
+    padding: 4px 8px;
+    font-size: 12px;
+    background: #1a1a1a;
+    color: #fff;
+    border: 1px solid #333;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.kb-preview-close:hover {
+    border-color: #4facfe;
+}
+
+.kb-preview-frame {
+    flex: 1;
+    width: 100%;
+    border: none;
+    background: #000;
 }
 
 .chat-input-area form {
@@ -829,11 +1003,92 @@ function renderMarkdown(content) {
     return escapeHtml(safeContent).replace(/\n/g, '<br>');
 }
 
+// 知识库文献
+let kbDocs = [];
+let kbLoaded = false;
+
+function toggleKbPanel() {
+    const list = document.getElementById('kb-list');
+    if (!list) return;
+    const isOpen = list.style.display !== 'none';
+    list.style.display = isOpen ? 'none' : 'block';
+}
+
+function closeKbPanel() {
+    const list = document.getElementById('kb-list');
+    if (!list) return;
+    list.style.display = 'none';
+}
+
+function loadKbDocs() {
+    const loading = document.getElementById('kb-loading');
+    const empty = document.getElementById('kb-empty');
+    const items = document.getElementById('kb-items');
+    if (!loading || !empty || !items) return;
+
+    loading.style.display = 'block';
+    empty.style.display = 'none';
+    items.innerHTML = '';
+
+    fetch('/api/kb/docs')
+        .then(res => {
+            if (!res.ok) throw new Error('KB API error: ' + res.status);
+            return res.json();
+        })
+        .then(data => {
+            kbDocs = Array.isArray(data?.docs) ? data.docs : [];
+            if (kbDocs.length === 0) {
+                empty.style.display = 'block';
+                return;
+            }
+            kbDocs.forEach(doc => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'kb-item-btn';
+                btn.textContent = doc.title || doc.fileName || '未命名文献';
+                btn.title = doc.title || doc.fileName || '';
+                btn.onclick = () => openKbPreview(doc);
+                items.appendChild(btn);
+            });
+        })
+        .catch(() => {
+            empty.style.display = 'block';
+        })
+        .finally(() => {
+            loading.style.display = 'none';
+            kbLoaded = true;
+        });
+}
+
+function openKbPreview(doc) {
+    const overlay = document.getElementById('kb-preview-overlay');
+    const frame = document.getElementById('kb-preview-frame');
+    const title = document.getElementById('kb-preview-title');
+    const open = document.getElementById('kb-preview-open');
+    if (!overlay || !frame || !title || !open) return;
+    title.textContent = doc.title || doc.fileName || '';
+    frame.src = doc.url;
+    open.href = doc.url;
+    overlay.style.display = 'flex';
+    closeKbPanel();
+}
+
+function closeKbPreview() {
+    const overlay = document.getElementById('kb-preview-overlay');
+    const frame = document.getElementById('kb-preview-frame');
+    if (!overlay || !frame) return;
+    frame.src = 'about:blank';
+    overlay.style.display = 'none';
+}
+
 // 初始化
 function initChat() {
     loadConversations();
     if (currentConversationId) {
         loadConversation(currentConversationId);
+    }
+    if (!kbLoaded) {
+        loadKbDocs();
     }
 }
 
