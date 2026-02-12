@@ -33,6 +33,12 @@ interface Message {
   timestamp: Date
 }
 
+interface KbDoc {
+  title: string
+  fileName: string
+  url: string
+}
+
 interface Conversation {
   id: string
   messages: Message[]
@@ -52,12 +58,44 @@ export const MedicalAIChat: React.FC<MedicalAIChatProps> = ({
   const [input, setInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [isMinimized, setIsMinimized] = useState(false)
+  const [kbDocs, setKbDocs] = useState<KbDoc[]>([])
+  const [kbLoading, setKbLoading] = useState(false)
+  const [kbOpen, setKbOpen] = useState(false)
+  const [kbSelected, setKbSelected] = useState<KbDoc | null>(null)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
   // 滚动到底部
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [conversation.messages])
+
+  useEffect(() => {
+    if (!isVisible) return
+    let isActive = true
+    const controller = new AbortController()
+
+    const loadKbDocs = async () => {
+      setKbLoading(true)
+      try {
+        const res = await fetch('/api/kb/docs', { signal: controller.signal })
+        if (!res.ok) throw new Error(`API error: ${res.status}`)
+        const data = await res.json()
+        const docs = Array.isArray(data?.docs) ? data.docs : []
+        if (isActive) setKbDocs(docs)
+      } catch {
+        if (isActive) setKbDocs([])
+      } finally {
+        if (isActive) setKbLoading(false)
+      }
+    }
+
+    loadKbDocs()
+
+    return () => {
+      isActive = false
+      controller.abort()
+    }
+  }, [isVisible])
 
   // 消息发送处理
   const handleSubmit = async (e: React.FormEvent) => {
@@ -204,7 +242,7 @@ export const MedicalAIChat: React.FC<MedicalAIChatProps> = ({
   if (!isVisible) return null
 
   return (
-    <div className={`fixed right-4 bottom-4 z-50 w-80 md:w-96 bg-gray-900 border border-gray-700 rounded-lg shadow-xl flex flex-col ${className}`}>
+    <div className={`fixed right-4 bottom-4 z-50 w-80 md:w-96 bg-gray-900 border border-gray-700 rounded-lg shadow-xl flex flex-col relative ${className}`}>
       {/* 头部 */}
       <div className="flex items-center justify-between p-4 border-b border-gray-700 bg-gray-800">
         <div className="flex items-center gap-2">
@@ -231,6 +269,37 @@ export const MedicalAIChat: React.FC<MedicalAIChatProps> = ({
 
       {!isMinimized && (
         <>
+          {kbSelected && (
+            <div className="absolute inset-0 z-50 bg-black/70 p-3">
+              <div className="bg-gray-900 border border-gray-700 rounded-lg h-full w-full flex flex-col">
+                <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700">
+                  <span className="text-sm text-gray-200 truncate">{kbSelected.title}</span>
+                  <div className="flex items-center gap-2">
+                    <a
+                      href={kbSelected.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-blue-400 hover:text-blue-300"
+                    >
+                      新窗口
+                    </a>
+                    <button
+                      onClick={() => setKbSelected(null)}
+                      className="p-1 hover:bg-gray-800 rounded"
+                      title="关闭"
+                    >
+                      <X className="w-4 h-4 text-gray-400" />
+                    </button>
+                  </div>
+                </div>
+                <iframe
+                  src={kbSelected.url}
+                  className="w-full flex-1 rounded-b-lg"
+                  title={kbSelected.title}
+                />
+              </div>
+            </div>
+          )}
           {/* 消息区域 */}
           <div className="flex-1 p-4 overflow-y-auto max-h-[400px]">
             <div className="space-y-4">
@@ -277,27 +346,59 @@ export const MedicalAIChat: React.FC<MedicalAIChatProps> = ({
 
           {/* 输入区域 */}
           <div className="p-4 border-t border-gray-700 bg-gray-800">
-            <form onSubmit={handleSubmit} className="flex gap-2">
-              <input
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="输入您的临床问题..."
-                disabled={isLoading}
-                className="flex-1 px-3 py-2 bg-gray-900 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <button
-                type="submit"
-                disabled={!input.trim() || isLoading}
-                className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {isLoading ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Send className="w-4 h-4" />
+            <div className="flex gap-3 items-end">
+              <div className="w-28">
+                <button
+                  type="button"
+                  onClick={() => setKbOpen(prev => !prev)}
+                  className="w-full px-2 py-2 bg-gray-900 border border-gray-700 rounded-md text-xs text-gray-200 hover:bg-gray-800"
+                >
+                  {kbOpen ? '知识库收起' : '知识库'}
+                </button>
+                {kbOpen && (
+                  <div className="mt-2 bg-gray-900 border border-gray-700 rounded-md p-2 max-h-28 overflow-y-auto">
+                    {kbLoading && (
+                      <div className="text-xs text-gray-500">加载中...</div>
+                    )}
+                    {!kbLoading && kbDocs.length === 0 && (
+                      <div className="text-xs text-gray-500">暂无文献</div>
+                    )}
+                    {!kbLoading && kbDocs.map((doc) => (
+                      <button
+                        key={doc.fileName}
+                        type="button"
+                        onClick={() => setKbSelected(doc)}
+                        className="w-full text-left text-xs text-blue-300 hover:text-blue-200 truncate py-1"
+                        title={doc.title}
+                      >
+                        {doc.title}
+                      </button>
+                    ))}
+                  </div>
                 )}
-              </button>
-            </form>
+              </div>
+              <form onSubmit={handleSubmit} className="flex-1 flex gap-2">
+                <input
+                  type="text"
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder="输入您的临床问题..."
+                  disabled={isLoading}
+                  className="flex-1 px-3 py-2 bg-gray-900 border border-gray-700 rounded-md text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  type="submit"
+                  disabled={!input.trim() || isLoading}
+                  className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {isLoading ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Send className="w-4 h-4" />
+                  )}
+                </button>
+              </form>
+            </div>
             <p className="text-xs text-gray-500 mt-2">
               支持脑卒中诊断、CTP参数解读、治疗方案建议等专业问题
             </p>

@@ -5,7 +5,7 @@ import time
 from ai_inference import init_ai_model, get_ai_model
 import os
 import requests  # 添加 requests 导入，用于调用百川 M3 API
-from flask import Flask, render_template, request, jsonify, send_file, Response, stream_with_context
+from flask import Flask, render_template, request, jsonify, send_file, send_from_directory, Response, stream_with_context
 from extensions import NumpyJSONEncoder
 
 # ==================== Supabase 客户端内联初始化 ====================
@@ -112,6 +112,14 @@ except Exception as e:
 BAICHUAN_API_URL = os.environ.get('BAICHUAN_API_URL', 'https://api.baichuan-ai.com/v1/chat/completions')
 BAICHUAN_API_KEY = os.environ.get('BAICHUAN_API_KEY', '') or os.environ.get('BAICHUAN_AK', '')
 BAICHUAN_MODEL = os.environ.get('BAICHUAN_MODEL', 'Baichuan-M3')
+BAICHUAN_CHAT_MODEL = os.environ.get('BAICHUAN_CHAT_MODEL', 'Baichuan2-Turbo')
+_kb_ids_raw = os.environ.get('BAICHUAN_KB_IDS', 'kb-mMSWx8f9GMasTj0gR52k2rdr')
+BAICHUAN_KB_IDS = [kb_id.strip() for kb_id in _kb_ids_raw.split(',') if kb_id.strip()]
+KB_PDF_DIR = os.environ.get(
+    'KB_PDF_DIR',
+    os.path.join(os.path.dirname(__file__), 'frontend', 'public', 'kb-pdfs')
+)
+KB_PDF_URL_PREFIX = '/kb-pdfs'
 
 def _get_baichuan_api_base() -> str:
     env_base = os.environ.get('BAICHUAN_API_BASE')
@@ -124,6 +132,9 @@ def _get_baichuan_api_base() -> str:
 print(f"百川 API URL: {BAICHUAN_API_URL}")
 print(f"百川 API Key: {'***' + BAICHUAN_API_KEY[-4:] if BAICHUAN_API_KEY else '未配置'}")
 print(f"百川模型: {BAICHUAN_MODEL}")
+print(f"百川问诊模型: {BAICHUAN_CHAT_MODEL}")
+print(f"知识库ID数量: {len(BAICHUAN_KB_IDS)}")
+print(f"知识库PDF目录: {KB_PDF_DIR}")
 
 # 卒中影像报告 Prompt 模板 (Markdown 格式)
 REPORT_PROMPT_TEMPLATE = """
@@ -1483,12 +1494,17 @@ def api_chat_clinical_stream():
         ]
 
         payload = {
-            'model': BAICHUAN_MODEL,
+            'model': BAICHUAN_CHAT_MODEL,
             'messages': messages,
             'max_tokens': 8192,
-            'temperature': 0.3,
+            'temperature': 0.4,
+            'top_p': 0.5,
+            'top_k': 10,
             'stream': True
         }
+        if BAICHUAN_KB_IDS:
+            payload['with_search_enhance'] = True
+            payload['knowledge_base'] = {'ids': BAICHUAN_KB_IDS}
 
         try:
             response = requests.post(
@@ -1597,11 +1613,16 @@ def api_chat_clinical():
         ]
 
         payload = {
-            'model': BAICHUAN_MODEL,
+            'model': BAICHUAN_CHAT_MODEL,
             'messages': messages,
             'max_tokens': 8192,
-            'temperature': 0.3
+            'temperature': 0.4,
+            'top_p': 0.5,
+            'top_k': 10
         }
+        if BAICHUAN_KB_IDS:
+            payload['with_search_enhance'] = True
+            payload['knowledge_base'] = {'ids': BAICHUAN_KB_IDS}
         
         response = requests.post(BAICHUAN_API_URL, headers=headers, json=payload, timeout=60)
         
@@ -1628,6 +1649,33 @@ def api_chat_clinical():
             "success": False,
             "error": str(e)
         }), 500
+
+
+@app.route('/api/kb/docs', methods=['GET'])
+def api_kb_docs():
+    """返回知识库PDF列表"""
+    docs = []
+    if os.path.isdir(KB_PDF_DIR):
+        for filename in sorted(os.listdir(KB_PDF_DIR)):
+            if not filename.lower().endswith('.pdf'):
+                continue
+            title = os.path.splitext(filename)[0]
+            docs.append({
+                'title': title,
+                'fileName': filename,
+                'url': f"{KB_PDF_URL_PREFIX}/{filename}"
+            })
+    return jsonify({"success": True, "docs": docs})
+
+
+@app.route('/kb-pdfs/<path:filename>')
+def serve_kb_pdf(filename):
+    """提供知识库PDF文件"""
+    if not filename.lower().endswith('.pdf'):
+        return jsonify({'error': '只允许PDF文件'}), 400
+    if not os.path.isdir(KB_PDF_DIR):
+        return jsonify({'error': 'PDF目录不存在'}), 404
+    return send_from_directory(KB_PDF_DIR, filename, mimetype='application/pdf')
 
 @app.route('/report/<int:patient_id>')
 def report_page(patient_id):
