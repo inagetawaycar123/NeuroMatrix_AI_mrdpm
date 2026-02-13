@@ -2601,14 +2601,24 @@ def process_rgb_synthesis(mcta_path, vcta_path, dcta_path, ncct_path, output_dir
 
             for model_key in available_models:
                 try:
-                    print(f"开始{model_key.upper()}模型推理切片 {slice_idx}...")
+                    # 根据参数类型选择合适的模型类型
+                    # CBF和CBV参数始终使用palette模型
+                    # TMAX参数使用用户选择的模型
+                    if model_key in ['cbf', 'cbv']:
+                        current_model_type = 'palette'
+                    elif model_key == 'tmax':
+                        current_model_type = model_type
+                    else:
+                        current_model_type = model_type
+                    
+                    print(f"开始{model_key.upper()}模型推理切片 {slice_idx} (使用{current_model_type}模型)...")
                     ai_result = process_ai_inference(
                         rgb_result,
                         mask_result,
                         output_dir,
                         slice_idx,
                         model_key,
-                        model_type
+                        current_model_type
                     )
 
                     if ai_result and ai_result['success']:

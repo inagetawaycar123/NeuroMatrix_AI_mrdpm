@@ -1,0 +1,177 @@
+[33mcommit 88ba6de173ef6d74c44ba3f54443bf6d3525827c[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mdev_jing[m[33m, [m[1;31morigin/dev_jing[m[33m)[m
+Merge: 3670ed0 6aae89b
+Author: Corin-Joy <1490048641@qq.com>
+Date:   Sat Feb 7 19:51:26 2026 +0800
+
+    Merge pull request #11 from inagetawaycar123/dev_jing_bug_fix
+    
+    调用百川官方文档解析接口，提供ai问诊pdf解析功能
+
+[33mcommit 6aae89b777938f547b369f8811c539a7a529baa7[m
+Author: yuanji_mac <yuanji_hust@qq.com>
+Date:   Sat Feb 7 19:38:40 2026 +0800
+
+    调用百川官方文档解析接口，提供ai问诊pdf解析功能
+
+[33mcommit 3670ed0dbced47f540f8df1bcb57e143de9ff4ee[m
+Merge: d01f226 95ae2f6
+Author: Corin-Joy <1490048641@qq.com>
+Date:   Sat Feb 7 19:02:59 2026 +0800
+
+    Merge pull request #10 from inagetawaycar123/dev_jing_bug_fix
+    
+    ai问诊变更为流式响应
+
+[33mcommit 95ae2f6517bc71922098716890168e62b2605697[m
+Author: yuanji_mac <yuanji_hust@qq.com>
+Date:   Sat Feb 7 16:36:06 2026 +0800
+
+    ai问诊变更为流式响应
+
+[33mcommit d01f2269a4844e7ee1d132a4651fe553a0e837b6[m
+Author: Corin-Joy <1490048641@qq.com>
+Date:   Fri Feb 6 23:23:19 2026 +0800
+
+    优化了功能卡，修复了一点bug
+
+[33mcommit 2ece87101fe72513e06adc0678c848ca5a205532[m
+Merge: 43d22ae 8732c6a
+Author: Corin-Joy <1490048641@qq.com>
+Date:   Fri Feb 6 15:46:30 2026 +0800
+
+    Merge pull request #9 from inagetawaycar123/dev_jing_bug_fix
+    
+    修复ai回答显示不全问题，优化前端markdown渲染
+
+[33mcommit 8732c6a59b91ae0055e8bd0649f61f026873e7d3[m
+Author: yuanji_mac <yuanji_hust@qq.com>
+Date:   Fri Feb 6 10:23:39 2026 +0800
+
+    修复ai回答显示不全问题，优化前端markdown渲染
+
+[33mcommit 43d22ae97d07dd5a73eb5bb301296e4d50d1df7d[m
+Author: Corin-Joy <1490048641@qq.com>
+Date:   Fri Feb 6 08:36:48 2026 +0800
+
+    调整为4输入，实际用的是老模型
+
+[33mcommit b67df4dcfbaa26e49705d6f5e6fe705ce99d0f6a[m
+Author: Corin-Joy <1490048641@qq.com>
+Date:   Thu Feb 5 18:42:22 2026 +0800
+
+    合并了AI问诊功能。不过有bug：AI回答内容展示不全；安全卡效果一般，不能随着用户对话而提取重点；调用的百川模型没有读取pdf和图像的功能，是否换为更强的模型。适当调整了字体和图像大小
+
+[33mcommit 1b77ca8a5ed2a39f5e1292e0add238390b478f6b[m
+Merge: 20bf117 b8c797c
+Author: kathleenren1st-alt <kathleenren1st@gmail.com>
+Date:   Wed Feb 4 13:18:47 2026 +0800
+
+    Merge pull request #6 from inagetawaycar123/dev_ren
+    
+    添加百川AI报告生成功能
+
+[33mcommit b8c797c2895414901bb918fa4445235675055e7d[m
+Author: kathleenren1st-alt <kathleenren1st@gmail.com>
+Date:   Wed Feb 4 02:24:12 2026 +0800
+
+    添加百川AI报告生成功能
+
+[33mcommit 20bf117084198756e7d3469f59e9d474037b7416[m
+Merge: ba3e39c 6033ef9
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Sun Feb 1 23:47:50 2026 +0800
+
+    Merge pull request #5 from inagetawaycar123/dev_zhu
+    
+    加入编辑功能
+
+[33mcommit 6033ef9a198bab2e716ba9b0a2cfbd1bea3761ea[m[33m ([m[1;31morigin/dev_zhu[m[33m)[m
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Sun Feb 1 23:45:04 2026 +0800
+
+    加入编辑功能
+
+[33mcommit ba3e39c79d0350b7c568c9134cd8af7afea7ef2b[m
+Merge: 73e6ddf b00f080
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Sun Feb 1 14:21:29 2026 +0800
+
+    Merge pull request #4 from inagetawaycar123/dev_zhu
+    
+    生成报告部分搭建完成，基础信息及图像信息正常显示
+
+[33mcommit b00f080ba416db9d18c31b625ec9ccde0f6e9e90[m
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Sun Feb 1 14:20:30 2026 +0800
+
+    生成报告部分搭建完成，基础信息及图像信息正常显示
+
+[33mcommit 73e6ddfcb787501d26803061ff3506de3076a453[m
+Merge: 33dc7f0 05c3806
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Sun Feb 1 00:42:02 2026 +0800
+
+    Merge pull request #3 from inagetawaycar123/dev_zhu
+    
+    将前端代码分层，更改requirements.txt
+
+[33mcommit 05c3806cc2ab0540d9a14d48b1ad33557716daa1[m
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Sun Feb 1 00:39:00 2026 +0800
+
+    将前端代码分层，更改requirements.txt
+
+[33mcommit 33dc7f0f5a1be2e3239709ee8f8392f69baaef75[m
+Merge: 4b9bc1b 649360c
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Fri Jan 30 22:36:48 2026 +0800
+
+    Merge pull request #2 from inagetawaycar123/dev_zhu
+    
+    成功提交core_infarct_volume，penumbra_volume，mismatch_ratio到supabase
+
+[33mcommit 649360c45bea069981003d88e2f67a067ee8176d[m
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Fri Jan 30 22:35:11 2026 +0800
+
+    成功提交core_infarct_volume，penumbra_volume，mismatch_ratio到supabase
+
+[33mcommit 4b9bc1b88cb2d8b79ecc9d2f88d4713f9930ca50[m
+Merge: c38fde4 88926b8
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Fri Jan 30 15:09:05 2026 +0800
+
+    Merge pull request #1 from inagetawaycar123/dev_zhu
+    
+    补充sql文件，移动supabase_client.py的位置
+
+[33mcommit 88926b86711611dc1ba3dea228fcbfb23f78d9ca[m
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Fri Jan 30 15:07:45 2026 +0800
+
+    补充sql文件，移动supabase_client.py
+    的位置
+
+[33mcommit c38fde441480cbb486d6f7e380531a0883dc4820[m
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Thu Jan 29 21:18:42 2026 +0800
+
+    删除log日志
+
+[33mcommit 7ea7f85bb58812504259b0fa02e34b79eed57ab3[m
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Thu Jan 29 12:52:15 2026 +0800
+
+    readme文件初更改
+
+[33mcommit 0c17ae9d56342d580a8abeb54591b29823ac057d[m
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Thu Jan 29 12:20:13 2026 +0800
+
+    Add initial README.md with project title
+
+[33mcommit da8a71d2f7157ab27badfe4ed84db83261a46394[m
+Author: inagetawaycar123 <2749580938@qq.com>
+Date:   Thu Jan 29 12:18:05 2026 +0800
+
+    first commit
