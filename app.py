@@ -2484,41 +2484,51 @@ def process_rgb_synthesis(mcta_path, vcta_path, dcta_path, ncct_path, output_dir
                 'error': 'nibabel 库不可用，请安装: pip install "numpy<2.0" nibabel'
             }
 
-        # 加载四个NIfTI文件
-        mcta_img = nib.load(mcta_path)
-        vcta_img = nib.load(vcta_path)
-        dcta_img = nib.load(dcta_path)
+        # NCCT 必选
         ncct_img = nib.load(ncct_path)
-
-        mcta_data = mcta_img.get_fdata()
-        vcta_data = vcta_img.get_fdata()
-        dcta_data = dcta_img.get_fdata()
         ncct_data = ncct_img.get_fdata()
-
-        print(f"动脉期CTA 维度: {mcta_data.shape}")
-        print(f"静脉期CTA 维度: {vcta_data.shape}")
-        print(f"延迟期CTA 维度: {dcta_data.shape}")
         print(f"NCCT 维度: {ncct_data.shape}")
 
-        # 检查所有文件维度是否一致
-        all_shapes = [mcta_data.shape, vcta_data.shape, dcta_data.shape, ncct_data.shape]
-        if not all(shape == all_shapes[0] for shape in all_shapes):
-            return {
-                'success': False,
-                'error': f'文件维度不匹配: 动脉期CTA{all_shapes[0]} vs 静脉期CTA{all_shapes[1]} vs 延迟期CTA{all_shapes[2]} vs NCCT{all_shapes[3]}'
-            }
+        def load_optional_nifti(file_path, label):
+            if not file_path:
+                print(f"{label} 未提供，使用空数据")
+                return None, None
+            img = nib.load(file_path)
+            data = img.get_fdata()
+            print(f"{label} 维度: {data.shape}")
+            return img, data
+
+        mcta_img, mcta_data = load_optional_nifti(mcta_path, "动脉期CTA")
+        vcta_img, vcta_data = load_optional_nifti(vcta_path, "静脉期CTA")
+        dcta_img, dcta_data = load_optional_nifti(dcta_path, "延迟期CTA")
+
+        # 检查已提供文件维度是否一致（以 NCCT 为基准）
+        for label, data in [("动脉期CTA", mcta_data), ("静脉期CTA", vcta_data), ("延迟期CTA", dcta_data)]:
+            if data is not None and data.shape != ncct_data.shape:
+                return {
+                    'success': False,
+                    'error': f'{label}维度{data.shape}与NCCT维度{ncct_data.shape}不匹配'
+                }
+
+        # 对缺失的期相使用零矩阵占位，确保流程一致
+        mcta_data = mcta_data if mcta_data is not None else np.zeros_like(ncct_data)
+        vcta_data = vcta_data if vcta_data is not None else np.zeros_like(ncct_data)
+        dcta_data = dcta_data if dcta_data is not None else np.zeros_like(ncct_data)
 
         # 获取基本信息
         metadata = {
-            'mcta_shape': [int(dim) for dim in mcta_data.shape],
-            'vcta_shape': [int(dim) for dim in vcta_data.shape],
-            'dcta_shape': [int(dim) for dim in dcta_data.shape],
+            'mcta_present': mcta_img is not None,
+            'vcta_present': vcta_img is not None,
+            'dcta_present': dcta_img is not None,
+            'mcta_shape': [int(dim) for dim in mcta_data.shape] if mcta_img is not None else None,
+            'vcta_shape': [int(dim) for dim in vcta_data.shape] if vcta_img is not None else None,
+            'dcta_shape': [int(dim) for dim in dcta_data.shape] if dcta_img is not None else None,
             'ncct_shape': [int(dim) for dim in ncct_data.shape],
-            'mcta_range': [float(mcta_data.min()), float(mcta_data.max())],
-            'vcta_range': [float(vcta_data.min()), float(vcta_data.max())],
-            'dcta_range': [float(dcta_data.min()), float(dcta_data.max())],
+            'mcta_range': [float(mcta_data.min()), float(mcta_data.max())] if mcta_img is not None else None,
+            'vcta_range': [float(vcta_data.min()), float(vcta_data.max())] if vcta_img is not None else None,
+            'dcta_range': [float(dcta_data.min()), float(dcta_data.max())] if dcta_img is not None else None,
             'ncct_range': [float(ncct_data.min()), float(ncct_data.max())],
-            'voxel_dims': [float(dim) for dim in mcta_img.header.get_zooms()[:3]]
+            'voxel_dims': [float(dim) for dim in ncct_img.header.get_zooms()[:3]]
         }
 
         # 处理每个切片
@@ -2869,53 +2879,71 @@ def upload_files():
                 'error': 'nibabel 库不可用。请运行: pip install "numpy<2.0" nibabel'
             })
 
-        # 检查文件是否存在（动脉期CTA、静脉期CTA、延迟期CTA、NCCT）
-        required_keys = ['mcta_file', 'vcta_file', 'dcta_file', 'ncct_file']
-        if not all(key in request.files for key in required_keys):
-            return jsonify({'success': False, 'error': '请选择四个文件：动脉期CTA、静脉期CTA、延迟期CTA、NCCT'})
+        # NCCT 必选，其余期相可选
+        if 'ncct_file' not in request.files:
+            return jsonify({'success': False, 'error': '请至少选择NCCT文件'})
 
-        mcta_file = request.files['mcta_file']
-        vcta_file = request.files['vcta_file']
-        dcta_file = request.files['dcta_file']
+        def get_optional_file(key):
+            file_obj = request.files.get(key)
+            if not file_obj or file_obj.filename == '':
+                return None
+            return file_obj
+
+        mcta_file = get_optional_file('mcta_file')
+        vcta_file = get_optional_file('vcta_file')
+        dcta_file = get_optional_file('dcta_file')
         ncct_file = request.files['ncct_file']
 
-        if any(f.filename == '' for f in [mcta_file, vcta_file, dcta_file, ncct_file]):
-            return jsonify({'success': False, 'error': '请选择四个文件：动脉期CTA、静脉期CTA、延迟期CTA、NCCT'})
+        if ncct_file.filename == '':
+            return jsonify({'success': False, 'error': '请至少选择NCCT文件'})
 
         # 检查文件格式
         valid_extensions = ['.nii', '.nii.gz']
-        mcta_valid = any(mcta_file.filename.lower().endswith(ext) for ext in valid_extensions)
-        vcta_valid = any(vcta_file.filename.lower().endswith(ext) for ext in valid_extensions)
-        dcta_valid = any(dcta_file.filename.lower().endswith(ext) for ext in valid_extensions)
-        ncct_valid = any(ncct_file.filename.lower().endswith(ext) for ext in valid_extensions)
+        def is_valid_nifti(file_obj):
+            return any(file_obj.filename.lower().endswith(ext) for ext in valid_extensions)
 
-        if not (mcta_valid and vcta_valid and dcta_valid and ncct_valid):
+        if not is_valid_nifti(ncct_file):
             return jsonify({'success': False, 'error': '请上传NIfTI文件 (.nii 或 .nii.gz)'})
+        for optional_file in [mcta_file, vcta_file, dcta_file]:
+            if optional_file and not is_valid_nifti(optional_file):
+                return jsonify({'success': False, 'error': '请上传NIfTI文件 (.nii 或 .nii.gz)'})
 
-        print(
-            f"文件验证通过: {mcta_file.filename}, {vcta_file.filename}, {dcta_file.filename}, {ncct_file.filename}"
-        )
+        print("文件验证通过:")
+        print(f"NCCT: {ncct_file.filename}")
+        if mcta_file:
+            print(f"动脉期CTA: {mcta_file.filename}")
+        if vcta_file:
+            print(f"静脉期CTA: {vcta_file.filename}")
+        if dcta_file:
+            print(f"延迟期CTA: {dcta_file.filename}")
 
         # 生成唯一ID
         file_id = str(uuid.uuid4())[:8]
 
         # 保存上传的文件
-        mcta_extension = '.nii.gz' if mcta_file.filename.lower().endswith('.nii.gz') else '.nii'
-        vcta_extension = '.nii.gz' if vcta_file.filename.lower().endswith('.nii.gz') else '.nii'
-        dcta_extension = '.nii.gz' if dcta_file.filename.lower().endswith('.nii.gz') else '.nii'
         ncct_extension = '.nii.gz' if ncct_file.filename.lower().endswith('.nii.gz') else '.nii'
 
-        mcta_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{file_id}_mcta{mcta_extension}')
-        vcta_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{file_id}_vcta{vcta_extension}')
-        dcta_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{file_id}_dcta{dcta_extension}')
-        ncct_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{file_id}_ncct{ncct_extension}')
+        def save_optional_file(file_obj, suffix):
+            if not file_obj:
+                return None
+            extension = '.nii.gz' if file_obj.filename.lower().endswith('.nii.gz') else '.nii'
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{file_id}_{suffix}{extension}')
+            file_obj.save(file_path)
+            return file_path
 
-        mcta_file.save(mcta_path)
-        vcta_file.save(vcta_path)
-        dcta_file.save(dcta_path)
+        mcta_path = save_optional_file(mcta_file, 'mcta')
+        vcta_path = save_optional_file(vcta_file, 'vcta')
+        dcta_path = save_optional_file(dcta_file, 'dcta')
+        ncct_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{file_id}_ncct{ncct_extension}')
         ncct_file.save(ncct_path)
 
-        print(f"文件保存成功: {mcta_path}, {vcta_path}, {dcta_path}, {ncct_path}")
+        print(f"文件保存成功: NCCT={ncct_path}")
+        if mcta_path:
+            print(f"动脉期CTA: {mcta_path}")
+        if vcta_path:
+            print(f"静脉期CTA: {vcta_path}")
+        if dcta_path:
+            print(f"延迟期CTA: {dcta_path}")
 
         # 创建输出目录
         output_dir = os.path.join(app.config['PROCESSED_FOLDER'], file_id)
@@ -2955,9 +2983,9 @@ def upload_files():
             return jsonify({
                 'success': True,
                 'file_id': file_id,
-                'mcta_filename': mcta_file.filename,
-                'vcta_filename': vcta_file.filename,
-                'dcta_filename': dcta_file.filename,
+                'mcta_filename': mcta_file.filename if mcta_file else '',
+                'vcta_filename': vcta_file.filename if vcta_file else '',
+                'dcta_filename': dcta_file.filename if dcta_file else '',
                 'ncct_filename': ncct_file.filename,
                 'metadata': ensure_json_serializable(result['metadata']),
                 'rgb_files': ensure_json_serializable(result['rgb_files']),

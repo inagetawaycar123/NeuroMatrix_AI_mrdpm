@@ -66,7 +66,7 @@ function checkFilesReady() {
     const vctaFile = document.getElementById('vctaFile').files[0];
     const dctaFile = document.getElementById('dctaFile').files[0];
     const ncctFile = document.getElementById('ncctFile').files[0];
-    document.getElementById('uploadBtn').disabled = !(mctaFile && vctaFile && dctaFile && ncctFile);
+    document.getElementById('uploadBtn').disabled = !ncctFile;
 }
 
 function processFiles() {
@@ -75,12 +75,12 @@ function processFiles() {
     const vctaFile = document.getElementById('vctaFile').files[0];
     const dctaFile = document.getElementById('dctaFile').files[0];
     const ncctFile = document.getElementById('ncctFile').files[0];
-    if (!mctaFile || !vctaFile || !dctaFile || !ncctFile || !patientId) return;
+    if (!ncctFile || !patientId) return;
 
     const formData = new FormData();
-    formData.append('mcta_file', mctaFile);
-    formData.append('vcta_file', vctaFile);
-    formData.append('dcta_file', dctaFile);
+    if (mctaFile) formData.append('mcta_file', mctaFile);
+    if (vctaFile) formData.append('vcta_file', vctaFile);
+    if (dctaFile) formData.append('dcta_file', dctaFile);
     formData.append('ncct_file', ncctFile);
     formData.append('patient_id', patientId);
     const modelType = document.getElementById('modelSelect').value;
