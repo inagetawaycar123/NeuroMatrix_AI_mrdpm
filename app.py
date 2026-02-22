@@ -70,6 +70,61 @@ def update_analysis_result(patient_id: int, analysis_data: dict):
     except Exception as e:
         return (False, f"更新失败：{str(e)}")
 
+def append_modalities(patient_id: int, new_items):
+    """
+    修正版：向患者的 available_modalities (text[]) 中追加新项
+    逻辑：先查 -> 内存中合并去重 -> 再更新
+    """
+    if not SUPABASE_AVAILABLE:
+        return (False, "Supabase 不可用")
+
+    # 1. 标准化输入：允许传单个字符串或列表
+    items_to_add = new_items if isinstance(new_items, list) else [new_items]
+
+    # 2. 基础校验
+    if not all(isinstance(item, str) for item in items_to_add):
+        return (False, "错误：所有追加项必须是字符串类型")
+    if not isinstance(patient_id, int) or patient_id <= 0:
+        return (False, f"无效的患者 ID：{patient_id}")
+
+    try:
+        # ---------------------------------------------------------
+        # 第一步：先查询该患者当前的数据
+        # ---------------------------------------------------------
+        select_response = supabase.table('patient_info') \
+            .select('available_modalities') \
+            .eq('id', patient_id) \
+            .execute()
+
+        if not select_response.data or len(select_response.data) == 0:
+            return (False, f"未找到 ID 为 {patient_id} 的患者")
+
+        # 获取当前的列表（如果数据库里是 NULL，则视为空列表）
+        current_modalities = select_response.data[0].get('available_modalities') or []
+
+        # ---------------------------------------------------------
+        # 第二步：在 Python 中进行合并和去重
+        # ---------------------------------------------------------
+        # 合并两个列表并去重（同时保留原有顺序）
+        combined = current_modalities.copy()
+        for item in items_to_add:
+            if item not in combined:
+                combined.append(item)
+
+        # ---------------------------------------------------------
+        # 第三步：将合并后的列表全量更新回去
+        # ---------------------------------------------------------
+        update_response = supabase.table('patient_info') \
+            .update({'available_modalities': combined}) \
+            .eq('id', patient_id) \
+            .execute()
+
+        if update_response.data and len(update_response.data) > 0:
+            return (True, update_response.data[0])
+        return (True, {'available_modalities': combined})
+
+    except Exception as e:
+        return (False, f"操作异常：{str(e)}")
 
 def get_patient_by_id(patient_id: int):
     """
@@ -3001,6 +3056,30 @@ def upload_files():
             print(f"CBV功能图: {cbv_path}")
         if tmax_path:
             print(f"TMAX功能图: {tmax_path}")
+
+        # 根据前端上传的切片更新 available_modalities（仅原始上传，不含AI生成）
+        patient_id_str = request.form.get('patient_id')
+        patient_id = None
+        if patient_id_str:
+            try:
+                patient_id = int(patient_id_str)
+            except ValueError:
+                patient_id = None
+
+        if patient_id:
+            def append_if_uploaded(modality_key, file_path):
+                if file_path and os.path.exists(file_path):
+                    success, result = append_modalities(patient_id, modality_key)
+                    if not success:
+                        print(f"available_modalities更新失败({modality_key}): {result}")
+
+            append_if_uploaded('ncct', ncct_path)
+            append_if_uploaded('mcta', mcta_path)
+            append_if_uploaded('vcta', vcta_path)
+            append_if_uploaded('dcta', dcta_path)
+            append_if_uploaded('cbf', cbf_path)
+            append_if_uploaded('cbv', cbv_path)
+            append_if_uploaded('tmax', tmax_path)
 
         # 创建输出目录
         output_dir = os.path.join(app.config['PROCESSED_FOLDER'], file_id)
