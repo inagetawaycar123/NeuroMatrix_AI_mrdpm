@@ -16,6 +16,21 @@
                     <button class="file-select" id="ncctBtn" onclick="document.getElementById('ncctFile').click()">选择文件（必选）...</button>
                 </div>
                 <div class="file-input-row">
+                    <label class="file-label">MCTP-CBF:</label>
+                    <input type="file" id="cbfFile" class="file-input" accept=".nii,.nii.gz">
+                    <button class="file-select" id="cbfBtn" onclick="document.getElementById('cbfFile').click()">选择文件（可选）...</button>
+                </div>
+                <div class="file-input-row">
+                    <label class="file-label">MCTP-CBV:</label>
+                    <input type="file" id="cbvFile" class="file-input" accept=".nii,.nii.gz">
+                    <button class="file-select" id="cbvBtn" onclick="document.getElementById('cbvFile').click()">选择文件（可选）...</button>
+                </div>
+                <div class="file-input-row">
+                    <label class="file-label">MCTP-Tmax:</label>
+                    <input type="file" id="tmaxFile" class="file-input" accept=".nii,.nii.gz">
+                    <button class="file-select" id="tmaxBtn" onclick="document.getElementById('tmaxFile').click()">选择文件（可选）...</button>
+                </div>
+                <div class="file-input-row">
                     <label class="file-label">动脉期CTA:</label>
                     <input type="file" id="mctaFile" class="file-input" accept=".nii,.nii.gz">
                     <button class="file-select" id="mctaBtn" onclick="document.getElementById('mctaFile').click()">选择文件（可选）...</button>
@@ -41,6 +56,7 @@
                 <div class="upload-info">
                     支持格式: NIfTI (.nii, .nii.gz)<br>
                     文件大小: 最大 100MB<br>
+                    可选上传: CBF、CBV、Tmax（MCTP功能图像），如上传则直接显示，无需AI分析<br>
                     系统将自动生成: RGB合成、脑部掩码、AI灌注图(CBF/CBV/Tmax)
                 </div>
             </div>

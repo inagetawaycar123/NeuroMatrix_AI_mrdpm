@@ -2705,6 +2705,7 @@ def process_rgb_synthesis(mcta_path, vcta_path, dcta_path, ncct_path, output_dir
         }
 
 
+
 # 在应用启动时初始化
 def initialize_app():
     """应用初始化函数 - 多模型版本"""
@@ -2845,10 +2846,54 @@ def normalize_slice(slice_data):
         if upper_bound - lower_bound < 1e-6:
             return np.zeros_like(slice_data)
 
+    # 裁剪异常值并缩放到 0-1
     data_clipped = np.clip(slice_data, lower_bound, upper_bound)
     data_normalized = (data_clipped - lower_bound) / (upper_bound - lower_bound)
 
     return np.clip(data_normalized, 0, 1)
+
+
+def generate_modality_slices(nifti_path, output_dir, suffix):
+    """
+    将单一模态NIfTI生成PNG切片并返回URL列表
+    """
+    if not nifti_path:
+        return [], [], 0
+    try:
+        # 读取 NIfTI 并统一到 3D 体数据
+        img = nib.load(nifti_path)
+        data = img.get_fdata()
+        if data.ndim == 4:
+            data = data[:, :, :, 0]
+        elif data.ndim == 2:
+            data = data[:, :, np.newaxis]
+
+        # 计算切片数量与文件ID
+        num_slices = data.shape[2] if data.ndim == 3 else 1
+        file_id = os.path.basename(output_dir)
+        urls = []
+        npy_urls = []
+        for slice_idx in range(num_slices):
+            # 提取单张切片并进行归一化
+            slice_data = data[:, :, slice_idx] if data.ndim == 3 else data
+            normalized = normalize_slice(slice_data)
+            # 生成 PNG 预览图
+            img_8bit = (normalized * 255).astype(np.uint8)
+            slice_prefix = f'slice_{slice_idx:03d}'
+            filename = f'{slice_prefix}_{suffix}.png'
+            save_path = os.path.join(output_dir, filename)
+            Image.fromarray(img_8bit).save(save_path)
+            urls.append(f'/get_image/{file_id}/{filename}')
+            # 保存归一化后的 NPY 文件（带 _output 后缀）
+            npy_filename = f'{slice_prefix}_{suffix}_output.npy'
+            npy_path = os.path.join(output_dir, npy_filename)
+            np.save(npy_path, normalized.astype(np.float32))
+            npy_urls.append(f'/get_file/{file_id}/{npy_filename}')
+        return urls, npy_urls, num_slices
+    except Exception as e:
+        print(f"生成{suffix}切片失败: {e}")
+        traceback.print_exc()
+        return [], [], 0
 
 
 
@@ -2893,6 +2938,9 @@ def upload_files():
         vcta_file = get_optional_file('vcta_file')
         dcta_file = get_optional_file('dcta_file')
         ncct_file = request.files['ncct_file']
+        cbf_file = get_optional_file('cbf_file')
+        cbv_file = get_optional_file('cbv_file')
+        tmax_file = get_optional_file('tmax_file')
 
         if ncct_file.filename == '':
             return jsonify({'success': False, 'error': '请至少选择NCCT文件'})
@@ -2904,7 +2952,7 @@ def upload_files():
 
         if not is_valid_nifti(ncct_file):
             return jsonify({'success': False, 'error': '请上传NIfTI文件 (.nii 或 .nii.gz)'})
-        for optional_file in [mcta_file, vcta_file, dcta_file]:
+        for optional_file in [mcta_file, vcta_file, dcta_file, cbf_file, cbv_file, tmax_file]:
             if optional_file and not is_valid_nifti(optional_file):
                 return jsonify({'success': False, 'error': '请上传NIfTI文件 (.nii 或 .nii.gz)'})
 
@@ -2934,6 +2982,9 @@ def upload_files():
         mcta_path = save_optional_file(mcta_file, 'mcta')
         vcta_path = save_optional_file(vcta_file, 'vcta')
         dcta_path = save_optional_file(dcta_file, 'dcta')
+        cbf_path = save_optional_file(cbf_file, 'cbf')
+        cbv_path = save_optional_file(cbv_file, 'cbv')
+        tmax_path = save_optional_file(tmax_file, 'tmax')
         ncct_path = os.path.join(app.config['UPLOAD_FOLDER'], f'{file_id}_ncct{ncct_extension}')
         ncct_file.save(ncct_path)
 
@@ -2944,59 +2995,148 @@ def upload_files():
             print(f"静脉期CTA: {vcta_path}")
         if dcta_path:
             print(f"延迟期CTA: {dcta_path}")
+        if cbf_path:
+            print(f"CBF功能图: {cbf_path}")
+        if cbv_path:
+            print(f"CBV功能图: {cbv_path}")
+        if tmax_path:
+            print(f"TMAX功能图: {tmax_path}")
 
         # 创建输出目录
         output_dir = os.path.join(app.config['PROCESSED_FOLDER'], file_id)
         os.makedirs(output_dir, exist_ok=True)
 
+        # 检查是否上传了全部MCTP功能图像
+        skip_ai = False
+        if request.form.get('skip_ai') == 'true' or (cbf_path and cbv_path and tmax_path):
+            skip_ai = True
+        print(f"skip_ai: {skip_ai}")
+
         # 获取模型类型参数，默认使用mrdpm
         selected_model = request.form.get('model_type', 'mrdpm')
-        # 直接使用用户选择的模型，不再进行映射转换
         model_type = selected_model
         print(f"用户选择的模型: {selected_model}, 实际使用的模型: {model_type}")
 
-        # 处理RGB合成（现在包含多模型AI推理）
-        # 使用所有四个期相CTA文件进行处理
-        print("开始处理RGB合成和多模型AI推理...")
-        result = process_rgb_synthesis(mcta_path, vcta_path, dcta_path, ncct_path, output_dir, model_type)
+        # 如果skip_ai为True，则直接生成上传图像的PNG切片，不做AI推理
+        if skip_ai:
+            print("跳过AI分析，生成上传图像切片PNG")
 
-        if result['success']:
-            print("RGB合成和多模型AI推理处理成功")
+            modality_paths = {
+                'ncct': ncct_path,
+                'mcta': mcta_path,
+                'vcta': vcta_path,
+                'dcta': dcta_path,
+                'cbf': cbf_path,
+                'cbv': cbv_path,
+                'tmax': tmax_path
+            }
 
-            # 确保所有数据都是JSON可序列化的
-            def ensure_json_serializable(obj):
-                if isinstance(obj, dict):
-                    return {k: ensure_json_serializable(v) for k, v in obj.items()}
-                elif isinstance(obj, list):
-                    return [ensure_json_serializable(v) for v in obj]
-                elif isinstance(obj, np.integer):
-                    return int(obj)
-                elif isinstance(obj, np.floating):
-                    return float(obj)
-                elif isinstance(obj, np.bool_):
-                    return bool(obj)
-                elif isinstance(obj, np.ndarray):
-                    return obj.tolist()
-                else:
-                    return obj
+            modality_urls = {}
+            modality_npy_urls = {}
+            modality_counts = {}
+            for key, path in modality_paths.items():
+                urls, npy_urls, count = generate_modality_slices(path, output_dir, key)
+                modality_urls[key] = urls
+                modality_npy_urls[key] = npy_urls
+                modality_counts[key] = count
+
+            total_slices = max([c for c in modality_counts.values() if c], default=0)
+
+            rgb_files = []
+            for slice_idx in range(total_slices):
+                slice_result = {
+                    'slice_index': slice_idx,
+                    'rgb_image': '',
+                    'mcta_image': modality_urls['mcta'][slice_idx] if slice_idx < len(modality_urls['mcta']) else '',
+                    'vcta_url': modality_urls['vcta'][slice_idx] if slice_idx < len(modality_urls['vcta']) else '',
+                    'dcta_url': modality_urls['dcta'][slice_idx] if slice_idx < len(modality_urls['dcta']) else '',
+                    'ncct_image': modality_urls['ncct'][slice_idx] if slice_idx < len(modality_urls['ncct']) else '',
+                    'npy_url': modality_npy_urls['ncct'][slice_idx] if slice_idx < len(modality_npy_urls['ncct']) else '',
+                    'mask_image': '',
+                    'mask_npy_url': '',
+                    'overlay_url': '',
+                    'coverage': 0,
+                    'method': 'skip_ai'
+                }
+
+                for model_key in MODEL_CONFIGS.keys():
+                    slice_result.update({
+                        f'has_{model_key}': False,
+                        f'{model_key}_image': '',
+                        f'{model_key}_npy_url': ''
+                    })
+
+                if slice_idx < len(modality_urls['cbf']):
+                    slice_result['has_cbf'] = True
+                    slice_result['cbf_image'] = modality_urls['cbf'][slice_idx]
+                    slice_result['cbf_npy_url'] = modality_npy_urls['cbf'][slice_idx] if slice_idx < len(modality_npy_urls['cbf']) else ''
+                if slice_idx < len(modality_urls['cbv']):
+                    slice_result['has_cbv'] = True
+                    slice_result['cbv_image'] = modality_urls['cbv'][slice_idx]
+                    slice_result['cbv_npy_url'] = modality_npy_urls['cbv'][slice_idx] if slice_idx < len(modality_npy_urls['cbv']) else ''
+                if slice_idx < len(modality_urls['tmax']):
+                    slice_result['has_tmax'] = True
+                    slice_result['tmax_image'] = modality_urls['tmax'][slice_idx]
+                    slice_result['tmax_npy_url'] = modality_npy_urls['tmax'][slice_idx] if slice_idx < len(modality_npy_urls['tmax']) else ''
+
+                slice_result['has_ai'] = False
+                rgb_files.append(slice_result)
 
             return jsonify({
                 'success': True,
                 'file_id': file_id,
-                'mcta_filename': mcta_file.filename if mcta_file else '',
-                'vcta_filename': vcta_file.filename if vcta_file else '',
-                'dcta_filename': dcta_file.filename if dcta_file else '',
+                'cbf_filename': cbf_file.filename if cbf_file else '',
+                'cbv_filename': cbv_file.filename if cbv_file else '',
+                'tmax_filename': tmax_file.filename if tmax_file else '',
                 'ncct_filename': ncct_file.filename,
-                'metadata': ensure_json_serializable(result['metadata']),
-                'rgb_files': ensure_json_serializable(result['rgb_files']),
-                'total_slices': result['total_slices'],
-                'has_ai': result['has_ai'],
-                'available_models': result['available_models'],
-                'model_configs': result['model_configs']
+                'metadata': {},
+                'rgb_files': rgb_files,
+                'total_slices': int(total_slices),
+                'has_ai': False,
+                'available_models': [],
+                'model_configs': MODEL_CONFIGS
             })
         else:
-            print(f"RGB合成处理失败: {result['error']}")
-            return jsonify({'success': False, 'error': result['error']})
+            # 处理RGB合成（现在包含多模型AI推理）
+            print("开始处理RGB合成和多模型AI推理...")
+            result = process_rgb_synthesis(mcta_path, vcta_path, dcta_path, ncct_path, output_dir, model_type)
+
+            if result['success']:
+                print("RGB合成和多模型AI推理处理成功")
+
+                def ensure_json_serializable(obj):
+                    if isinstance(obj, dict):
+                        return {k: ensure_json_serializable(v) for k, v in obj.items()}
+                    elif isinstance(obj, list):
+                        return [ensure_json_serializable(v) for v in obj]
+                    elif isinstance(obj, np.integer):
+                        return int(obj)
+                    elif isinstance(obj, np.floating):
+                        return float(obj)
+                    elif isinstance(obj, np.bool_):
+                        return bool(obj)
+                    elif isinstance(obj, np.ndarray):
+                        return obj.tolist()
+                    else:
+                        return obj
+
+                return jsonify({
+                    'success': True,
+                    'file_id': file_id,
+                    'mcta_filename': mcta_file.filename if mcta_file else '',
+                    'vcta_filename': vcta_file.filename if vcta_file else '',
+                    'dcta_filename': dcta_file.filename if dcta_file else '',
+                    'ncct_filename': ncct_file.filename,
+                    'metadata': ensure_json_serializable(result['metadata']),
+                    'rgb_files': ensure_json_serializable(result['rgb_files']),
+                    'total_slices': result['total_slices'],
+                    'has_ai': result['has_ai'],
+                    'available_models': result['available_models'],
+                    'model_configs': result['model_configs']
+                })
+            else:
+                print(f"RGB合成处理失败: {result['error']}")
+                return jsonify({'success': False, 'error': result['error']})
 
     except Exception as e:
         print(f"上传处理异常: {e}")

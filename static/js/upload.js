@@ -19,6 +19,9 @@ document.addEventListener('DOMContentLoaded', function() {
     const vctaInput = document.getElementById('vctaFile');
     const dctaInput = document.getElementById('dctaFile');
     const ncctInput = document.getElementById('ncctFile');
+    const cbfInput = document.getElementById('cbfFile');
+    const cbvInput = document.getElementById('cbvFile');
+    const tmaxInput = document.getElementById('tmaxFile');
 
     mctaInput.addEventListener('change', function(e) {
         if (e.target.files.length > 0) {
@@ -59,6 +62,34 @@ document.addEventListener('DOMContentLoaded', function() {
             checkFilesReady();
         }
     });
+
+    cbfInput.addEventListener('change', function(e) {
+        if (e.target.files.length > 0) {
+            const cbfFile = e.target.files[0];
+            const btn = document.getElementById('cbfBtn');
+            btn.textContent = cbfFile.name;
+            btn.classList.add('selected');
+            checkFilesReady();
+        }
+    });
+    cbvInput.addEventListener('change', function(e) {
+        if (e.target.files.length > 0) {
+            const cbvFile = e.target.files[0];
+            const btn = document.getElementById('cbvBtn');
+            btn.textContent = cbvFile.name;
+            btn.classList.add('selected');
+            checkFilesReady();
+        }
+    });
+    tmaxInput.addEventListener('change', function(e) {
+        if (e.target.files.length > 0) {
+            const tmaxFile = e.target.files[0];
+            const btn = document.getElementById('tmaxBtn');
+            btn.textContent = tmaxFile.name;
+            btn.classList.add('selected');
+            checkFilesReady();
+        }
+    });
 });
 
 function checkFilesReady() {
@@ -66,6 +97,9 @@ function checkFilesReady() {
     const vctaFile = document.getElementById('vctaFile').files[0];
     const dctaFile = document.getElementById('dctaFile').files[0];
     const ncctFile = document.getElementById('ncctFile').files[0];
+    const cbfFile = document.getElementById('cbfFile').files[0];
+    const cbvFile = document.getElementById('cbvFile').files[0];
+    const tmaxFile = document.getElementById('tmaxFile').files[0];
     document.getElementById('uploadBtn').disabled = !ncctFile;
 }
 
@@ -75,6 +109,9 @@ function processFiles() {
     const vctaFile = document.getElementById('vctaFile').files[0];
     const dctaFile = document.getElementById('dctaFile').files[0];
     const ncctFile = document.getElementById('ncctFile').files[0];
+    const cbfFile = document.getElementById('cbfFile').files[0];
+    const cbvFile = document.getElementById('cbvFile').files[0];
+    const tmaxFile = document.getElementById('tmaxFile').files[0];
     if (!ncctFile || !patientId) return;
 
     const formData = new FormData();
@@ -82,9 +119,17 @@ function processFiles() {
     if (vctaFile) formData.append('vcta_file', vctaFile);
     if (dctaFile) formData.append('dcta_file', dctaFile);
     formData.append('ncct_file', ncctFile);
+    if (cbfFile) formData.append('cbf_file', cbfFile);
+    if (cbvFile) formData.append('cbv_file', cbvFile);
+    if (tmaxFile) formData.append('tmax_file', tmaxFile);
     formData.append('patient_id', patientId);
     const modelType = document.getElementById('modelSelect').value;
     formData.append('model_type', modelType);
+
+    // 如果三者均上传，则标记跳过AI分析
+    if (cbfFile && cbvFile && tmaxFile) {
+        formData.append('skip_ai', 'true');
+    }
 
     showLoading(true, '正在上传文件...');
     fetch('/upload', { method: 'POST', body: formData })
