@@ -141,7 +141,8 @@ function processFiles() {
                     rgb_files: data.rgb_files,
                     total_slices: data.total_slices,
                     has_ai: data.has_ai || false,
-                    available_models: data.available_models || []
+                    available_models: data.available_models || [],
+                    skip_ai: data.skip_ai || false
                 });
                 window.location.href = '/viewer?file_id=' + data.file_id;
             } else {

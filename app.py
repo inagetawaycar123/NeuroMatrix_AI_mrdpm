@@ -2624,7 +2624,13 @@ def process_rgb_synthesis(mcta_path, vcta_path, dcta_path, ncct_path, output_dir
                 ncct_slice = ncct_data
 
             # 生成RGB合成图像和NPY数据
-            rgb_result = generate_rgb_slices(mcta_slice, vcta_slice, dcta_slice, ncct_slice, output_dir, slice_idx)
+            rgb_result = generate_rgb_slices(
+                mcta_slice, vcta_slice, dcta_slice, ncct_slice,
+                output_dir, slice_idx,
+                mcta_present=(mcta_img is not None),
+                vcta_present=(vcta_img is not None),
+                dcta_present=(dcta_img is not None)
+            )
             if not rgb_result['success']:
                 print(f"⚠ 切片 {slice_idx} RGB合成失败，跳过")
                 continue
@@ -2822,7 +2828,8 @@ def download_ai(model_key, file_id, slice_index):
 
 
 # 其余函数保持不变...
-def generate_rgb_slices(mcta_slice, vcta_slice, dcta_slice, ncct_slice, output_dir, slice_idx):
+def generate_rgb_slices(mcta_slice, vcta_slice, dcta_slice, ncct_slice, output_dir, slice_idx,
+                        mcta_present=True, vcta_present=True, dcta_present=True):
     """
     生成RGB合成图像和单独通道图像
     """
@@ -2850,15 +2857,28 @@ def generate_rgb_slices(mcta_slice, vcta_slice, dcta_slice, ncct_slice, output_d
         rgb_path = os.path.join(output_dir, f'{slice_prefix}_rgb.png')
         Image.fromarray(rgb_8bit).save(rgb_path)
 
-        # 保存单独通道图像
+        # 保存单独通道图像，仅当对应模态为真实上传（非零矩阵占位）时才保存该通道文件
         mcta_path = os.path.join(output_dir, f'{slice_prefix}_mcta.png')
         vcta_path = os.path.join(output_dir, f'{slice_prefix}_vcta.png')
         dcta_path = os.path.join(output_dir, f'{slice_prefix}_dcta.png')
         ncct_path = os.path.join(output_dir, f'{slice_prefix}_ncct.png')
-        
-        Image.fromarray(mcta_8bit).save(mcta_path)
-        Image.fromarray(vcta_8bit).save(vcta_path)
-        Image.fromarray(dcta_8bit).save(dcta_path)
+
+        if mcta_present:
+            Image.fromarray(mcta_8bit).save(mcta_path)
+        else:
+            mcta_path = ''
+
+        if vcta_present:
+            Image.fromarray(vcta_8bit).save(vcta_path)
+        else:
+            vcta_path = ''
+
+        if dcta_present:
+            Image.fromarray(dcta_8bit).save(dcta_path)
+        else:
+            dcta_path = ''
+
+        # NCCT 总是保存
         Image.fromarray(ncct_8bit).save(ncct_path)
 
         # 保存NPY数据 - 直接保存RGB数组，而不是字典
@@ -2871,9 +2891,9 @@ def generate_rgb_slices(mcta_slice, vcta_slice, dcta_slice, ncct_slice, output_d
         return {
             'success': True,
             'rgb_url': f'/get_image/{file_id}/{slice_prefix}_rgb.png',
-            'mcta_url': f'/get_image/{file_id}/{slice_prefix}_mcta.png',
-            'vcta_url': f'/get_image/{file_id}/{slice_prefix}_vcta.png',
-            'dcta_url': f'/get_image/{file_id}/{slice_prefix}_dcta.png',
+            'mcta_url': f'/get_image/{file_id}/{slice_prefix}_mcta.png' if mcta_present else '',
+            'vcta_url': f'/get_image/{file_id}/{slice_prefix}_vcta.png' if vcta_present else '',
+            'dcta_url': f'/get_image/{file_id}/{slice_prefix}_dcta.png' if dcta_present else '',
             'ncct_url': f'/get_image/{file_id}/{slice_prefix}_ncct.png',
             'npy_url': f'/get_file/{file_id}/{slice_prefix}_data.npy',
             'rgb_data': rgb_data
@@ -3173,7 +3193,8 @@ def upload_files():
                 'total_slices': int(total_slices),
                 'has_ai': False,
                 'available_models': [],
-                'model_configs': MODEL_CONFIGS
+                'model_configs': MODEL_CONFIGS,
+                'skip_ai': skip_ai
             })
         else:
             # 处理RGB合成（现在包含多模型AI推理）
@@ -3211,7 +3232,8 @@ def upload_files():
                     'total_slices': result['total_slices'],
                     'has_ai': result['has_ai'],
                     'available_models': result['available_models'],
-                    'model_configs': result['model_configs']
+                    'model_configs': result['model_configs'],
+                    'skip_ai': skip_ai
                 })
             else:
                 print(f"RGB合成处理失败: {result['error']}")

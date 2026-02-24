@@ -88,7 +88,127 @@ function initializeViewer(data) {
         contrastController.enableDragAdjust('cta-venous');
         contrastController.enableDragAdjust('cta-delayed');
     }
+    // 根据 skip_ai 动态修改 CBF/CBV/Tmax 标签
+    if (typeof data.skip_ai !== 'undefined') {
+        const labelMap = {
+            cbf: document.querySelector('#cell-cbf .cell-label'),
+            cbv: document.querySelector('#cell-cbv .cell-label'),
+            tmax: document.querySelector('#cell-tmax .cell-label')
+        };
+        const suffix = data.skip_ai ? '（真实图）' : '（推测图）';
+        Object.keys(labelMap).forEach(key => {
+            if (labelMap[key]) {
+                labelMap[key].textContent = labelMap[key].textContent.replace(/（.*图）$/, '') + suffix;
+            }
+        });
+    }
+
+    // 动态隐藏没有文件的grid-cell卡片
+    // 只在首次初始化时做一次（以第一个切片为准）
+    if (data.rgb_files && data.rgb_files.length > 0) {
+        const firstSlice = data.rgb_files[0];
+        const cellMap = {
+            ncct: 'cell-ncct',
+            mcta: 'cell-cta',
+            vcta: 'cell-cta-venous',
+            dcta: 'cell-cta-delayed',
+            cbf: 'cell-cbf',
+            cbv: 'cell-cbv',
+            tmax: 'cell-tmax'
+            // stroke 不再自动隐藏
+        };
+        Object.keys(cellMap).forEach(key => {
+            let imgUrl = '';
+            if (key === 'ncct') imgUrl = firstSlice.ncct_image;
+            else if (key === 'mcta') imgUrl = firstSlice.mcta_image;
+            else if (key === 'vcta') imgUrl = firstSlice.vcta_url;
+            else if (key === 'dcta') imgUrl = firstSlice.dcta_url;
+            else if (key === 'cbf') imgUrl = firstSlice.cbf_image;
+            else if (key === 'cbv') imgUrl = firstSlice.cbv_image;
+            else if (key === 'tmax') imgUrl = firstSlice.tmax_image;
+            if (!imgUrl) {
+                const cell = document.getElementById(cellMap[key]);
+                if (cell) cell.style.display = 'none';
+            }
+        });
+    }
+
+    // 根据当前可见卡片数量优化网格布局
+    optimizeGridLayout();
+    // 如果尚未有分析结果，显示 stroke 占位提示
+    if (!analysisResults || !analysisResults.visualizations || !analysisResults.visualizations.combined) {
+        setStrokePlaceholder('未完成分析');
+    }
     loadSlice(0);
+}
+
+function setStrokePlaceholder(text) {
+    const img = document.getElementById('img-stroke');
+    const status = document.getElementById('status-stroke');
+    if (!img) return;
+
+    try {
+        const w = 480; const h = 320;
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        // 背景
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, w, h);
+        // 边框
+        ctx.strokeStyle = '#000000'; ctx.lineWidth = 4;
+        ctx.strokeRect(0, 0, w, h);
+        // 文本
+        ctx.fillStyle = '#f3f4f6';
+        ctx.font = '20px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text, w/2, h/2);
+
+        img.src = canvas.toDataURL('image/png');
+        // 标记为占位图，避免被全局的 rotate(-90deg) 样式旋转
+        img.classList.add('placeholder-image');
+        if (status) {
+            status.textContent = '未';
+            status.className = 'cell-status';
+            status.style.display = 'block';
+        }
+    } catch (e) {
+        console.error('设置 stroke 占位图失败:', e);
+    }
+}
+
+function optimizeGridLayout() {
+    const grid = document.querySelector('.image-grid');
+    if (!grid) return;
+
+    const allCells = Array.from(grid.querySelectorAll('.grid-cell'));
+    const visibleCells = allCells.filter(c => {
+        // consider element hidden if display === 'none' or has hidden attribute
+        const style = window.getComputedStyle(c);
+        return style.display !== 'none' && style.visibility !== 'hidden';
+    });
+
+    const count = visibleCells.length;
+    if (count <= 0) return;
+
+    let cols = 1;
+    if (count <= 3) {
+        // 1-3 个图片：一行展示
+        cols = count;
+    } else if (count <= 8) {
+        // 4-8 个图片：两行展示，列数为向上取整(count / 2)
+        cols = Math.ceil(count / 2);
+    } else {
+        // 超过8个：最多 4 列
+        cols = 4;
+    }
+
+    cols = Math.max(1, Math.min(cols, 4));
+    grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+
+    // 可选：根据列数调整行高，让单元格更接近正方形
+    // 这里使用 auto 行高，CSS 中的 .grid-image 已设置为适配容器
 }
 
 function initializeHemisphereButtons() {
@@ -359,11 +479,19 @@ function updateStrokeImage() {
     if (!analysisResults) return;
     const vis = analysisResults.visualizations;
     if (vis) {
-        if (vis.penumbra && vis.penumbra[currentSlice]) document.getElementById('img-penumbra').src = vis.penumbra[currentSlice];
-        if (vis.core && vis.core[currentSlice]) document.getElementById('img-core').src = vis.core[currentSlice];
+        if (vis.penumbra && vis.penumbra[currentSlice]) {
+            const ip = document.getElementById('img-penumbra');
+            if (ip) { ip.classList.remove('placeholder-image'); ip.src = vis.penumbra[currentSlice]; }
+        }
+        if (vis.core && vis.core[currentSlice]) {
+            const ic = document.getElementById('img-core');
+            if (ic) { ic.classList.remove('placeholder-image'); ic.src = vis.core[currentSlice]; }
+        }
         if (vis.combined && vis.combined[currentSlice]) {
-            document.getElementById('img-combined').src = vis.combined[currentSlice];
-            document.getElementById('img-stroke').src = vis.combined[currentSlice];
+            const icomb = document.getElementById('img-combined');
+            const istroke = document.getElementById('img-stroke');
+            if (icomb) { icomb.classList.remove('placeholder-image'); icomb.src = vis.combined[currentSlice]; }
+            if (istroke) { istroke.classList.remove('placeholder-image'); istroke.src = vis.combined[currentSlice]; }
             document.getElementById('status-stroke').textContent = '✓';
             document.getElementById('status-stroke').className = 'cell-status status-ready';
             document.getElementById('status-stroke').style.display = 'block';
