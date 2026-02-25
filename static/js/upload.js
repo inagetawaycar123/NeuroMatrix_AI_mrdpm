@@ -125,6 +125,9 @@ function processFiles() {
     formData.append('patient_id', patientId);
     const modelType = document.getElementById('modelSelect').value;
     formData.append('model_type', modelType);
+    // 添加偏侧选择到表单，后端将保存到 patient_imaging.hemisphere
+    const hemisphere = document.getElementById('sideSelect') ? document.getElementById('sideSelect').value : 'both';
+    formData.append('hemisphere', hemisphere);
 
     // 如果三者均上传，则标记跳过AI分析
     if (cbfFile && cbvFile && tmaxFile) {

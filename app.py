@@ -70,61 +70,6 @@ def update_analysis_result(patient_id: int, analysis_data: dict):
     except Exception as e:
         return (False, f"更新失败：{str(e)}")
 
-def append_modalities(patient_id: int, new_items):
-    """
-    修正版：向患者的 available_modalities (text[]) 中追加新项
-    逻辑：先查 -> 内存中合并去重 -> 再更新
-    """
-    if not SUPABASE_AVAILABLE:
-        return (False, "Supabase 不可用")
-
-    # 1. 标准化输入：允许传单个字符串或列表
-    items_to_add = new_items if isinstance(new_items, list) else [new_items]
-
-    # 2. 基础校验
-    if not all(isinstance(item, str) for item in items_to_add):
-        return (False, "错误：所有追加项必须是字符串类型")
-    if not isinstance(patient_id, int) or patient_id <= 0:
-        return (False, f"无效的患者 ID：{patient_id}")
-
-    try:
-        # ---------------------------------------------------------
-        # 第一步：先查询该患者当前的数据
-        # ---------------------------------------------------------
-        select_response = supabase.table('patient_info') \
-            .select('available_modalities') \
-            .eq('id', patient_id) \
-            .execute()
-
-        if not select_response.data or len(select_response.data) == 0:
-            return (False, f"未找到 ID 为 {patient_id} 的患者")
-
-        # 获取当前的列表（如果数据库里是 NULL，则视为空列表）
-        current_modalities = select_response.data[0].get('available_modalities') or []
-
-        # ---------------------------------------------------------
-        # 第二步：在 Python 中进行合并和去重
-        # ---------------------------------------------------------
-        # 合并两个列表并去重（同时保留原有顺序）
-        combined = current_modalities.copy()
-        for item in items_to_add:
-            if item not in combined:
-                combined.append(item)
-
-        # ---------------------------------------------------------
-        # 第三步：将合并后的列表全量更新回去
-        # ---------------------------------------------------------
-        update_response = supabase.table('patient_info') \
-            .update({'available_modalities': combined}) \
-            .eq('id', patient_id) \
-            .execute()
-
-        if update_response.data and len(update_response.data) > 0:
-            return (True, update_response.data[0])
-        return (True, {'available_modalities': combined})
-
-    except Exception as e:
-        return (False, f"操作异常：{str(e)}")
 
 def get_patient_by_id(patient_id: int):
     """
@@ -143,6 +88,53 @@ def get_patient_by_id(patient_id: int):
     except Exception as e:
         print(f"获取患者信息失败: {e}")
         return None
+
+
+def append_modalities_to_imaging(patient_id: int, case_id: str, new_items):
+    """
+    将模态信息追加到 patient_imaging.processed_image_urls->available_modalities
+    逻辑：先查 case_id -> 在 JSON['available_modalities'] 中合并去重 -> 若不存在记录则插入新记录
+    返回 (True, data) 或 (False, error)
+    """
+    if not SUPABASE_AVAILABLE:
+        return (False, "Supabase 不可用")
+
+    items_to_add = new_items if isinstance(new_items, list) else [new_items]
+    if not all(isinstance(x, str) for x in items_to_add):
+        return (False, "所有追加项必须为字符串")
+    if not case_id or not isinstance(case_id, str):
+        return (False, f"无效的 case_id: {case_id}")
+
+    try:
+        # 优先写入 text[] 字段 available_modalities（如果表中存在该列）
+        try:
+            sel = supabase.table('patient_imaging').select('available_modalities').eq('case_id', case_id).execute()
+            if sel.data and len(sel.data) > 0:
+                current_modalities = sel.data[0].get('available_modalities') or []
+                combined = current_modalities.copy()
+                for it in items_to_add:
+                    if it not in combined:
+                        combined.append(it)
+                upd = supabase.table('patient_imaging').update({'available_modalities': combined}).eq('case_id', case_id).execute()
+                if upd.data and len(upd.data) > 0:
+                    return (True, upd.data[0])
+                return (True, {'available_modalities': combined})
+            else:
+                # 插入新记录，available_modalities 为 text[] 类型
+                payload = {
+                    'patient_id': patient_id,
+                    'case_id': case_id,
+                    'available_modalities': items_to_add
+                }
+                ins = supabase.table('patient_imaging').insert([payload]).execute()
+                if ins.data and len(ins.data) > 0:
+                    return (True, ins.data[0])
+                return (False, '插入 patient_imaging 未返回数据')
+        
+        except Exception as e:
+            return (False, f"操作异常: {str(e)}")
+    except Exception as e:
+        return (False, f"操作异常: {str(e)}")
 
 
 # ==================== 百川 M3 API 配置 ====================
@@ -1337,6 +1329,24 @@ def api_get_patient(patient_id):
             "status": "error",
             "message": str(e)
         }), 500
+
+
+@app.route('/api/get_imaging/<case_id>')
+def api_get_imaging(case_id):
+    """返回 patient_imaging 中与 case_id 关联的记录，主要用于获取 hemisphere 等字段"""
+    try:
+        if SUPABASE_AVAILABLE:
+            resp = supabase.table('patient_imaging').select('*').eq('case_id', case_id).execute()
+            if resp.data and len(resp.data) > 0:
+                return jsonify({'success': True, 'data': resp.data[0]})
+            else:
+                return jsonify({'success': False, 'error': 'not found'}), 404
+        else:
+            return jsonify({'success': False, 'error': 'supabase not available'}), 500
+    except Exception as e:
+        print(f"api_get_imaging error: {e}")
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/save_report', methods=['POST'])
 def api_save_report():
@@ -3089,9 +3099,10 @@ def upload_files():
         if patient_id:
             def append_if_uploaded(modality_key, file_path):
                 if file_path and os.path.exists(file_path):
-                    success, result = append_modalities(patient_id, modality_key)
+                    # 将模态信息写入 patient_imaging 表（替代原来写入 patient_info.available_modalities）
+                    success, result = append_modalities_to_imaging(patient_id, file_id, modality_key)
                     if not success:
-                        print(f"available_modalities更新失败({modality_key}): {result}")
+                        print(f"patient_imaging available_modalities 更新失败({modality_key}): {result}")
 
             append_if_uploaded('ncct', ncct_path)
             append_if_uploaded('mcta', mcta_path)
@@ -3101,14 +3112,44 @@ def upload_files():
             append_if_uploaded('cbv', cbv_path)
             append_if_uploaded('tmax', tmax_path)
 
+        # 将偏侧信息写入 patient_imaging 表（根据 patient_id + case_id）
+        try:
+            hemisphere = request.form.get('hemisphere', 'both')
+            if SUPABASE_AVAILABLE and patient_id:
+                try:
+                    # 先尝试更新已存在记录
+                    update_resp = supabase.table('patient_imaging') \
+                        .update({'hemisphere': hemisphere}) \
+                        .eq('patient_id', patient_id) \
+                        .eq('case_id', file_id) \
+                        .execute()
+                    if update_resp.data and len(update_resp.data) > 0:
+                        print(f"patient_imaging 已更新偏侧: patient_id={patient_id}, case_id={file_id}, hemisphere={hemisphere}")
+                    else:
+                        # 若未更新到任何行，则插入新记录
+                        insert_payload = {
+                            'patient_id': patient_id,
+                            'case_id': file_id,
+                            'hemisphere': hemisphere
+                        }
+                        insert_resp = supabase.table('patient_imaging').insert([insert_payload]).execute()
+                        if insert_resp.data and len(insert_resp.data) > 0:
+                            print(f"patient_imaging 已插入新记录: {insert_resp.data[0]}")
+                        else:
+                            print(f"警告: 向 patient_imaging 插入记录未返回数据: {getattr(insert_resp, 'error', None)}")
+                except Exception as e:
+                    print(f"写入 patient_imaging 失败: {e}")
+        except Exception as e:
+            print(f"处理 hemisphere 时出错: {e}")
+
         # 创建输出目录
         output_dir = os.path.join(app.config['PROCESSED_FOLDER'], file_id)
         os.makedirs(output_dir, exist_ok=True)
 
-        # 检查是否上传了全部MCTP功能图像
-        skip_ai = False
-        if request.form.get('skip_ai') == 'true' or (cbf_path and cbv_path and tmax_path):
-            skip_ai = True
+        # 检查是否上传了全部CTA功能图像
+        skip_ai = True
+        if request.form.get('skip_ai') == 'false' or (mcta_path and vcta_path and dcta_path):
+            skip_ai = False
         print(f"skip_ai: {skip_ai}")
 
         # 获取模型类型参数，默认使用mrdpm

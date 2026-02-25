@@ -48,8 +48,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     setPatientInfoVisible(true);
     updatePatientHeader(currentPatientId);
-
-    initializeHemisphereButtons();
+    // hemisphere 由后端提供，避免前端手动选择
     initializeContrastController();
 
     initializeViewer(viewerData);
@@ -62,6 +61,23 @@ function initializeViewer(data) {
     hasAI = data.has_ai || false;
     availableModels = data.available_models || [];
     currentSlice = 0;
+
+    // 从后端数据库获取 hemisphere（patient_imaging 表）
+    currentHemisphere = 'both';
+    if (currentFileId) {
+        fetch(`/api/get_imaging/${currentFileId}`)
+            .then(res => res.json())
+            .then(resp => {
+                if (resp && resp.success && resp.data && resp.data.hemisphere) {
+                    currentHemisphere = resp.data.hemisphere;
+                    console.log('从后端获取到 hemisphere:', currentHemisphere);
+                } else {
+                    console.warn('未从后端找到 hemisphere，使用默认 both');
+                }
+            }).catch(err => {
+                console.warn('获取 hemisphere 失败，使用默认 both:', err);
+            });
+    }
 
     // 保存当前文件ID供报告页面使用（localStorage 跨标签页共享）
     sessionStorage.setItem('current_file_id', currentFileId);
@@ -211,15 +227,7 @@ function optimizeGridLayout() {
     // 这里使用 auto 行高，CSS 中的 .grid-image 已设置为适配容器
 }
 
-function initializeHemisphereButtons() {
-    document.querySelectorAll('.hemisphere-btn').forEach(btn => {
-        btn.addEventListener('click', function() {
-            document.querySelectorAll('.hemisphere-btn').forEach(b => b.classList.remove('active'));
-            this.classList.add('active');
-            currentHemisphere = this.dataset.hemisphere;
-        });
-    });
-}
+// 偏侧选择已移除，后端提供 hemisphere 字段
 
 function initializeContrastController() {
     contrastController = new ContrastController({

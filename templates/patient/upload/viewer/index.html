@@ -92,12 +92,8 @@
         <button class="close-btn" onclick="toggleAnalysisPanel()">×</button>
     </div>
     <div class="panel-section">
-        <div class="section-title">偏侧选择</div>
-        <div class="hemisphere-btns">
-            <button class="hemisphere-btn" data-hemisphere="right">影像右侧</button>
-            <button class="hemisphere-btn" data-hemisphere="left">影像左侧</button>
-            <button class="hemisphere-btn active" data-hemisphere="both">影像双侧</button>
-        </div>
+        <!-- 偏侧由后端 patient_imaging.hemisphere 提供，移除前端选择 -->
+        <p style="font-size:12px;color:#666;margin-bottom:8px;">偏侧将使用影像中记录的值（由后端提供）。</p>
         <button class="analyze-btn" onclick="startStrokeAnalysis()">开始分析</button>
     </div>
     <div class="panel-section analysis-results" id="analysisResults">
