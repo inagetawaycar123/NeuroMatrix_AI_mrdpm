@@ -3148,7 +3148,7 @@ def upload_files():
 
         # 检查是否上传了全部CTA功能图像
         skip_ai = True
-        if request.form.get('skip_ai') == 'false' or (mcta_path and vcta_path and dcta_path):
+        if request.form.get('skip_ai') == 'false' or ((mcta_path and vcta_path and dcta_path) and not (cbf_path or cbv_path or tmax_path)):
             skip_ai = False
         print(f"skip_ai: {skip_ai}")
 

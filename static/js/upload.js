@@ -54,7 +54,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (cbfRow) cbfRow.style.display = 'none';
             if (cbvRow) cbvRow.style.display = 'none';
             if (tmaxRow) tmaxRow.style.display = 'none';
-            if (sideRow) sideRow.style.display = 'none';
+            if (sideRow) sideRow.style.display = '';
         } else if (mode === 'ncct_single_cta') {
             // show only selected CTA phase
             const phase = ctaPhaseSelect ? ctaPhaseSelect.value : 'mcta';
@@ -64,7 +64,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (cbfRow) cbfRow.style.display = 'none';
             if (cbvRow) cbvRow.style.display = 'none';
             if (tmaxRow) tmaxRow.style.display = 'none';
-            if (sideRow) sideRow.style.display = 'none';
+            if (sideRow) sideRow.style.display = '';
         } else if (mode === 'ncct_3phase_cta') {
             if (mctaRow) mctaRow.style.display = '';
             if (vctaRow) vctaRow.style.display = '';
