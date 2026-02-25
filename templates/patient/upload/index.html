@@ -11,6 +11,23 @@
             <div class="upload-box">
                 <div class="upload-title">上传医学影像文件</div>
                 <div class="file-input-row">
+                    <label class="file-label">上传模式:</label>
+                    <select id="uploadModeSelect" class="form-select" style="width: auto; flex: 1;">
+                        <option value="ncct">1. NCCT-only</option>
+                        <option value="ncct_single_cta">2. NCCT + single-phase CTA</option>
+                        <option value="ncct_3phase_cta">3. NCCT + 三期CTA</option>
+                        <option value="ncct_3phase_cta_ctp">4. NCCT + 三期CTA + CTP</option>
+                    </select>
+                </div>
+                <div class="file-input-row" id="ctaPhaseRow" style="display:none;">
+                    <label class="file-label">选择 CTA 期数:</label>
+                    <select id="ctaPhaseSelect" class="form-select" style="width: auto; flex: 1;">
+                        <option value="mcta">动脉期 (第1期)</option>
+                        <option value="vcta">静脉期 (第2期)</option>
+                        <option value="dcta">延迟期 (第3期)</option>
+                    </select>
+                </div>
+                <div class="file-input-row">
                     <label class="file-label">NCCT文件:</label>
                     <input type="file" id="ncctFile" class="file-input" accept=".nii,.nii.gz">
                     <button class="file-select" id="ncctBtn" onclick="document.getElementById('ncctFile').click()">选择文件（必选）...</button>
