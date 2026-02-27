@@ -833,15 +833,19 @@ def generate_pseudocolor_for_slice(grayscale_path, mask_path, output_dir, slice_
         # 检查文件是否存在
         if not os.path.exists(grayscale_path):
             return {'success': False, 'error': '灰度图不存在'}
-        if not os.path.exists(mask_path):
-            return {'success': False, 'error': '掩码文件不存在'}
-
+        
         # 加载图像数据
         grayscale_img = Image.open(grayscale_path).convert('L')
         grayscale_data = np.array(grayscale_img) / 255.0
 
-        mask_img = Image.open(mask_path).convert('L')
-        mask_data = np.array(mask_img) / 255.0
+        # 尝试加载掩码文件，如果不存在则创建默认掩码
+        if os.path.exists(mask_path):
+            mask_img = Image.open(mask_path).convert('L')
+            mask_data = np.array(mask_img) / 255.0
+        else:
+            # 创建默认掩码（全白，即整个图像都应用伪彩）
+            print(f"掩码文件不存在，创建默认掩码: {mask_path}")
+            mask_data = np.ones_like(grayscale_data)
 
         # 生成医学标准伪彩图
         pseudocolor_data = create_medical_pseudocolor(grayscale_data, mask_data)
@@ -887,8 +891,15 @@ def generate_all_pseudocolors(output_dir, file_id, slice_idx):
         for model_key in MODEL_CONFIGS.keys():
             # 构建文件路径
             slice_prefix = f'slice_{slice_idx:03d}'
+            # 首先尝试查找AI生成的输出文件
             grayscale_path = os.path.join(output_dir, f'{slice_prefix}_{model_key}_output.png')
+            # 如果AI输出文件不存在，尝试查找原始CTP图像文件
+            if not os.path.exists(grayscale_path):
+                grayscale_path = os.path.join(output_dir, f'{slice_prefix}_{model_key}.png')
             mask_path = os.path.join(output_dir, f'{slice_prefix}_mask.png')
+            # 如果标准掩码文件不存在，尝试查找其他可能的掩码文件
+            if not os.path.exists(mask_path):
+                mask_path = os.path.join(output_dir, f'{slice_prefix}_ncct_mask.png')
 
             # 检查文件是否存在
             if os.path.exists(grayscale_path) and os.path.exists(mask_path):
@@ -1229,6 +1240,61 @@ def api_generate_report(patient_id):
             "message": str(e)
         }), 500
 
+
+@app.route('/api/auto_analyze_stroke', methods=['POST'])
+def api_auto_analyze_stroke():
+    """
+    自动触发脑卒中分析的API端点
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({
+                "status": "error",
+                "message": "请求数据为空"
+            }), 400
+        
+        # 获取必要参数
+        case_id = data.get('case_id')
+        patient_id = data.get('patient_id')
+        
+        if not case_id:
+            return jsonify({
+                "status": "error",
+                "message": "缺少必要参数: case_id"
+            }), 400
+        
+        print(f"收到自动脑卒中分析请求 - case_id: {case_id}, patient_id: {patient_id}")
+        
+        # 导入auto_analyze_stroke函数
+        from stroke_analysis import auto_analyze_stroke
+        
+        # 执行自动分析
+        analysis_result = auto_analyze_stroke(case_id, patient_id)
+        
+        if analysis_result.get('success'):
+            return jsonify({
+                "status": "success",
+                "message": "自动脑卒中分析成功",
+                "case_id": case_id,
+                "analysis_result": analysis_result
+            })
+        else:
+            return jsonify({
+                "status": "error",
+                "message": analysis_result.get('error', '分析失败'),
+                "case_id": case_id
+            }), 500
+            
+    except Exception as e:
+        print(f"自动脑卒中分析API错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
 
 @app.route('/api/generate_report_from_data', methods=['POST'])
 def api_generate_report_from_data():
@@ -3222,6 +3288,18 @@ def upload_files():
                 slice_result['has_ai'] = False
                 rgb_files.append(slice_result)
 
+            # 自动触发脑卒中分析（如果满足条件）
+            if patient_id:
+                print("尝试自动触发脑卒中分析...")
+                try:
+                    from stroke_analysis import auto_analyze_stroke
+                    analysis_result = auto_analyze_stroke(file_id, patient_id)
+                    print(f"自动脑卒中分析结果: {'成功' if analysis_result.get('success') else '失败'}")
+                    if not analysis_result.get('success'):
+                        print(f"自动分析失败原因: {analysis_result.get('error')}")
+                except Exception as e:
+                    print(f"自动触发脑卒中分析失败: {e}")
+
             return jsonify({
                 'success': True,
                 'file_id': file_id,
@@ -3244,6 +3322,18 @@ def upload_files():
 
             if result['success']:
                 print("RGB合成和多模型AI推理处理成功")
+
+                # 自动触发脑卒中分析（如果满足条件）
+                if patient_id:
+                    print("尝试自动触发脑卒中分析...")
+                    try:
+                        from stroke_analysis import auto_analyze_stroke
+                        analysis_result = auto_analyze_stroke(file_id, patient_id)
+                        print(f"自动脑卒中分析结果: {'成功' if analysis_result.get('success') else '失败'}")
+                        if not analysis_result.get('success'):
+                            print(f"自动分析失败原因: {analysis_result.get('error')}")
+                    except Exception as e:
+                        print(f"自动触发脑卒中分析失败: {e}")
 
                 def ensure_json_serializable(obj):
                     if isinstance(obj, dict):

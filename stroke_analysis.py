@@ -371,6 +371,175 @@ class StrokeAnalysis:
 # 全局实例
 stroke_analyzer = StrokeAnalysis()
 
+def check_modality_combination(available_modalities):
+    """
+    检查模态组合是否为需要进行脑卒中分析的有效组合
+    
+    Args:
+        available_modalities: 模态列表，PostgreSQL text[]类型或Python列表
+    
+    Returns:
+        tuple: (is_valid, combination_type, use_real_ctp)
+        - is_valid: 是否为有效组合
+        - combination_type: 组合类型，'NCCT+mCTA'或'NCCT+mCTA+CTP'
+        - use_real_ctp: 是否使用真实CTP
+    """
+    try:
+        # 确保available_modalities是列表
+        if isinstance(available_modalities, str):
+            # 处理可能的字符串格式，如"{NCCT,mCTA}"
+            import re
+            modalities = re.findall(r'\w+', available_modalities)
+        else:
+            modalities = list(available_modalities)
+        
+        # 转换为小写进行比较
+        modalities_lower = [mod.lower() for mod in modalities]
+        
+        # 检查是否包含NCCT和mCTA
+        has_ncct = 'ncct' in modalities_lower
+        has_mcta = 'mcta' in modalities_lower
+        has_ctp = 'ctp' in modalities_lower
+        
+        if has_ncct and has_mcta:
+            if has_ctp:
+                # NCCT+mCTA+CTP组合，使用真实CTP
+                return True, 'NCCT+mCTA+CTP', True
+            else:
+                # NCCT+mCTA组合，使用MRDPM生成的CTP
+                return True, 'NCCT+mCTA', False
+        
+        # 其他组合不进行脑卒中分析
+        return False, None, False
+        
+    except Exception as e:
+        print(f"模态组合判断失败: {e}")
+        return False, None, False
+
+def parse_hemisphere(hemisphere):
+    """
+    解析hemisphere字段，获取标准化的病灶偏侧信息
+    
+    Args:
+        hemisphere: 偏侧信息，字符串
+    
+    Returns:
+        str: 标准化的偏侧信息，'left'、'right'或'both'
+    """
+    try:
+        if not hemisphere:
+            return 'both'  # 默认值
+        
+        # 转换为小写进行比较
+        hemisphere_lower = hemisphere.lower()
+        
+        if hemisphere_lower in ['left', 'right', 'both']:
+            return hemisphere_lower
+        
+        # 处理可能的变体
+        if '左' in hemisphere:
+            return 'left'
+        elif '右' in hemisphere:
+            return 'right'
+        else:
+            return 'both'
+            
+    except Exception as e:
+        print(f"偏侧信息解析失败: {e}")
+        return 'both'  # 出错时返回默认值
+
+def auto_analyze_stroke(case_id, patient_id=None):
+    """
+    自动触发脑卒中分析的核心逻辑
+    
+    Args:
+        case_id: 病例ID，对应file_id
+        patient_id: 患者ID（可选）
+    
+    Returns:
+        dict: 分析结果
+    """
+    try:
+        print(f"开始自动脑卒中分析 - case_id: {case_id}, patient_id: {patient_id}")
+        
+        # 初始化Supabase客户端
+        try:
+            from supabase import create_client, Client
+            SUPABASE_URL = "https://ppyexzqdbsnwqfyugfvc.supabase.co"
+            SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBweWV4enFkYnNud3FmeXVnZnZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1Nzc3ODAsImV4cCI6MjA4MzE1Mzc4MH0.EjDH3eufPKBF8MJiHM6SVzPQlsWvGqhLQPKKhVG5Ffo"
+            supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+            print("✓ Supabase 客户端初始化成功")
+        except Exception as e:
+            print(f"✗ Supabase 初始化失败: {e}")
+            return {'success': False, 'error': '数据库连接失败'}
+        
+        # 从数据库获取模态组合和偏侧信息
+        try:
+            # 查询patient_imaging表
+            response = supabase.table('patient_imaging')
+            if patient_id:
+                response = response.select('available_modalities, hemisphere').eq('patient_id', patient_id).eq('case_id', case_id).execute()
+            else:
+                response = response.select('available_modalities, hemisphere').eq('case_id', case_id).execute()
+            
+            if not response.data or len(response.data) == 0:
+                print(f"✗ 未找到病例信息: case_id={case_id}")
+                return {'success': False, 'error': '未找到病例信息'}
+            
+            imaging_data = response.data[0]
+            available_modalities = imaging_data.get('available_modalities', [])
+            hemisphere = imaging_data.get('hemisphere', 'both')
+            
+            print(f"✓ 获取病例信息成功")
+            print(f"  模态组合: {available_modalities}")
+            print(f"  偏侧信息: {hemisphere}")
+            
+        except Exception as e:
+            print(f"✗ 数据库查询失败: {e}")
+            return {'success': False, 'error': '数据库查询失败'}
+        
+        # 检查模态组合
+        is_valid, combination_type, use_real_ctp = check_modality_combination(available_modalities)
+        
+        if not is_valid:
+            print(f"✗ 无效的模态组合: {available_modalities}")
+            return {'success': False, 'error': '无效的模态组合，不需要进行脑卒中分析'}
+        
+        print(f"✓ 有效的模态组合: {combination_type}")
+        print(f"  使用真实CTP: {use_real_ctp}")
+        
+        # 解析偏侧信息
+        parsed_hemisphere = parse_hemisphere(hemisphere)
+        print(f"✓ 解析偏侧信息: {parsed_hemisphere}")
+        
+        # 调用脑卒中分析函数
+        print("开始执行脑卒中分析...")
+        analysis_result = analyze_stroke_case(case_id, parsed_hemisphere)
+        
+        if analysis_result.get('success'):
+            print("✓ 脑卒中分析成功")
+            # 更新数据库中的分析结果
+            try:
+                update_data = {
+                    'analysis_result': analysis_result,
+                    'hemisphere': parsed_hemisphere
+                }
+                update_response = supabase.table('patient_imaging').update(update_data).eq('case_id', case_id).execute()
+                print("✓ 数据库更新成功")
+            except Exception as e:
+                print(f"⚠ 数据库更新失败: {e}")
+                # 不影响分析结果返回
+        else:
+            print(f"✗ 脑卒中分析失败: {analysis_result.get('error')}")
+        
+        return analysis_result
+        
+    except Exception as e:
+        print(f"自动脑卒中分析失败: {e}")
+        import traceback
+        traceback.print_exc()
+        return {'success': False, 'error': str(e)}
+
 def analyze_stroke_case(file_id, hemisphere='both', output_base_dir=None):
     """分析脑卒中病例的主函数 - 改进的错误处理版本"""
     import time

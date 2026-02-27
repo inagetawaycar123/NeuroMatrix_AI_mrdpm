@@ -94,6 +94,19 @@ function initializeViewer(data) {
                 console.error('加载分析结果失败:', e);
             }
         }
+        
+        // 检查数据库中的分析状态（用于自动分析）
+        checkAnalysisStatus();
+    }
+
+    // 检测CTP灌注图数据是否存在
+    function hasCTPData() {
+        if (data.rgb_files && data.rgb_files.length > 0) {
+            const firstSlice = data.rgb_files[0];
+            // 检查是否存在CBF、CBV、Tmax图像数据
+            return !!(firstSlice.cbf_image || firstSlice.cbv_image || firstSlice.tmax_image);
+        }
+        return false;
     }
 
     document.getElementById('sliceSlider').max = totalSlices - 1;
@@ -155,6 +168,13 @@ function initializeViewer(data) {
     if (!analysisResults || !analysisResults.visualizations || !analysisResults.visualizations.combined) {
         setStrokePlaceholder('未完成分析');
     }
+
+    // 自动展示伪彩图（如果存在CTP灌注图数据）
+    if (hasCTPData() && !pseudocolorGenerated) {
+        console.log('检测到CTP灌注图数据，自动生成伪彩图');
+        togglePseudocolor();
+    }
+
     loadSlice(0);
 }
 
@@ -647,4 +667,30 @@ function manualGenerateAIReport() {
     
     // 本地也开始生成
     generateAIReport();
+}
+
+// 检查数据库中的分析状态（用于自动分析）
+function checkAnalysisStatus() {
+    if (!currentFileId) return;
+    
+    fetch(`/api/get_imaging/${currentFileId}`)
+        .then(res => res.json())
+        .then(resp => {
+            if (resp && resp.success && resp.data && resp.data.analysis_result) {
+                const dbAnalysis = resp.data.analysis_result;
+                if (dbAnalysis.success) {
+                    // 检查localStorage中是否已有分析结果
+                    const savedAnalysis = localStorage.getItem(`stroke_analysis_${currentFileId}`);
+                    if (!savedAnalysis) {
+                        // 如果localStorage中没有，但数据库中有，更新前端状态
+                        analysisResults = dbAnalysis;
+                        displayAnalysisResults();
+                        console.log('从数据库加载分析结果');
+                    }
+                }
+            }
+        })
+        .catch(err => {
+            console.warn('检查分析状态失败:', err);
+        });
 }
