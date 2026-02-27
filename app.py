@@ -804,10 +804,11 @@ def create_medical_pseudocolor(grayscale_data, mask_data):
         # 转换为RGB (去掉alpha通道)
         rgb_data = (colored_data[:, :, :3] * 255).astype(np.uint8)
 
-        # 关键步骤：只在掩码区域内显示伪彩色，背景设为纯黑色
+        # 关键步骤：只在掩码区域内显示伪彩色，背景保持原始灰度图像
+        grayscale_8bit = (grayscale_data * 255).astype(np.uint8)
         result = np.zeros_like(rgb_data)
         for i in range(3):
-            result[:, :, i] = np.where(mask_binary, rgb_data[:, :, i], 0)
+            result[:, :, i] = np.where(mask_binary, rgb_data[:, :, i], grayscale_8bit)
 
         print(f"伪彩图生成完成，输出范围: [{result.min()}, {result.max()}]")
         return result
@@ -815,11 +816,11 @@ def create_medical_pseudocolor(grayscale_data, mask_data):
     except Exception as e:
         print(f"创建伪彩图失败: {e}")
         traceback.print_exc()
-        # 返回默认的灰度图作为后备，但确保背景为黑色
+        # 返回默认的灰度图作为后备，保持原始灰度图像
         grayscale_8bit = (grayscale_data * 255).astype(np.uint8)
         result = np.zeros((*grayscale_data.shape, 3), dtype=np.uint8)
         for i in range(3):
-            result[:, :, i] = np.where(mask_data > 0.5, grayscale_8bit, 0)
+            result[:, :, i] = np.where(mask_data > 0.5, grayscale_8bit, grayscale_8bit)
         return result
 
 
@@ -839,13 +840,35 @@ def generate_pseudocolor_for_slice(grayscale_path, mask_path, output_dir, slice_
         grayscale_data = np.array(grayscale_img) / 255.0
 
         # 尝试加载掩码文件，如果不存在则创建默认掩码
-        if os.path.exists(mask_path):
+        # 首先尝试标准掩码文件格式（slice_000_mask.png）
+        standard_mask_path = os.path.join(output_dir, f'slice_{slice_idx:03d}_mask.png')
+        if os.path.exists(standard_mask_path):
+            mask_img = Image.open(standard_mask_path).convert('L')
+            mask_data = np.array(mask_img) / 255.0
+            print(f"使用标准掩码文件: {standard_mask_path}")
+        elif os.path.exists(mask_path):
+            # 然后尝试传入的mask_path
             mask_img = Image.open(mask_path).convert('L')
             mask_data = np.array(mask_img) / 255.0
+            print(f"使用掩码文件: {mask_path}")
         else:
-            # 创建默认掩码（全白，即整个图像都应用伪彩）
-            print(f"掩码文件不存在，创建默认掩码: {mask_path}")
-            mask_data = np.ones_like(grayscale_data)
+            # 创建默认掩码（使用更合理的阈值，而不是全白）
+            print(f"掩码文件不存在，创建默认掩码: {standard_mask_path}")
+            # 使用Otsu阈值创建掩码，而不是全白
+            from skimage import filters
+            try:
+                otsu_threshold = filters.threshold_otsu(grayscale_data)
+                mask_data = grayscale_data > otsu_threshold
+            except:
+                # 如果Otsu失败，使用基于百分比的阈值
+                low_thresh = np.percentile(grayscale_data, 10)
+                high_thresh = np.percentile(grayscale_data, 90)
+                mask_data = np.logical_and(grayscale_data > low_thresh, grayscale_data < high_thresh)
+            # 保存默认掩码到文件系统（使用标准命名格式）
+            mask_8bit = (mask_data * 255).astype(np.uint8)
+            os.makedirs(os.path.dirname(standard_mask_path), exist_ok=True)
+            Image.fromarray(mask_8bit).save(standard_mask_path)
+            print(f"默认掩码已保存: {standard_mask_path}")
 
         # 生成医学标准伪彩图
         pseudocolor_data = create_medical_pseudocolor(grayscale_data, mask_data)
@@ -901,8 +924,8 @@ def generate_all_pseudocolors(output_dir, file_id, slice_idx):
             if not os.path.exists(mask_path):
                 mask_path = os.path.join(output_dir, f'{slice_prefix}_ncct_mask.png')
 
-            # 检查文件是否存在
-            if os.path.exists(grayscale_path) and os.path.exists(mask_path):
+            # 检查灰度图文件是否存在
+            if os.path.exists(grayscale_path):
                 print(f"\n--- 为 {model_key.upper()} 生成医学标准伪彩图 ---")
                 result = generate_pseudocolor_for_slice(
                     grayscale_path, mask_path, output_dir, slice_idx, model_key
@@ -911,7 +934,7 @@ def generate_all_pseudocolors(output_dir, file_id, slice_idx):
                 if result['success']:
                     success_count += 1
             else:
-                error_msg = f"文件不存在: {grayscale_path if not os.path.exists(grayscale_path) else mask_path}"
+                error_msg = f"文件不存在: {grayscale_path}"
                 print(f"✗ {error_msg}")
                 pseudocolor_results[model_key] = {
                     'success': False,
@@ -970,12 +993,16 @@ def generate_all_pseudocolors_route(file_id):
             return jsonify({'success': False, 'error': '文件目录不存在'})
 
         # 查找所有切片
-        slice_files = [f for f in os.listdir(output_dir) if f.startswith('slice_') and f.endswith('_cbf_output.png')]
+        # 同时查找AI生成的文件和原始CTP文件
+        slice_files = []
+        for f in os.listdir(output_dir):
+            if f.startswith('slice_') and any(f.endswith(f'_{model_key}_output.png') or f.endswith(f'_{model_key}.png') for model_key in MODEL_CONFIGS.keys()):
+                slice_files.append(f)
         slice_indices = []
 
         for file in slice_files:
             try:
-                # 提取切片索引：slice_001_cbf_output.png -> 1
+                # 提取切片索引：slice_001_cbf_output.png 或 slice_001_cbf.png -> 1
                 index_str = file.split('_')[1]
                 slice_index = int(index_str)
                 slice_indices.append(slice_index)
@@ -3250,6 +3277,27 @@ def upload_files():
 
             rgb_files = []
             for slice_idx in range(total_slices):
+                # 为当前切片生成掩码
+                # 尝试加载NCCT图像数据用于掩码生成
+                ncct_slice_path = os.path.join(output_dir, f'slice_{slice_idx:03d}_ncct.png')
+                if os.path.exists(ncct_slice_path):
+                    from PIL import Image
+                    ncct_img = Image.open(ncct_slice_path).convert('RGB')
+                    rgb_data = np.array(ncct_img) / 255.0
+                    # 生成掩码
+                    mask_result = generate_mask_for_slice(rgb_data, output_dir, slice_idx)
+                    mask_image = mask_result.get('mask_url', '')
+                    mask_npy_url = mask_result.get('mask_npy_url', '')
+                    overlay_url = mask_result.get('overlay_url', '')
+                    coverage = mask_result.get('coverage', 0)
+                    method = mask_result.get('method', 'skip_ai')
+                else:
+                    mask_image = ''
+                    mask_npy_url = ''
+                    overlay_url = ''
+                    coverage = 0
+                    method = 'skip_ai'
+                
                 slice_result = {
                     'slice_index': slice_idx,
                     'rgb_image': '',
@@ -3258,11 +3306,11 @@ def upload_files():
                     'dcta_url': modality_urls['dcta'][slice_idx] if slice_idx < len(modality_urls['dcta']) else '',
                     'ncct_image': modality_urls['ncct'][slice_idx] if slice_idx < len(modality_urls['ncct']) else '',
                     'npy_url': modality_npy_urls['ncct'][slice_idx] if slice_idx < len(modality_npy_urls['ncct']) else '',
-                    'mask_image': '',
-                    'mask_npy_url': '',
-                    'overlay_url': '',
-                    'coverage': 0,
-                    'method': 'skip_ai'
+                    'mask_image': mask_image,
+                    'mask_npy_url': mask_npy_url,
+                    'overlay_url': overlay_url,
+                    'coverage': coverage,
+                    'method': method
                 }
 
                 for model_key in MODEL_CONFIGS.keys():

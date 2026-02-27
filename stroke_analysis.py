@@ -399,7 +399,8 @@ def check_modality_combination(available_modalities):
         # 检查是否包含NCCT和mCTA
         has_ncct = 'ncct' in modalities_lower
         has_mcta = 'mcta' in modalities_lower
-        has_ctp = 'ctp' in modalities_lower
+        # 检查是否包含CTP相关模态（cbf, cbv, tmax）
+        has_ctp = any(mod in modalities_lower for mod in ['cbf', 'cbv', 'tmax'])
         
         if has_ncct and has_mcta:
             if has_ctp:
