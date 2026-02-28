@@ -90,7 +90,7 @@ def get_patient_by_id(patient_id: int):
         return None
 
 
-def append_modalities_to_imaging(patient_id: int, case_id: str, new_items):
+def append_modalities_to_imaging(patient_id: int, case_id: str, new_items, hemisphere='both'):
     """
     将模态信息追加到 patient_imaging.processed_image_urls->available_modalities
     逻辑：先查 case_id -> 在 JSON['available_modalities'] 中合并去重 -> 若不存在记录则插入新记录
@@ -124,7 +124,8 @@ def append_modalities_to_imaging(patient_id: int, case_id: str, new_items):
                 payload = {
                     'patient_id': patient_id,
                     'case_id': case_id,
-                    'available_modalities': items_to_add
+                    'available_modalities': items_to_add,
+                    'hemisphere': hemisphere
                 }
                 ins = supabase.table('patient_imaging').insert([payload]).execute()
                 if ins.data and len(ins.data) > 0:
@@ -3189,25 +3190,9 @@ def upload_files():
             except ValueError:
                 patient_id = None
 
-        if patient_id:
-            def append_if_uploaded(modality_key, file_path):
-                if file_path and os.path.exists(file_path):
-                    # 将模态信息写入 patient_imaging 表（替代原来写入 patient_info.available_modalities）
-                    success, result = append_modalities_to_imaging(patient_id, file_id, modality_key)
-                    if not success:
-                        print(f"patient_imaging available_modalities 更新失败({modality_key}): {result}")
-
-            append_if_uploaded('ncct', ncct_path)
-            append_if_uploaded('mcta', mcta_path)
-            append_if_uploaded('vcta', vcta_path)
-            append_if_uploaded('dcta', dcta_path)
-            append_if_uploaded('cbf', cbf_path)
-            append_if_uploaded('cbv', cbv_path)
-            append_if_uploaded('tmax', tmax_path)
-
         # 将偏侧信息写入 patient_imaging 表（根据 patient_id + case_id）
+        hemisphere = request.form.get('hemisphere', 'both')
         try:
-            hemisphere = request.form.get('hemisphere', 'both')
             if SUPABASE_AVAILABLE and patient_id:
                 try:
                     # 先尝试更新已存在记录
@@ -3234,6 +3219,22 @@ def upload_files():
                     print(f"写入 patient_imaging 失败: {e}")
         except Exception as e:
             print(f"处理 hemisphere 时出错: {e}")
+
+        if patient_id:
+            def append_if_uploaded(modality_key, file_path):
+                if file_path and os.path.exists(file_path):
+                    # 将模态信息写入 patient_imaging 表（替代原来写入 patient_info.available_modalities）
+                    success, result = append_modalities_to_imaging(patient_id, file_id, modality_key, hemisphere)
+                    if not success:
+                        print(f"patient_imaging available_modalities 更新失败({modality_key}): {result}")
+
+            append_if_uploaded('ncct', ncct_path)
+            append_if_uploaded('mcta', mcta_path)
+            append_if_uploaded('vcta', vcta_path)
+            append_if_uploaded('dcta', dcta_path)
+            append_if_uploaded('cbf', cbf_path)
+            append_if_uploaded('cbv', cbv_path)
+            append_if_uploaded('tmax', tmax_path)
 
         # 创建输出目录
         output_dir = os.path.join(app.config['PROCESSED_FOLDER'], file_id)

@@ -215,7 +215,7 @@ function processFiles() {
         formData.append('cta_phase', ctaPhase);
     }
     // 添加偏侧选择到表单，后端将保存到 patient_imaging.hemisphere
-    const hemisphere = (uploadMode === 'ncct_3phase_cta' || uploadMode === 'ncct_3phase_cta_ctp') ? (document.getElementById('sideSelect') ? document.getElementById('sideSelect').value : 'both') : 'both';
+    const hemisphere = document.getElementById('sideSelect') ? document.getElementById('sideSelect').value : 'both';
     formData.append('hemisphere', hemisphere);
 
     // 如果三者均上传，则标记跳过AI分析
