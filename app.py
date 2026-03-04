@@ -1240,6 +1240,61 @@ def save_report_url():
         return response, 500
 
 
+@app.route('/api/reports', methods=['GET', 'OPTIONS'])
+def get_reports():
+    """
+    获取报告历史，支持筛选
+    """
+    # 处理 OPTIONS 请求（CORS 预检）
+    if request.method == 'OPTIONS':
+        response = Response()
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return response
+    
+    try:
+        # 获取查询参数
+        patient_id = request.args.get('patient_id')
+        patient_name = request.args.get('patient_name')
+        start_date = request.args.get('start_date')
+        end_date = request.args.get('end_date')
+        status = request.args.get('status')
+        report_type = request.args.get('report_type')
+        
+        print(f"===== 报告查询请求 =====")
+        print(f"Patient ID: {patient_id}")
+        print(f"Patient Name: {patient_name}")
+        print(f"Start Date: {start_date}")
+        print(f"End Date: {end_date}")
+        print(f"Status: {status}")
+        print(f"Report Type: {report_type}")
+        print(f"=====================")
+        
+        # 执行查询
+        response = supabase.table('reports').select('*').execute()
+        
+        # 返回结果
+        response = jsonify({
+            "status": "success",
+            "data": response.data,
+            "count": len(response.data)
+        })
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response
+        
+    except Exception as e:
+        print(f"查询报告失败：{e}")
+        import traceback
+        traceback.print_exc()
+        response = jsonify({
+            "status": "error",
+            "message": f"查询失败：{str(e)}"
+        })
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response, 500
+
+
 # ==================== 百川 M3 AI 报告生成 API ====================
 
 @app.route('/api/generate_report/<int:patient_id>', methods=['GET', 'POST'])
