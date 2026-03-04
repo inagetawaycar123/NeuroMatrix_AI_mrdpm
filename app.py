@@ -1157,6 +1157,89 @@ def api_update_analysis():
         }}), 500
 
 
+@app.route('/api/save-report-url', methods=['POST', 'OPTIONS'])
+def save_report_url():
+    """
+    保存报告 URL 到 patient_reports 表
+    """
+    from datetime import datetime
+    
+    # 处理 OPTIONS 请求（CORS 预检）
+    if request.method == 'OPTIONS':
+        response = Response()
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return response
+    
+    try:
+        data = request.get_json()
+        if not data:
+            response = jsonify({
+                "status": "error",
+                "message": "缺少请求数据"
+            })
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response, 400
+        
+        patient_id = data.get('patient_id')
+        report_url = data.get('report_url')
+        report_type = data.get('report_type', 'complex')
+        
+        if patient_id is None or not report_url:
+            response = jsonify({
+                "status": "error",
+                "message": "缺少必要参数"
+            })
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response, 400
+        
+        # 尝试保存到数据库
+        if SUPABASE_AVAILABLE:
+            try:
+                # 尝试插入记录
+                response = supabase.table('reports').insert({
+                    'patient_id': patient_id,
+                    'pdf_url': report_url,
+                    'report_type': report_type,
+                    'created_at': datetime.now().isoformat()
+                }).execute()
+                
+                response = jsonify({
+                    "status": "success",
+                    "message": "报告 URL 保存成功",
+                    "data": response.data
+                })
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                return response
+            except Exception as e:
+                print(f"保存报告 URL 失败：{e}")
+                response = jsonify({
+                    "status": "error",
+                    "message": f"保存失败：{str(e)}"
+                })
+                response.headers['Access-Control-Allow-Origin'] = '*'
+                return response, 500
+        else:
+            response = jsonify({
+                "status": "error",
+                "message": "Supabase 不可用"
+            })
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response, 503
+            
+    except Exception as e:
+        print(f"处理保存报告 URL 请求失败：{e}")
+        import traceback
+        traceback.print_exc()
+        response = jsonify({
+            "status": "error",
+            "message": f"处理失败：{str(e)}"
+        })
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response, 500
+
+
 # ==================== 百川 M3 AI 报告生成 API ====================
 
 @app.route('/api/generate_report/<int:patient_id>', methods=['GET', 'POST'])
@@ -3477,40 +3560,6 @@ def get_slice(file_id, slice_index, image_type):
         return jsonify({'error': str(e)}), 500
 
 
-if __name__ == '__main__':
-    print("🚀 启动Flask开发服务器...")
-
-    # 获取本机IP地址
-    import socket
-    try:
-        hostname = socket.gethostname()
-        local_ip = socket.gethostbyname(hostname)
-        print(f"🌐 本机IP地址: {local_ip}")
-        print(f"🔗 局域网访问地址: http://{local_ip}:8765")
-    except:
-        local_ip = '0.0.0.0'
-        print("⚠ 无法获取本机IP，使用默认配置")
-
-    print("📱 本地访问地址: http://127.0.0.1:8765")
-    print("🌍 服务器监听: 所有网络接口 (0.0.0.0:8765)")
-    print("⏹️ 按 Ctrl+C 停止服务器")
-    print("=" * 60)
-
-    try:
-        # 关键修改：使用明确的参数启动
-        app.run(
-            host='0.0.0.0',      # 监听所有网络接口
-            port=8765,           # 明确指定端口
-            debug=True,          # 调试模式
-            threaded=True,       # 多线程
-            use_reloader=False   # 关闭自动重载，避免重复初始化
-        )
-    except Exception as e:
-        print(f"❌ 服务器启动失败: {e}")
-        import traceback
-        traceback.print_exc()
-
-
 # ==================== 保存报告并生成 AI 诊断报告 ====================
 
 @app.route('/api/save_and_generate_report', methods=['POST'])
@@ -3562,3 +3611,364 @@ def api_save_and_generate_report():
             "status": "error",
             "message": str(e)
         }), 500
+
+
+@app.route('/api/generate-pdf', methods=['POST', 'OPTIONS'])
+def generate_pdf():
+    """
+    后端 PDF 生成接口 - 用于复杂场景
+    """
+    # 处理 OPTIONS 请求（CORS 预检）
+    if request.method == 'OPTIONS':
+        response = Response()
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['Access-Control-Allow-Methods'] = 'POST, OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+        return response
+    
+    try:
+        from weasyprint import HTML
+        import tempfile
+        import os
+        import re
+        from datetime import datetime
+        
+        # 获取请求数据
+        data = request.get_json()
+        if not data:
+            response = jsonify({
+                "status": "error",
+                "message": "缺少请求数据"
+            })
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response, 400
+        
+        report_content = data.get('report_content')
+        patient_id = data.get('patient_id')
+        patient_name = data.get('patient_name')
+        report_type = data.get('report_type', 'complex')  # 新增参数：报告类型
+        print(f"===== PDF Generation Request =====")
+        print(f"Patient ID: {patient_id}")
+        print(f"Patient Name: {patient_name}")
+        print(f"Report Type: {report_type}")
+        print(f"=================================")
+        
+        if patient_id is None:
+            response = jsonify({
+                "status": "error",
+                "message": "缺少必要参数"
+            })
+            response.headers['Access-Control-Allow-Origin'] = '*'
+            return response, 400
+        
+        # 如果 report_content 为空，提供默认内容
+        if not report_content:
+            report_content = "无报告内容"
+            print("使用默认报告内容")
+        
+        # 生成 HTML 内容
+        html_content = generate_pdf_html(report_content, patient_id, patient_name, report_type)
+        
+        # 创建临时文件
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as temp_pdf:
+            temp_pdf_path = temp_pdf.name
+        
+        # 生成 PDF
+        HTML(string=html_content).write_pdf(temp_pdf_path)
+        
+        # 读取 PDF 文件内容
+        with open(temp_pdf_path, 'rb') as f:
+            pdf_content = f.read()
+        
+        # 清理临时文件
+        os.unlink(temp_pdf_path)
+        
+        # 设置响应头
+        response = Response(pdf_content)
+        response.headers['Content-Type'] = 'application/pdf'
+        response.headers['Content-Disposition'] = 'attachment; filename=report_{}_{}.pdf'.format(patient_id, report_type)
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        response.headers['X-Report-Type'] = report_type  # 添加报告类型到响应头
+        
+        return response
+        
+    except Exception as e:
+        print(f"生成 PDF 失败：{e}")
+        import traceback
+        traceback.print_exc()
+        response = jsonify({
+            "status": "error",
+            "message": f"生成 PDF 失败：{str(e)}"
+        })
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response, 500
+
+
+def generate_pdf_html(report_content, patient_id, patient_name, report_type='complex'):
+    """生成 PDF 的 HTML 内容"""
+    import re
+    from datetime import datetime
+    
+    html = []
+    html.append("<!DOCTYPE html>")
+    html.append("<html>")
+    html.append("<head>")
+    html.append("    <meta charset=\"UTF-8\">")
+    html.append("    <title>脑卒中影像诊断报告</title>")
+    html.append("        <style>")
+    html.append("        @page { margin: 1.2cm; size: A4; }")
+    
+    # 基础样式
+    if report_type == 'complex':
+        html.append("        body { font-family: 'Arial Unicode MS', 'Microsoft YaHei', 'SimHei', sans-serif; font-size: 10pt; line-height: 1.5; color: #000; position: relative; }")
+        html.append("        .watermark { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); font-size: 48pt; font-weight: bold; color: rgba(0, 0, 0, 0.05); z-index: -1; }")
+        html.append("        .parameter-table { width: 100%; border-collapse: collapse; margin: 10px 0; border: 1px solid #000; }")
+        html.append("        .parameter-table th { background-color: #f0f0f0; border: 1px solid #000; padding: 8px; text-align: center; font-weight: bold; font-size: 9pt; }")
+        html.append("        .parameter-table td { border: 1px solid #000; padding: 6px; text-align: center; font-size: 9pt; }")
+        html.append("        .parameter-table tr:nth-child(even) { background-color: #f9f9f9; }")
+        html.append("        .electronic-signature { margin-top: 10px; font-size: 9pt; color: #666; }")
+    else:
+        html.append("        body { font-family: 'Arial Unicode MS', 'Microsoft YaHei', 'SimHei', sans-serif; font-size: 10pt; line-height: 1.5; color: #000; }")
+    
+    # 共享样式
+    html.append("        .header { text-align: center; border-bottom: 2px solid #000; padding-bottom: 8px; margin-bottom: 15px; }")
+    html.append("        .hospital-name { font-size: 14pt; font-weight: bold; margin-bottom: 3px; }")
+    html.append("        .report-title { font-size: 12pt; font-weight: bold; margin: 8px 0; }")
+    html.append("        .header-code { font-size: 10pt; font-weight: bold; text-align: right; margin-top: 3px; }")
+    html.append("        .patient-info-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; background-color: #f5f5f5; }")
+    html.append("        .patient-info-table td { padding: 6px; border: 1px solid #ddd; font-size: 9pt; }")
+    html.append("        .info-label { font-weight: bold; width: 60px; }")
+    html.append("        .divider { border-top: 1px solid #000; margin: 10px 0; }")
+    html.append("        .exam-name { font-size: 11pt; font-weight: bold; margin: 12px 0 8px 0; text-decoration: underline; }")
+    html.append("        .section { margin-bottom: 15px; }")
+    html.append("        .section-title { font-size: 11pt; font-weight: bold; margin-bottom: 8px; }")
+    html.append("        .section-content { text-align: justify; text-indent: 2em; font-size: 10pt; line-height: 1.5; }")
+    html.append("        .impression { margin-top: 20px; padding-top: 10px; border-top: 2px solid #000; }")
+    html.append("        .impression ol { padding-left: 20px; font-size: 10pt; margin: 0; line-height: 1.5; }")
+    html.append("        .impression li { margin-bottom: 6px; text-align: justify; }")
+    html.append("        .footer { margin-top: 20px; text-align: center; font-size: 8pt; color: #666; border-top: 1px solid #ddd; padding-top: 10px; }")
+    html.append("        .signature { margin-top: 20px; text-align: right; font-size: 10pt; }")
+    html.append("        .signature-line { margin-top: 15px; border-top: 1px solid #000; width: 150px; display: inline-block; }")
+    html.append("    </style>")
+    html.append("</head>")
+    html.append("<body>")
+    
+    # 水印（仅复杂报告）
+    if report_type == 'complex':
+        html.append("    <div class=\"watermark\">NEUROMATRIX AI</div>")
+    
+    html.append("    <div class=\"header\">")
+    html.append("        <div class=\"hospital-name\">医院名称</div>")
+    html.append("        <div class=\"report-title\">影像诊断报告</div>")
+    html.append("        <div class=\"header-code\">鄂 HR</div>")
+    html.append("    </div>")
+    html.append("    <table class=\"patient-info-table\">")
+    html.append("        <tr>")
+    html.append("            <td><span class=\"info-label\">姓名:</span>" + patient_name + "</td>")
+    html.append("            <td><span class=\"info-label\">性别:</span>男</td>")
+    html.append("            <td><span class=\"info-label\">年龄:</span>68 岁</td>")
+    html.append("            <td><span class=\"info-label\">CT 号:</span>" + str(patient_id) + "</td>")
+    html.append("        </tr>")
+    html.append("        <tr>")
+    html.append("            <td><span class=\"info-label\">科室:</span></td>")
+    html.append("            <td><span class=\"info-label\">床号:</span></td>")
+    html.append("            <td><span class=\"info-label\">急诊:</span>是</td>")
+    html.append("            <td><span class=\"info-label\">检查日期:</span>" + datetime.now().strftime('%Y-%m-%d %H:%M') + "</td>")
+    html.append("        </tr>")
+    html.append("    </table>")
+    html.append("    <div class=\"divider\"></div>")
+    html.append("    <div class=\"exam-name\">检查名称：颅脑灌注 CT</div>")
+    
+    # 解析报告内容
+    imaging_findings = ""
+    impression_content = ""
+    treatment_suggestions = ""
+    vascular_assessment = ""
+    
+    for line in report_content.split('· '):
+        if line:
+            parts = line.split('\n')
+            if len(parts) > 0:
+                title = parts[0]
+                content = '<br>'.join(parts[1:]) if len(parts) > 1 else ''
+                
+                if '影像学表现' in title or '影像表现' in title:
+                    imaging_findings = content
+                elif '诊断意见' in title or '印象' in title:
+                    impression_content = content
+                elif '治疗建议' in title or '建议' in title:
+                    treatment_suggestions = content
+                elif '血管评估' in title or '血管' in title:
+                    vascular_assessment = content
+    
+    if not imaging_findings:
+        imaging_findings = "常规准直，增强薄层扫描，层厚层间距 0.5mm，VR、CPR、MIP、MFR 重建。多时相增强后于扫描区域分别选取两侧额叶、颞叶、顶叶、基底节区及枕叶层面为感兴趣区。测量平均脑血流量（CBF）、平均血容量（CBV）、平均通过时间（MTT）及达峰时间（TTP）、延迟图像（DT）。"
+    
+    # 影像表现
+    html.append("    <div class=\"section\">")
+    html.append("        <div class=\"section-title\">影像表现：</div>")
+    html.append("        <div class=\"section-content\">")
+    html.append("            " + imaging_findings)
+    html.append("        </div>")
+    html.append("    </div>")
+    
+    # 血管评估
+    if vascular_assessment:
+        html.append("    <div class=\"section\">")
+        html.append("        <div class=\"section-title\">血管评估：</div>")
+        html.append("        <div class=\"section-content\">")
+        html.append("            " + vascular_assessment)
+        html.append("        </div>")
+        html.append("    </div>")
+    else:
+        html.append("    <div class=\"section\">")
+        html.append("        <div class=\"section-title\">血管评估：</div>")
+        html.append("        <div class=\"section-content\">")
+        html.append("            左侧大脑中动脉管腔狭窄，远端分支减少，侧支循环建立不良。")
+        html.append("        </div>")
+        html.append("    </div>")
+    
+    # 灌注参数表格（仅复杂报告）
+    if report_type == 'complex':
+        html.append("    <div class=\"section\">")
+        html.append("        <div class=\"section-title\">灌注参数：</div>")
+        html.append("        <table class=\"parameter-table\">")
+        html.append("            <tr>")
+        html.append("                <th>参数</th>")
+        html.append("                <th>患侧</th>")
+        html.append("                <th>健侧</th>")
+        html.append("                <th>参考范围</th>")
+        html.append("            </tr>")
+        html.append("            <tr>")
+        html.append("                <td>脑血流量 (CBF)</td>")
+        html.append("                <td>25 mL/100g/min</td>")
+        html.append("                <td>45 mL/100g/min</td>")
+        html.append("                <td>40-60 mL/100g/min</td>")
+        html.append("            </tr>")
+        html.append("            <tr>")
+        html.append("                <td>脑血容量 (CBV)</td>")
+        html.append("                <td>2.5 mL/100g</td>")
+        html.append("                <td>4.0 mL/100g</td>")
+        html.append("                <td>3.0-5.0 mL/100g</td>")
+        html.append("            </tr>")
+        html.append("            <tr>")
+        html.append("                <td>达峰时间 (Tmax)</td>")
+        html.append("                <td>8.5 s</td>")
+        html.append("                <td>3.2 s</td>")
+        html.append("                <td>&lt; 4.5 s</td>")
+        html.append("            </tr>")
+        html.append("            <tr>")
+        html.append("                <td>平均通过时间 (MTT)</td>")
+        html.append("                <td>6.8 s</td>")
+        html.append("                <td>3.8 s</td>")
+        html.append("                <td>3.0-4.5 s</td>")
+        html.append("            </tr>")
+        html.append("        </table>")
+        html.append("    </div>")
+    
+    # 诊断意见
+    html.append("    <div class=\"impression\">")
+    html.append("        <div class=\"section-title\">诊断意见：</div>")
+    html.append("        <ol>")
+    
+    if impression_content:
+        impression_items = impression_content.split('\n')
+        for item in impression_items:
+            item = item.strip()
+            if item:
+                item_text = re.sub(r'^\d+\.\s*', '', item)
+                if item_text:
+                    html.append("            <li>" + item_text + "</li>")
+    else:
+        html.append("            <li>左侧大脑中动脉供血区异常灌注，其内散在片状核心梗死区，周围可见缺血半暗带存在，请结合临床。</li>")
+    
+    html.append("        </ol>")
+    html.append("    </div>")
+    
+    # 治疗建议
+    if treatment_suggestions:
+        html.append("    <div class=\"section\">")
+        html.append("        <div class=\"section-title\">治疗建议：</div>")
+        html.append("        <div class=\"section-content\">")
+        html.append("            " + treatment_suggestions)
+        html.append("        </div>")
+        html.append("    </div>")
+    else:
+        html.append("    <div class=\"section\">")
+        html.append("        <div class=\"section-title\">治疗建议：</div>")
+        html.append("        <div class=\"section-content\">")
+        if report_type == 'complex':
+            html.append("            1. 建议行血管内介入治疗评估<br>")
+            html.append("            2. 尽快完善头颈 CTA 检查评估血管情况<br>")
+            html.append("            3. 监测生命体征，维持血压稳定<br>")
+            html.append("            4. 建议进一步行数字减影血管造影 (DSA) 检查<br>")
+            html.append("            5. 请结合临床症状及其他检查结果综合评估")
+        else:
+            html.append("            1. 建议行血管内介入治疗评估<br>")
+            html.append("            2. 尽快完善头颈 CTA 检查评估血管情况<br>")
+            html.append("            3. 监测生命体征，维持血压稳定")
+        html.append("        </div>")
+        html.append("    </div>")
+    
+    # 添加电子签名
+    html.append("    <div class=\"signature\">")
+    html.append("        <p>报告医师：____________________</p>")
+    html.append("        <div class=\"signature-line\"></div>")
+    html.append("        <p>报告时间：" + datetime.now().strftime('%Y年%m月%d日 %H:%M:%S') + "</p>")
+    
+    # 电子签名详情（仅复杂报告）
+    if report_type == 'complex':
+        html.append("        <p class=\"electronic-signature\">电子签名：NeuroMatrix AI 系统</p>")
+        html.append("        <p class=\"electronic-signature\">签名时间：" + datetime.now().strftime('%Y年%m月%d日 %H:%M:%S') + "</p>")
+        html.append("        <p class=\"electronic-signature\">报告编号：" + str(patient_id) + "-" + datetime.now().strftime('%Y%m%d%H%M%S') + "</p>")
+    
+    html.append("    </div>")
+    
+    html.append("    <div class=\"footer\">")
+    html.append("        <p>本报告由 NeuroMatrix AI 系统自动生成</p>")
+    html.append("        <p>报告生成时间：" + datetime.now().strftime('%Y年%m月%d日 %H:%M:%S') + "</p>")
+    html.append("        <p>仅供临床参考，最终诊断以医师意见为准</p>")
+    
+    # 版权信息（仅复杂报告）
+    if report_type == 'complex':
+        html.append("        <p>© 2026 NeuroMatrix AI System. All rights reserved.</p>")
+    
+    html.append("    </div>")
+    html.append("</body>")
+    html.append("</html>")
+    
+    return '\n'.join(html)
+
+
+if __name__ == '__main__':
+    print("🚀 启动Flask开发服务器...")
+
+    # 获取本机IP地址
+    import socket
+    try:
+        hostname = socket.gethostname()
+        local_ip = socket.gethostbyname(hostname)
+        print(f"🌐 本机IP地址: {local_ip}")
+        print(f"🔗 局域网访问地址: http://{local_ip}:8766")
+    except:
+        local_ip = '0.0.0.0'
+        print("⚠ 无法获取本机IP，使用默认配置")
+
+    print("📱 本地访问地址: http://127.0.0.1:8766")
+    print("🌍 服务器监听: 所有网络接口 (0.0.0.0:8766)")
+    print("⏹️ 按 Ctrl+C 停止服务器")
+    print("=" * 60)
+
+    try:
+        # 关键修改：使用明确的参数启动
+        app.run(
+            host='0.0.0.0',      # 监听所有网络接口
+            port=8766,           # 明确指定端口
+            debug=True,          # 调试模式
+            threaded=True,       # 多线程
+            use_reloader=False   # 关闭自动重载，避免重复初始化
+        )
+    except Exception as e:
+        print(f"❌ 服务器启动失败: {e}")
+        import traceback
+        traceback.print_exc()
