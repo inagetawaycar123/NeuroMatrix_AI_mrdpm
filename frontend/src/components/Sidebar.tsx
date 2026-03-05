@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
-import { ArrowLeft, Plus, History, MessageSquare, ChevronDown, ChevronUp, X, Search } from 'lucide-react'
+import { ArrowLeft, Plus, History, MessageSquare, ChevronDown, ChevronUp, X, Search, FileText } from 'lucide-react'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
+import { useRouter } from 'next/navigation'
 
 interface Conversation {
   id: string
@@ -30,6 +31,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ conversations, activeId, onSelectConversation, onNewConversation, onDeleteConversation, onShowHistory }: SidebarProps) {
+  const router = useRouter()
   const [isExpanded, setIsExpanded] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
@@ -104,6 +106,13 @@ export function Sidebar({ conversations, activeId, onSelectConversation, onNewCo
           >
             <History className="w-4 h-4 mr-2" />
             历史对话
+          </Button>
+          <Button
+            className="justify-start text-white hover:bg-gray-800 bg-transparent"
+            onClick={() => router.push('/reports')}
+          >
+            <FileText className="w-4 h-4 mr-2" />
+            报告查询
           </Button>
         </div>
       </div>

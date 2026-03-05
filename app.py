@@ -1272,13 +1272,42 @@ def get_reports():
         print(f"=====================")
         
         # 执行查询
-        response = supabase.table('reports').select('*').execute()
+        query = supabase.table('reports').select('*')
+        
+        # 添加筛选条件
+        if patient_id:
+            query = query.eq('patient_id', patient_id)
+        if status:
+            query = query.eq('status', status)
+        if report_type:
+            query = query.eq('report_type', report_type)
+        
+        response = query.execute()
+        
+        # 处理结果，确保每个报告都有patient_name字段
+        processed_data = []
+        for report in response.data:
+            # 从patient_info表中获取患者姓名
+            patient_name_from_db = ''
+            try:
+                patient_response = supabase.table('patient_info').select('patient_name').eq('id', report['patient_id']).execute()
+                if patient_response.data and len(patient_response.data) > 0:
+                    patient_name_from_db = patient_response.data[0].get('patient_name', '')
+            except Exception as e:
+                print(f"获取患者姓名失败: {e}")
+            
+            report['patient_name'] = patient_name_from_db
+            processed_data.append(report)
+        
+        # 如果提供了患者姓名筛选条件，过滤结果
+        if patient_name:
+            processed_data = [report for report in processed_data if report['patient_name'] == patient_name]
         
         # 返回结果
         response = jsonify({
             "status": "success",
-            "data": response.data,
-            "count": len(response.data)
+            "data": processed_data,
+            "count": len(processed_data)
         })
         response.headers['Access-Control-Allow-Origin'] = '*'
         return response
@@ -3771,7 +3800,7 @@ def generate_pdf_html(report_content, patient_id, patient_name, report_type='com
     html.append("    <meta charset=\"UTF-8\">")
     html.append("    <title>脑卒中影像诊断报告</title>")
     html.append("        <style>")
-    html.append("        @page { margin: 1.2cm; size: A4; }")
+    html.append("        @page { margin: 0.5cm; size: A4; }")
     
     # 基础样式
     if report_type == 'complex':
@@ -3790,7 +3819,7 @@ def generate_pdf_html(report_content, patient_id, patient_name, report_type='com
     html.append("        .hospital-name { font-size: 14pt; font-weight: bold; margin-bottom: 3px; }")
     html.append("        .report-title { font-size: 12pt; font-weight: bold; margin: 8px 0; }")
     html.append("        .header-code { font-size: 10pt; font-weight: bold; text-align: right; margin-top: 3px; }")
-    html.append("        .patient-info-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; background-color: #f5f5f5; }")
+    html.append("        .patient-info-table { width: 100%; border-collapse: collapse; margin-bottom: 15px; background-color: #f5f5f5; table-layout: fixed; }")
     html.append("        .patient-info-table td { padding: 6px; border: 1px solid #ddd; font-size: 9pt; }")
     html.append("        .info-label { font-weight: bold; width: 60px; }")
     html.append("        .divider { border-top: 1px solid #000; margin: 10px 0; }")
@@ -3804,6 +3833,7 @@ def generate_pdf_html(report_content, patient_id, patient_name, report_type='com
     html.append("        .footer { margin-top: 20px; text-align: center; font-size: 8pt; color: #666; border-top: 1px solid #ddd; padding-top: 10px; }")
     html.append("        .signature { margin-top: 20px; text-align: right; font-size: 10pt; }")
     html.append("        .signature-line { margin-top: 15px; border-top: 1px solid #000; width: 150px; display: inline-block; }")
+    html.append("        .container { width: 100%; max-width: 100%; margin: 0 auto; padding: 0; }")
     html.append("    </style>")
     html.append("</head>")
     html.append("<body>")
@@ -3811,6 +3841,9 @@ def generate_pdf_html(report_content, patient_id, patient_name, report_type='com
     # 水印（仅复杂报告）
     if report_type == 'complex':
         html.append("    <div class=\"watermark\">NEUROMATRIX AI</div>")
+    
+    # 添加容器div，确保内容宽度为100%
+    html.append("    <div class=\"container\">")
     
     html.append("    <div class=\"header\">")
     html.append("        <div class=\"hospital-name\">医院名称</div>")
@@ -3989,6 +4022,7 @@ def generate_pdf_html(report_content, patient_id, patient_name, report_type='com
         html.append("        <p>© 2026 NeuroMatrix AI System. All rights reserved.</p>")
     
     html.append("    </div>")
+    html.append("    </div>")  # 闭合容器div
     html.append("</body>")
     html.append("</html>")
     
