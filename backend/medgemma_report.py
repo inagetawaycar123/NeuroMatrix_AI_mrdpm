@@ -123,7 +123,8 @@ def _log(message: str) -> None:
 
 
 def _project_root() -> str:
-    return os.path.dirname(__file__)
+    # backend/medgemma_report.py -> project root
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
 
 def _medgemma_dir() -> str:

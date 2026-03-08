@@ -269,7 +269,8 @@ def _strip_html_to_text(raw_html: str) -> str:
 
 
 def _medgemma_results_dir() -> str:
-    return os.path.join(os.path.dirname(__file__), "MedGemma_Model", "results")
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    return os.path.join(project_root, "MedGemma_Model", "results")
 
 
 def _sync_notes_to_result_json(
