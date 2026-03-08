@@ -1,0 +1,2163 @@
+{% extends "base.html" %}
+
+{% block title %}NeuroMatrix AI 医生助手{% endblock %}
+
+{% block tools %}
+<button class="tool-btn" onclick="window.history.back()">返回查看器</button>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page">
+        <div class="chat-container">
+            <!-- 侧边栏 -->
+            <div class="chat-sidebar">
+                <div class="sidebar-header">
+                    <h3>对话</h3>
+                    <button class="new-chat-btn" onclick="createNewConversation()">+ 新建对话</button>
+                </div>
+                <div class="sidebar-search">
+                    <input type="text" id="search-input" placeholder="搜索对话..." oninput="searchConversations()">
+                </div>
+                <div class="sidebar-conversations" id="conversations-list">
+                    <!-- 对话列表将通过JavaScript动态生成 -->
+                </div>
+            </div>
+
+            <!-- 主聊天区域 -->
+            <div class="chat-main">
+                <div class="chat-header">
+                    <h2 id="conversation-title">NeuroMatrix AI 医生助手</h2>
+                </div>
+                <div class="chat-messages" id="chat-messages">
+                    <div class="welcome-message">
+                        <div class="welcome-icon">🩺</div>
+                        <h3>欢迎使用 NeuroMatrix AI 医生助手</h3>
+                        <p>专注于脑卒中影像分析，请描述您的临床问题</p>
+                    </div>
+                </div>
+                <div class="chat-input-area">
+                    <!-- 图片预览区域 -->
+                    <div id="image-preview" class="image-preview"></div>
+                    <form onsubmit="sendMessage(event)">
+                        <button type="button" class="image-upload-btn" onclick="fileInputRef.click()">📷 上传图片</button>
+                        <input type="text" id="message-input" placeholder="输入您的临床问题...">
+                        <button type="submit">发送</button>
+                    </form>
+                    <div class="chat-input-footer">
+                        <div class="kb-panel">
+                            <button type="button" class="kb-toggle" onclick="toggleKbPanel()" title="查看权威医学文献">权威文献库</button>
+                            <div class="kb-caption">点击查看指南/共识/文献 PDF</div>
+                            <div class="kb-list" id="kb-list" style="display: none;">
+                                <div class="kb-loading" id="kb-loading">加载中...</div>
+                                <div class="kb-empty" id="kb-empty" style="display: none;">暂无文献</div>
+                                <div class="kb-items" id="kb-items"></div>
+                            </div>
+                        </div>
+                        <p class="chat-hint">支持脑卒中诊断、CTP参数解读、治疗方案建议等专业问题</p>
+                    </div>
+                </div>
+                <div class="kb-preview-overlay" id="kb-preview-overlay" style="display: none;">
+                    <div class="kb-preview-card">
+                        <div class="kb-preview-header">
+                            <span class="kb-preview-title" id="kb-preview-title"></span>
+                            <div class="kb-preview-actions">
+                                <a class="kb-preview-link" id="kb-preview-open" target="_blank" rel="noreferrer">新窗口</a>
+                                <button type="button" class="kb-preview-close" onclick="closeKbPreview()">关闭</button>
+                            </div>
+                        </div>
+                        <iframe class="kb-preview-frame" id="kb-preview-frame" title="knowledge-base"></iframe>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 安全卡面板 -->
+            <div class="chat-safety-panel">
+                <div class="safety-panel-header">
+                    <h3>安全卡</h3>
+                </div>
+                <div class="safety-panel-content" id="safety-content">
+                    <div class="safety-empty">
+                        <p>暂无安全提示</p>
+                        <p class="hint">开始医疗对话后将显示安全分析</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<style>
+/* 聊天页面样式 */
+.chat-container {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    background: #0a0a0a;
+    color: #fff;
+}
+
+/* 覆盖全局居中布局，保证聊天区域可完整占满并滚动 */
+.container,
+.page {
+    align-items: stretch;
+    justify-content: stretch;
+}
+
+/* 修复与全局 .message 冲突：聊天消息需保持在容器内流式布局 */
+.chat-messages .message {
+    position: relative;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    left: auto;
+    z-index: auto;
+    display: flex;
+    border: none;
+    padding: 0;
+    background: transparent;
+}
+
+/* 确保长文本可完整换行显示 */
+.message-text {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
+}
+
+/* 侧边栏样式 */
+.chat-sidebar {
+    width: 280px;
+    background: #1a1a1a;
+    border-right: 1px solid #333;
+    display: flex;
+    flex-direction: column;
+}
+
+.sidebar-header {
+    padding: 16px;
+    border-bottom: 1px solid #333;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.sidebar-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.new-chat-btn {
+    padding: 6px 12px;
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    color: #000;
+    border: none;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.sidebar-search {
+    padding: 12px 16px;
+    border-bottom: 1px solid #333;
+}
+
+.sidebar-search input {
+    width: 100%;
+    padding: 8px 12px;
+    background: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 4px;
+    color: #fff;
+    font-size: 14px;
+}
+
+.sidebar-conversations {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+}
+
+.conversation-item {
+    padding: 12px;
+    margin-bottom: 4px;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.conversation-item:hover {
+    background: #2a2a2a;
+}
+
+.conversation-item.active {
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    color: #000;
+}
+
+.conversation-title {
+    font-size: 14px;
+    font-weight: 500;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.conversation-preview {
+    font-size: 12px;
+    opacity: 0.7;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.conversation-time {
+    font-size: 10px;
+    opacity: 0.5;
+    text-align: right;
+    margin-top: 4px;
+}
+
+/* 主聊天区域样式 */
+.chat-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #0a0a0a;
+    min-height: 0;
+    min-width: 1400px;
+    position: relative;
+}
+
+.chat-header {
+    padding: 16px;
+    border-bottom: 1px solid #333;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.chat-header h2 {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.chat-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.action-btn {
+    padding: 6px 12px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #fff;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.action-btn:hover {
+    border-color: #4facfe;
+}
+
+.chat-messages {
+    flex: 1;
+    padding: 24px;
+    overflow-y: auto;
+    background: #0a0a0a;
+    min-height: 0;
+}
+
+.welcome-message {
+    text-align: center;
+    margin-top: 80px;
+    color: #888;
+}
+
+.welcome-icon {
+    font-size: 64px;
+    margin-bottom: 16px;
+}
+
+.welcome-message h3 {
+    margin: 0 0 8px 0;
+    color: #fff;
+}
+
+.welcome-message p {
+    margin: 0;
+    font-size: 14px;
+}
+
+.message {
+    margin-bottom: 16px;
+    display: flex;
+}
+
+.message.user {
+    justify-content: flex-end;
+}
+
+.message.ai {
+    justify-content: flex-start;
+}
+
+.message-content {
+    max-width: 70%;
+    padding: 12px;
+    border-radius: 8px;
+}
+
+.user .message-content {
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    color: #000;
+    border-radius: 8px 8px 0 8px;
+}
+
+.ai .message-content {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #fff;
+    border-radius: 8px 8px 8px 0;
+}
+
+.message-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.message-avatar {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: bold;
+}
+
+.user .message-avatar {
+    background: #000;
+    color: #4facfe;
+}
+
+.ai .message-avatar {
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    color: #000;
+}
+
+.message-author {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+.message-text {
+    font-size: 14px;
+    line-height: 1.4;
+    word-wrap: break-word;
+}
+
+/* Markdown rendering inside messages */
+.message-text p {
+    margin: 0 0 8px 0;
+}
+
+.message-text strong {
+    font-weight: 700;
+}
+
+.message-text em {
+    font-style: italic;
+}
+
+.message-text ul,
+.message-text ol {
+    padding-left: 18px;
+    margin: 8px 0;
+}
+
+.message-text li {
+    margin: 4px 0;
+}
+
+.message-text code {
+    background: #0a0a0a;
+    color: #9fe6ff;
+    padding: 0 4px;
+    border-radius: 3px;
+    font-family: "Courier New", monospace;
+    font-size: 12px;
+}
+
+.message-text pre {
+    background: #0a0a0a;
+    border: 1px solid #333;
+    padding: 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 8px 0;
+}
+
+.message-text pre code {
+    background: transparent;
+    color: #e6e6e6;
+    padding: 0;
+}
+
+.message-text a {
+    color: #4facfe;
+    text-decoration: underline;
+}
+
+.message-text blockquote {
+    border-left: 3px solid #4facfe;
+    margin: 8px 0;
+    padding-left: 10px;
+    color: #bbb;
+}
+
+.message-time {
+    font-size: 10px;
+    opacity: 0.5;
+    text-align: right;
+    margin-top: 4px;
+}
+
+.loading-message {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 8px 8px 8px 0;
+    max-width: 70%;
+}
+
+.loading-dots {
+    display: flex;
+    gap: 4px;
+}
+
+.loading-dot {
+    width: 4px;
+    height: 4px;
+    background: #888;
+    border-radius: 50%;
+    animation: pulse 1s infinite;
+}
+
+.loading-dot:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.loading-dot:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 1; }
+}
+
+.chat-input-area {
+    padding: 16px;
+    border-top: 1px solid #333;
+    background: #1a1a1a;
+}
+
+.chat-input-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.kb-panel {
+    position: relative;
+}
+
+.kb-caption {
+    margin-top: 6px;
+    font-size: 11px;
+    color: #7b8794;
+}
+
+.kb-toggle {
+    padding: 6px 12px;
+    background: linear-gradient(135deg, #1f2a44 0%, #0f1c2e 100%);
+    border: 1px solid #2f3b52;
+    color: #dfe9f3;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.kb-toggle:hover {
+    border-color: #4facfe;
+}
+
+.kb-list {
+    position: absolute;
+    left: 0;
+    bottom: 36px;
+    width: 220px;
+    background: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    z-index: 20;
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+.kb-loading,
+.kb-empty {
+    font-size: 12px;
+    color: #888;
+    padding: 6px 4px;
+}
+
+.kb-item-btn {
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: #9fe6ff;
+    text-align: left;
+    padding: 6px 4px;
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.kb-item-btn:hover {
+    color: #4facfe;
+    background: rgba(79, 172, 254, 0.1);
+    border-radius: 4px;
+}
+
+.kb-preview-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.72);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 30;
+    padding: 16px;
+}
+
+.kb-preview-card {
+    width: min(960px, 92%);
+    height: min(640px, 90%);
+    background: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.kb-preview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid #333;
+    background: #111;
+    gap: 12px;
+}
+
+.kb-preview-title {
+    font-size: 13px;
+    color: #e5e5e5;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.kb-preview-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.kb-preview-link {
+    font-size: 12px;
+    color: #9fe6ff;
+    text-decoration: none;
+}
+
+.kb-preview-link:hover {
+    color: #4facfe;
+}
+
+.kb-preview-close {
+    padding: 4px 8px;
+    font-size: 12px;
+    background: #1a1a1a;
+    color: #fff;
+    border: 1px solid #333;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+.kb-preview-close:hover {
+    border-color: #4facfe;
+}
+
+.kb-preview-frame {
+    flex: 1;
+    width: 100%;
+    border: none;
+    background: #000;
+}
+
+.chat-input-area form {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    align-items: center;
+}
+
+.chat-input-area input {
+    flex: 1;
+    padding: 12px;
+    background: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 4px;
+    color: #fff;
+    font-size: 14px;
+}
+
+.chat-input-area button {
+    padding: 12px 24px;
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+    color: #000;
+    border: none;
+    border-radius: 4px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.chat-hint {
+    margin: 0;
+    font-size: 12px;
+    color: #888;
+}
+
+/* 图片上传相关样式 */
+.image-upload-btn {
+    padding: 12px 16px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #fff;
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    margin-right: 8px;
+}
+
+.image-upload-btn:hover {
+    border-color: #4facfe;
+}
+
+.image-preview {
+    display: none;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 4px;
+    margin-bottom: 12px;
+}
+
+.image-preview-item {
+    position: relative;
+    width: 80px;
+    height: 80px;
+    border: 1px solid #333;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.image-preview-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.pdf-preview {
+    width: 100%;
+    height: 100%;
+    background: #2a2a2a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #888;
+}
+
+.pdf-icon {
+    font-size: 24px;
+    font-weight: bold;
+    color: #4facfe;
+}
+
+.pdf-name {
+    font-size: 10px;
+    margin-top: 4px;
+    text-align: center;
+    word-wrap: break-word;
+    padding: 0 4px;
+}
+
+.remove-image-btn {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 20px;
+    height: 20px;
+    background: #ff6b6b;
+    color: #fff;
+    border: none;
+    border-radius: 50%;
+    font-size: 12px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.remove-image-btn:hover {
+    background: #ff5252;
+}
+
+/* 消息中的图片样式 */
+.message-images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.message-image-item {
+    width: 60px;
+    height: 60px;
+    border: 1px solid #333;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.message-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.pdf-preview-small {
+    width: 100%;
+    height: 100%;
+    background: #2a2a2a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: #888;
+}
+
+.pdf-icon-small {
+    font-size: 16px;
+    font-weight: bold;
+    color: #4facfe;
+}
+
+.pdf-name-small {
+    font-size: 8px;
+    margin-top: 2px;
+    text-align: center;
+    word-wrap: break-word;
+    padding: 0 2px;
+}
+
+/* 安全卡面板样式 */
+.chat-safety-panel {
+    width: 300px;
+    background: #1a1a1a;
+    border-left: 1px solid #333;
+    display: flex;
+    flex-direction: column;
+}
+
+.safety-panel-header {
+    padding: 16px;
+    border-bottom: 1px solid #333;
+}
+
+.safety-panel-header h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.safety-panel-content {
+    flex: 1;
+    padding: 16px;
+    overflow-y: auto;
+}
+
+.safety-empty {
+    text-align: center;
+    color: #888;
+    margin-top: 40px;
+}
+
+.safety-empty p {
+    margin: 4px 0;
+}
+
+.safety-empty .hint {
+    font-size: 12px;
+    opacity: 0.7;
+}
+
+.safety-card {
+    background: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 12px;
+}
+
+.safety-card.high {
+    border-left: 4px solid #ff6b6b;
+}
+
+.safety-card.medium {
+    border-left: 4px solid #ffa726;
+}
+
+.safety-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.safety-card-icon {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.safety-card.high .safety-card-icon {
+    background: #ff6b6b;
+    color: #fff;
+}
+
+.safety-card.medium .safety-card-icon {
+    background: #ffa726;
+    color: #000;
+}
+
+.safety-card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.safety-card-content {
+    font-size: 14px;
+    line-height: 1.4;
+    color: #ddd;
+    margin-bottom: 8px;
+}
+
+.safety-card-suggestion {
+    font-size: 13px;
+    color: #888;
+    background: #1a1a1a;
+    padding: 8px;
+    border-radius: 4px;
+}
+
+.safety-card-suggestion strong {
+    color: #fff;
+}
+
+/* 响应式设计 */
+@media (max-width: 1200px) {
+    .chat-safety-panel {
+        display: none;
+    }
+}
+
+@media (max-width: 768px) {
+    .chat-sidebar {
+        width: 240px;
+    }
+    
+    .message-content {
+        max-width: 85%;
+    }
+}
+
+@media (max-width: 480px) {
+    .chat-sidebar {
+        display: none;
+    }
+    
+    .chat-header {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 8px;
+    }
+    
+    .chat-actions {
+        width: 100%;
+        justify-content: flex-start;
+    }
+}
+
+/* 上下文菜单样式 */
+.context-menu {
+    position: absolute;
+    background: #2a2a2a;
+    border: 1px solid #333;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+    z-index: 1000;
+    min-width: 120px;
+}
+
+.context-menu-item {
+    padding: 8px 12px;
+    cursor: pointer;
+    color: #fff;
+    font-size: 14px;
+    border-bottom: 1px solid #333;
+}
+
+.context-menu-item:last-child {
+    border-bottom: none;
+}
+
+.context-menu-item:hover {
+    background: #3a3a3a;
+}
+
+.context-menu-item.delete {
+    color: #ff6b6b;
+}
+
+.context-menu-item.delete:hover {
+    background: rgba(255, 107, 107, 0.1);
+}
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+
+<script>
+// 对话数据
+let conversations = JSON.parse(localStorage.getItem('neuromatrix-conversations') || '[]');
+let currentConversationId = localStorage.getItem('neuromatrix-current-conversation') || null;
+
+function escapeHtml(value) {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function renderMarkdown(content) {
+    const safeContent = content || '';
+    if (window.marked) {
+        const html = marked.parse(safeContent, { breaks: true, gfm: true });
+        return window.DOMPurify ? DOMPurify.sanitize(html) : html;
+    }
+    return escapeHtml(safeContent).replace(/\n/g, '<br>');
+}
+
+// 知识库文献
+let kbDocs = [];
+let kbLoaded = false;
+
+function toggleKbPanel() {
+    const list = document.getElementById('kb-list');
+    if (!list) return;
+    const isOpen = list.style.display !== 'none';
+    list.style.display = isOpen ? 'none' : 'block';
+}
+
+function closeKbPanel() {
+    const list = document.getElementById('kb-list');
+    if (!list) return;
+    list.style.display = 'none';
+}
+
+function loadKbDocs() {
+    const loading = document.getElementById('kb-loading');
+    const empty = document.getElementById('kb-empty');
+    const items = document.getElementById('kb-items');
+    if (!loading || !empty || !items) return;
+
+    loading.style.display = 'block';
+    empty.style.display = 'none';
+    items.innerHTML = '';
+
+    fetch('/api/kb/docs')
+        .then(res => {
+            if (!res.ok) throw new Error('KB API error: ' + res.status);
+            return res.json();
+        })
+        .then(data => {
+            kbDocs = Array.isArray(data?.docs) ? data.docs : [];
+            if (kbDocs.length === 0) {
+                empty.style.display = 'block';
+                return;
+            }
+            kbDocs.forEach(doc => {
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'kb-item-btn';
+                btn.textContent = doc.title || doc.fileName || '未命名文献';
+                btn.title = doc.title || doc.fileName || '';
+                btn.onclick = () => openKbPreview(doc);
+                items.appendChild(btn);
+            });
+        })
+        .catch(() => {
+            empty.style.display = 'block';
+        })
+        .finally(() => {
+            loading.style.display = 'none';
+            kbLoaded = true;
+        });
+}
+
+function openKbPreview(doc) {
+    const overlay = document.getElementById('kb-preview-overlay');
+    const frame = document.getElementById('kb-preview-frame');
+    const title = document.getElementById('kb-preview-title');
+    const open = document.getElementById('kb-preview-open');
+    if (!overlay || !frame || !title || !open) return;
+    title.textContent = doc.title || doc.fileName || '';
+    frame.src = doc.url;
+    open.href = doc.url;
+    overlay.style.display = 'flex';
+    closeKbPanel();
+}
+
+function closeKbPreview() {
+    const overlay = document.getElementById('kb-preview-overlay');
+    const frame = document.getElementById('kb-preview-frame');
+    if (!overlay || !frame) return;
+    frame.src = 'about:blank';
+    overlay.style.display = 'none';
+}
+
+// 初始化
+function initChat() {
+    loadConversations();
+    if (currentConversationId) {
+        loadConversation(currentConversationId);
+    }
+    if (!kbLoaded) {
+        loadKbDocs();
+    }
+}
+
+// 加载对话列表
+function loadConversations() {
+    const conversationsList = document.getElementById('conversations-list');
+    if (!conversationsList) return;
+
+    conversationsList.innerHTML = '';
+
+    if (conversations.length === 0) {
+        conversationsList.innerHTML = '<div class="empty-conversations">暂无对话记录</div>';
+        return;
+    }
+
+    conversations.forEach(conversation => {
+        const conversationItem = document.createElement('div');
+        conversationItem.className = `conversation-item ${conversation.id === currentConversationId ? 'active' : ''}`;
+        conversationItem.onclick = () => loadConversation(conversation.id);
+        conversationItem.setAttribute('data-id', conversation.id);
+        
+        // 添加右键菜单事件
+        conversationItem.addEventListener('contextmenu', function(e) {
+            e.preventDefault();
+            showContextMenu(e, conversation.id);
+        });
+        
+        const preview = conversation.messages.length > 0 ? 
+            conversation.messages[conversation.messages.length - 1].content.substring(0, 30) + (conversation.messages.length > 0 && conversation.messages[conversation.messages.length - 1].content.length > 30 ? '...' : '') : 
+            '新对话';
+        
+        conversationItem.innerHTML = `
+            <div class="conversation-title">${conversation.title}</div>
+            <div class="conversation-preview">${preview}</div>
+            <div class="conversation-time">${new Date(conversation.updatedAt).toLocaleTimeString()}</div>
+        `;
+        
+        conversationsList.appendChild(conversationItem);
+    });
+}
+
+// 显示上下文菜单
+function showContextMenu(event, conversationId) {
+    // 移除已存在的上下文菜单
+    const existingMenu = document.querySelector('.context-menu');
+    if (existingMenu) {
+        existingMenu.remove();
+    }
+
+    // 创建上下文菜单
+    const contextMenu = document.createElement('div');
+    contextMenu.className = 'context-menu';
+    contextMenu.style.left = event.clientX + 'px';
+    contextMenu.style.top = event.clientY + 'px';
+
+    // 添加删除菜单项
+    const deleteItem = document.createElement('div');
+    deleteItem.className = 'context-menu-item delete';
+    deleteItem.textContent = '删除对话';
+    deleteItem.onclick = () => {
+        deleteConversation(conversationId);
+        contextMenu.remove();
+    };
+
+    contextMenu.appendChild(deleteItem);
+    document.body.appendChild(contextMenu);
+
+    // 点击其他地方关闭菜单
+    setTimeout(() => {
+        document.addEventListener('click', function closeMenu(e) {
+            if (!contextMenu.contains(e.target)) {
+                contextMenu.remove();
+                document.removeEventListener('click', closeMenu);
+            }
+        });
+    }, 0);
+}
+
+// 加载对话
+function loadConversation(id) {
+    const conversation = conversations.find(c => c.id === id);
+    if (!conversation) return;
+
+    currentConversationId = id;
+    localStorage.setItem('neuromatrix-current-conversation', id);
+
+    // 更新对话标题
+    document.getElementById('conversation-title').textContent = conversation.title;
+
+    // 更新对话列表选中状态
+    const conversationItems = document.querySelectorAll('.conversation-item');
+    conversationItems.forEach(item => {
+        item.classList.remove('active');
+    });
+    const activeItem = document.querySelector(`.conversation-item[data-id="${id}"]`) || 
+                     Array.from(conversationItems).find(item => item.textContent.includes(conversation.title));
+    if (activeItem) {
+        activeItem.classList.add('active');
+    }
+
+    // 加载消息
+    const messagesContainer = document.getElementById('chat-messages');
+    if (!messagesContainer) return;
+
+    messagesContainer.innerHTML = '';
+
+    if (conversation.messages.length === 0) {
+        messagesContainer.innerHTML = `
+            <div class="welcome-message">
+                <div class="welcome-icon">🩺</div>
+                <h3>欢迎使用 NeuroMatrix AI 医生助手</h3>
+                <p>专注于脑卒中影像分析，请描述您的临床问题</p>
+            </div>
+        `;
+        // 即使是新对话，也需要更新安全卡
+        updateSafetyCard(conversation);
+        return;
+    }
+
+    conversation.messages.forEach(message => {
+        const messageElement = document.createElement('div');
+        messageElement.className = `message ${message.role}`;
+        
+        const avatarText = message.role === 'user' ? '我' : 'AI';
+        const authorText = message.role === 'user' ? '您' : 'NeuroMatrix AI';
+        
+        messageElement.innerHTML = `
+            <div class="message-content">
+                <div class="message-header">
+                    <div class="message-avatar">${avatarText}</div>
+                    <div class="message-author">${authorText}</div>
+                </div>
+                <div class="message-text">${renderMarkdown(message.content)}</div>
+                <div class="message-time">${new Date(message.timestamp).toLocaleTimeString()}</div>
+            </div>
+        `;
+        
+        messagesContainer.appendChild(messageElement);
+    });
+
+    // 滚动到底部
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    // 更新安全卡
+    updateSafetyCard(conversation);
+}
+
+// 创建新对话
+function createNewConversation() {
+    const newConversation = {
+        id: 'conv-' + Date.now(),
+        title: '新对话',
+        messages: [],
+        analysisHistory: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+    };
+
+    conversations.push(newConversation);
+    saveConversations();
+    loadConversation(newConversation.id);
+    loadConversations();
+}
+
+// 删除对话
+function deleteConversation(conversationId) {
+    if (confirm('确定要删除这个对话吗？此操作无法撤销。')) {
+        // 从数组中移除对话
+        const deletedIndex = conversations.findIndex(c => c.id === conversationId);
+        if (deletedIndex !== -1) {
+            conversations.splice(deletedIndex, 1);
+            saveConversations();
+
+            // 处理当前对话的情况
+            if (conversationId === currentConversationId) {
+                if (conversations.length > 0) {
+                    // 切换到最近的对话
+                    const mostRecentConversation = conversations.reduce((mostRecent, current) => {
+                        return new Date(current.updatedAt) > new Date(mostRecent.updatedAt) ? current : mostRecent;
+                    });
+                    loadConversation(mostRecentConversation.id);
+                } else {
+                    // 创建新对话
+                    createNewConversation();
+                }
+            }
+
+            // 重新加载对话列表
+            loadConversations();
+        }
+    }
+}
+
+// 搜索对话
+function searchConversations() {
+    const searchInput = document.getElementById('search-input');
+    if (!searchInput) return;
+
+    const searchTerm = searchInput.value.toLowerCase();
+    const conversationsList = document.getElementById('conversations-list');
+    if (!conversationsList) return;
+
+    conversationsList.innerHTML = '';
+
+    const filteredConversations = conversations.filter(conversation => 
+        conversation.title.toLowerCase().includes(searchTerm) ||
+        conversation.messages.some(message => 
+            message.content.toLowerCase().includes(searchTerm)
+        )
+    );
+
+    if (filteredConversations.length === 0) {
+        conversationsList.innerHTML = '<div class="empty-conversations">无匹配的对话</div>';
+        return;
+    }
+
+    filteredConversations.forEach(conversation => {
+        const conversationItem = document.createElement('div');
+        conversationItem.className = `conversation-item ${conversation.id === currentConversationId ? 'active' : ''}`;
+        conversationItem.onclick = () => loadConversation(conversation.id);
+        
+        const preview = conversation.messages.length > 0 ? 
+            conversation.messages[conversation.messages.length - 1].content.substring(0, 30) + (conversation.messages.length > 0 && conversation.messages[conversation.messages.length - 1].content.length > 30 ? '...' : '') : 
+            '新对话';
+        
+        conversationItem.innerHTML = `
+            <div class="conversation-title">${conversation.title}</div>
+            <div class="conversation-preview">${preview}</div>
+            <div class="conversation-time">${new Date(conversation.updatedAt).toLocaleTimeString()}</div>
+        `;
+        
+        conversationsList.appendChild(conversationItem);
+    });
+}
+
+// 图片预览状态
+let selectedImages = [];
+const fileInputRef = document.createElement('input');
+fileInputRef.type = 'file';
+fileInputRef.accept = 'image/*,.pdf';
+fileInputRef.multiple = true;
+fileInputRef.style.display = 'none';
+document.body.appendChild(fileInputRef);
+
+// 处理图片上传
+fileInputRef.onchange = function(event) {
+    const files = event.target.files;
+    if (files) {
+        Array.from(files).forEach(file => {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const fileData = e.target.result;
+                const fileInfo = {
+                    data: fileData,
+                    type: file.type,
+                    name: file.name,
+                    isPDF: file.type === 'application/pdf'
+                };
+                selectedImages.push(fileInfo);
+                updateImagePreview();
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+    // 重置文件输入
+    fileInputRef.value = '';
+};
+
+// 更新图片预览
+function updateImagePreview() {
+    const imagePreview = document.getElementById('image-preview');
+    if (!imagePreview) return;
+    
+    if (selectedImages.length > 0) {
+        imagePreview.innerHTML = selectedImages.map((file, index) => `
+            <div class="image-preview-item">
+                ${file.isPDF ? 
+                    `<div class="pdf-preview">
+                        <div class="pdf-icon">PDF</div>
+                        <div class="pdf-name">${file.name.split('.')[0]}</div>
+                    </div>` : 
+                    `<img src="${file.data}" alt="Preview ${index + 1}" class="image-preview-img">`
+                }
+                <button class="remove-image-btn" onclick="removeImage(${index})">&times;</button>
+            </div>
+        `).join('');
+        imagePreview.style.display = 'flex';
+    } else {
+        imagePreview.innerHTML = '';
+        imagePreview.style.display = 'none';
+    }
+}
+
+// 移除图片
+function removeImage(index) {
+    selectedImages.splice(index, 1);
+    updateImagePreview();
+}
+
+// 智能分析医疗内容的函数
+function analyzeMedicalContent(content) {
+    const hasStroke = /卒中|stroke|中风|脑梗|脑出血|缺血性|出血性|蛛网膜下腔出血|短暂性脑缺血发作|TIA/i.test(content);
+    const hasIschemicStroke = /缺血性|脑梗|脑血栓|脑栓塞/i.test(content);
+    const hasHemorrhagicStroke = /出血性|脑出血|蛛网膜下腔出血/i.test(content);
+    const hasCardiac = /心脏|心梗|心肌梗死|心律失常|心力衰竭/i.test(content);
+    const hasRespiratory = /呼吸|肺炎|哮喘|呼吸衰竭|肺部/i.test(content);
+    const hasNeurological = /神经|癫痫|帕金森|阿尔茨海默/i.test(content);
+    const hasTrauma = /创伤|骨折|外伤|事故/i.test(content);
+    const hasInfection = /感染|发热|炎症|败血症/i.test(content);
+    const hasCancer = /肿瘤|癌症|恶性|癌/i.test(content);
+
+    if (hasStroke) {
+        const risks = [
+            { level: 'high', description: '急性脑卒中风险', suggestion: '立即评估NIHSS评分，考虑急诊溶栓/取栓治疗' },
+            { level: 'medium', description: '并发症风险', suggestion: '监测血压、血糖，预防肺炎和深静脉血栓' }
+        ];
+        
+        if (hasIschemicStroke) {
+            risks.push({ level: 'high', description: '缺血性脑卒中风险', suggestion: '评估时间窗，考虑静脉溶栓或血管内取栓' });
+        }
+        
+        if (hasHemorrhagicStroke) {
+            risks.push({ level: 'high', description: '出血性脑卒中风险', suggestion: '控制血压，评估手术指征，预防再出血' });
+        }
+        
+        return {
+            risks: risks,
+            keypoints: ['神经功能评估', '生命体征监测', '实验室检查', '影像学检查', '早期康复', '二级预防']
+        };
+    }
+
+    if (hasCardiac) {
+        return {
+            risks: [
+                { level: 'high', description: '心血管事件风险', suggestion: '立即心电图检查，评估心肌标志物' },
+                { level: 'medium', description: '心力衰竭风险', suggestion: '控制血压和心率，监测体液平衡' }
+            ],
+            keypoints: ['心电图检查', '心肌标志物检测', '超声心动图', '血压监测', '药物治疗']
+        };
+    }
+
+    if (hasRespiratory) {
+        return {
+            risks: [
+                { level: 'high', description: '呼吸衰竭风险', suggestion: '立即评估呼吸频率和血氧饱和度' },
+                { level: 'medium', description: '感染扩散风险', suggestion: '隔离措施，抗感染治疗' }
+            ],
+            keypoints: ['呼吸功能评估', '血气分析', '胸部X线', '痰培养', '氧疗支持']
+        };
+    }
+
+    if (hasNeurological) {
+        return {
+            risks: [
+                { level: 'medium', description: '神经功能恶化风险', suggestion: '定期神经功能评估，调整治疗方案' },
+                { level: 'medium', description: '并发症风险', suggestion: '预防肺炎和压疮，康复训练' }
+            ],
+            keypoints: ['神经系统检查', '脑电图', 'MRI检查', '康复评估', '药物治疗']
+        };
+    }
+
+    if (hasTrauma) {
+        return {
+            risks: [
+                { level: 'high', description: '休克风险', suggestion: '立即评估ABCDE，维持生命体征稳定' },
+                { level: 'medium', description: '感染风险', suggestion: '伤口处理，预防破伤风' }
+            ],
+            keypoints: ['创伤评估', 'X线检查', 'CT扫描', '伤口处理', '疼痛管理']
+        };
+    }
+
+    if (hasInfection) {
+        return {
+            risks: [
+                { level: 'high', description: '败血症风险', suggestion: '立即抗感染治疗，监测生命体征' },
+                { level: 'medium', description: '多器官衰竭风险', suggestion: '支持治疗，器官功能监测' }
+            ],
+            keypoints: ['体温监测', '血培养', '抗感染治疗', '支持治疗', '感染源控制']
+        };
+    }
+
+    if (hasCancer) {
+        return {
+            risks: [
+                { level: 'medium', description: '肿瘤进展风险', suggestion: '定期肿瘤标志物监测，影像学随访' },
+                { level: 'medium', description: '治疗副作用风险', suggestion: '监测血常规，调整治疗方案' }
+            ],
+            keypoints: ['肿瘤标志物检测', '影像学检查', '病理检查', '多学科讨论', '姑息治疗']
+        };
+    }
+
+    // 如果没有识别到特定疾病，但包含医疗关键词
+    if (/疼痛|不适|症状|诊断|治疗|检查|药物/i.test(content)) {
+        return {
+            risks: [
+                { level: 'medium', description: '临床评估需求', suggestion: '完善病史采集和体格检查' }
+            ],
+            keypoints: ['症状评估', '体格检查', '辅助检查', '诊断分析', '治疗建议']
+        };
+    }
+
+    // 如果不包含医疗关键词，不显示安全卡
+    return null;
+}
+
+
+// 生成安全分析
+function generateSafetyAnalysis(content, userInput = '', conversation = null) {
+    const analysis = {
+        id: 'analysis-' + Date.now(),
+        risks: [],
+        keypoints: [],
+        guidelines: [],
+        recommendations: [],
+        healthTips: [],
+        hasMedicalSignals: false,
+        triggerMessage: {
+            id: 'msg-' + Date.now(),
+            content: userInput || content,
+            timestamp: new Date().toISOString()
+        },
+        timestamp: new Date().toISOString(),
+        detectedTopics: [],
+        confidence: 0
+    };
+
+    // 仅分析本次用户输入，避免历史对话干扰主题
+    const allContent = userInput || '';
+
+    // 使用智能分析函数
+    const medicalAnalysis = analyzeMedicalContent(allContent);
+    if (medicalAnalysis) {
+        analysis.risks = medicalAnalysis.risks;
+        analysis.keypoints = medicalAnalysis.keypoints;
+        analysis.hasMedicalSignals = true;
+        
+        // 检测到的主题
+        analysis.detectedTopics = detectMedicalTopics(allContent);
+        analysis.confidence = calculateConfidence(analysis.detectedTopics);
+        // 生成其他类型的安全提示
+        analysis.guidelines = generateClinicalGuidelines(analysis.detectedTopics);
+        analysis.recommendations = generateRecommendations(analysis.detectedTopics);
+        analysis.healthTips = generateHealthTips(analysis.detectedTopics);
+    }
+
+    return analysis;
+}
+
+// 检测医疗主题
+function detectMedicalTopics(content) {
+    const topics = [];
+    
+    // 心血管疾病
+    if (/心脏|心梗|心肌梗死|心律失常|心力衰竭|高血压|冠心病/i.test(content)) {
+        topics.push('心血管疾病');
+    }
+    
+    // 脑血管疾病
+    if (/卒中|stroke|中风|脑梗|脑出血|缺血性|出血性/i.test(content)) {
+        topics.push('脑血管疾病');
+    }
+    
+    // 糖尿病
+    if (/糖尿病|血糖|胰岛素|糖化血红蛋白/i.test(content)) {
+        topics.push('糖尿病');
+    }
+    
+    // 呼吸系统疾病
+    if (/呼吸|肺炎|哮喘|呼吸衰竭|肺部|COPD/i.test(content)) {
+        topics.push('呼吸系统疾病');
+    }
+    
+    // 神经系统疾病
+    if (/神经|癫痫|帕金森|阿尔茨海默|头痛|头晕/i.test(content)) {
+        topics.push('神经系统疾病');
+    }
+    
+    // 消化系统疾病
+    if (/消化|胃肠|肝脏|胆囊|胰腺|腹泻|便秘/i.test(content)) {
+        topics.push('消化系统疾病');
+    }
+    
+    // 内分泌系统疾病
+    if (/甲状腺|激素|内分泌/i.test(content)) {
+        topics.push('内分泌系统疾病');
+    }
+    
+    // 免疫系统疾病
+    if (/免疫|风湿|过敏|自身免疫/i.test(content)) {
+        topics.push('免疫系统疾病');
+    }
+    
+    // 肿瘤
+    if (/肿瘤|癌症|恶性|癌/i.test(content)) {
+        topics.push('肿瘤');
+    }
+    
+    // 感染性疾病
+    if (/感染|发热|炎症|败血症|病毒|细菌/i.test(content)) {
+        topics.push('感染性疾病');
+    }
+    
+    // 创伤
+    if (/创伤|骨折|外伤|事故/i.test(content)) {
+        topics.push('创伤');
+    }
+    
+    return topics;
+}
+
+// 计算主题识别的置信度
+function calculateConfidence(topics) {
+    if (topics.length === 0) return 0;
+    if (topics.length >= 3) return 1;
+    return 0.5 + (topics.length * 0.25);
+}
+
+// 生成临床指导
+function generateClinicalGuidelines(topics) {
+    const guidelines = [];
+    
+    if (topics.includes('心血管疾病')) {
+        guidelines.push('定期监测血压、心率和心电图');
+        guidelines.push('保持健康的生活方式，包括合理饮食和适量运动');
+        guidelines.push('按照医嘱服用降压、降脂等药物');
+    }
+    
+    if (topics.includes('脑血管疾病')) {
+        guidelines.push('脑卒中分类与分型：缺血性（脑血栓形成、脑栓塞、腔隙性梗死）、出血性（脑出血、蛛网膜下腔出血）、短暂性脑缺血发作（TIA）');
+        guidelines.push('缺血性脑卒中急性期治疗时间窗：静脉溶栓（发病4.5小时内）、血管内取栓（前循环6-8小时，部分可延长至24小时）');
+        guidelines.push('出血性脑卒中治疗原则：控制血压（目标140-160/90-100mmHg）、降低颅内压、防治并发症');
+        guidelines.push('二级预防：抗血小板治疗（阿司匹林/氯吡格雷）、他汀类药物、血压控制（目标<140/90mmHg）、血糖管理');
+        guidelines.push('康复治疗：早期康复介入（病情稳定24-48小时后）、个体化康复方案、长期功能训练');
+        guidelines.push('定期进行神经系统检查和影像学随访');
+    }
+    
+    if (topics.includes('糖尿病')) {
+        guidelines.push('定期监测血糖水平');
+        guidelines.push('遵循糖尿病饮食计划');
+        guidelines.push('按照医嘱使用胰岛素或口服降糖药');
+    }
+    
+    if (topics.includes('呼吸系统疾病')) {
+        guidelines.push('避免接触过敏原和刺激物');
+        guidelines.push('保持室内空气流通');
+        guidelines.push('按照医嘱使用支气管扩张剂和糖皮质激素');
+    }
+    
+    return guidelines;
+}
+
+// 生成检查建议
+function generateRecommendations(topics) {
+    const recommendations = [];
+    
+    if (topics.includes('心血管疾病')) {
+        recommendations.push('心电图检查');
+        recommendations.push('超声心动图检查');
+        recommendations.push('血脂、血糖检查');
+    }
+    
+    if (topics.includes('脑血管疾病')) {
+        recommendations.push('头颅CT平扫：排除出血性脑卒中，评估早期缺血改变（岛带征、豆状核模糊、脑沟消失）');
+        recommendations.push('头颅CTA：评估脑血管狭窄、闭塞和动脉瘤等血管病变');
+        recommendations.push('头颅MRI：DWI序列显示超早期缺血病灶，FLAIR评估梗死范围，SWI检测微出血');
+        recommendations.push('灌注成像（CTP/MRP）：评估脑血流灌注情况，指导取栓决策');
+        recommendations.push('颈动脉+椎动脉超声：评估颅外血管狭窄和斑块性质');
+        recommendations.push('心脏检查：心电图、超声心动图（评估心源性栓塞风险）');
+        recommendations.push('实验室检查：血常规、凝血功能、血糖、血脂、肝肾功能');
+    }
+    
+    if (topics.includes('糖尿病')) {
+        recommendations.push('血糖监测');
+        recommendations.push('糖化血红蛋白检查');
+        recommendations.push('肾功能检查');
+    }
+    
+    if (topics.includes('呼吸系统疾病')) {
+        recommendations.push('胸部X线或CT检查');
+        recommendations.push('肺功能检查');
+        recommendations.push('血气分析');
+    }
+    
+    return recommendations;
+}
+
+// 生成健康提示
+function generateHealthTips(topics) {
+    const tips = [];
+    
+    if (topics.includes('心血管疾病')) {
+        tips.push('保持健康的体重');
+        tips.push('减少钠盐摄入');
+        tips.push('定期进行有氧运动');
+    }
+    
+    if (topics.includes('脑血管疾病')) {
+        tips.push('控制危险因素：高血压、糖尿病、高脂血症、心房颤动等');
+        tips.push('生活方式调整：戒烟限酒、均衡饮食（低盐低脂）、适量运动（每周至少150分钟中等强度运动）');
+        tips.push('早期识别脑卒中症状：FAST原则（面部下垂、手臂无力、言语困难、时间就是大脑）');
+        tips.push('保持良好的睡眠质量（7-8小时/天），避免过度劳累和精神压力');
+        tips.push('定期体检：监测血压、血糖、血脂水平，评估心脑血管健康状况');
+        tips.push('遵医嘱服药：抗血小板药物、他汀类药物等二级预防药物');
+    }
+    
+    if (topics.includes('糖尿病')) {
+        tips.push('保持规律的作息时间');
+        tips.push('避免高糖、高脂肪食物');
+        tips.push('定期进行适度的体育锻炼');
+    }
+    
+    if (topics.includes('呼吸系统疾病')) {
+        tips.push('避免接触二手烟');
+        tips.push('保持充足的水分摄入');
+        tips.push('定期进行呼吸功能锻炼');
+    }
+    
+    return tips;
+}
+
+// 发送消息
+function sendMessage(event) {
+    event.preventDefault();
+    const input = document.getElementById('message-input');
+    const messagesContainer = document.getElementById('chat-messages');
+    const message = input.value.trim();
+
+    // 验证是否有输入或图片
+    const hasInput = message.trim().length > 0;
+    const hasImages = selectedImages.length > 0;
+    
+    if (!hasInput && !hasImages) {
+        return;
+    }
+
+    if (!currentConversationId) {
+        createNewConversation();
+    }
+
+    // 获取当前对话
+    let currentConversation = conversations.find(c => c.id === currentConversationId);
+    if (!currentConversation) {
+        createNewConversation();
+        currentConversation = conversations.find(c => c.id === currentConversationId);
+    }
+
+    // 创建用户消息，包含文字和图片
+    const userMessage = {
+        id: 'msg-' + Date.now(),
+        role: 'user',
+        content: message,
+        images: selectedImages.length > 0 ? selectedImages.map(img => img.data) : undefined,
+        timestamp: new Date().toISOString()
+    };
+
+    currentConversation.messages.push(userMessage);
+    currentConversation.updatedAt = new Date().toISOString();
+
+    // 更新对话标题
+    if (currentConversation.title === '新对话') {
+        currentConversation.title = message.substring(0, 20) + (message.length > 20 ? '...' : '');
+    }
+
+    // 保存对话
+    saveConversations();
+
+    // 添加用户消息到界面
+    const userMessageElement = document.createElement('div');
+    userMessageElement.className = 'message user';
+    
+    let messageHtml = `
+        <div class="message-content">
+            <div class="message-header">
+                <div class="message-avatar">我</div>
+                <div class="message-author">您</div>
+            </div>
+    `;
+    
+    // 添加图片预览
+    if (selectedImages.length > 0) {
+        messageHtml += `
+            <div class="message-images">
+                ${selectedImages.map((img, index) => `
+                    <div class="message-image-item">
+                        ${img.isPDF ? 
+                            `<div class="pdf-preview-small">
+                                <div class="pdf-icon-small">PDF</div>
+                                <div class="pdf-name-small">${img.name.split('.')[0]}</div>
+                            </div>` : 
+                            `<img src="${img.data}" alt="Image ${index + 1}" class="message-image">`
+                        }
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+    
+    // 添加文本内容
+    if (message) {
+        messageHtml += `<div class="message-text">${renderMarkdown(message)}</div>`;
+    }
+    
+    messageHtml += `
+            <div class="message-time">${new Date().toLocaleTimeString()}</div>
+        </div>
+    `;
+    
+    userMessageElement.innerHTML = messageHtml;
+    messagesContainer.appendChild(userMessageElement);
+
+    // 准备发送的图片数据
+    const imagesToSend = selectedImages
+        .map(file => ({
+            data: file.data,
+            type: file.type,
+            name: file.name,
+            isPDF: file.isPDF
+        }))
+        .filter(file => file.data);
+
+    // 清空输入框和图片
+    input.value = '';
+    selectedImages = [];
+    updateImagePreview();
+
+    // 滚动到底部
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    // 显示加载状态
+    const loadingElement = document.createElement('div');
+    loadingElement.className = 'message ai';
+    loadingElement.innerHTML = `
+        <div class="message-content">
+            <div class="message-header">
+                <div class="message-avatar">AI</div>
+                <div class="message-author">NeuroMatrix AI</div>
+            </div>
+            <div class="loading-message">
+                <div class="loading-dots">
+                    <div class="loading-dot"></div>
+                    <div class="loading-dot"></div>
+                    <div class="loading-dot"></div>
+                </div>
+            </div>
+        </div>
+    `;
+    messagesContainer.appendChild(loadingElement);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    // 调用后端API (SSE流式)
+    fetch('/api/chat/clinical/stream', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            sessionId: currentConversationId,
+            question: message,
+            images: imagesToSend.length > 0 ? imagesToSend : undefined,
+            patientContext: {
+                patientId: 'patient-' + Date.now(),
+                name: 'Patient',
+                age: 65,
+                medicalHistory: [],
+                currentDiagnosis: 'Consultation'
+            }
+        })
+    })
+    .then(response => {
+        if (!response.ok) {
+            throw new Error('API调用失败: ' + response.status);
+        }
+
+        if (!response.body) {
+            throw new Error('浏览器不支持流式响应');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+        let aiContent = '';
+        let aiMessageReady = false;
+
+        const ensureAiMessage = () => {
+            if (aiMessageReady) return;
+            loadingElement.innerHTML = `
+                <div class="message-content">
+                    <div class="message-header">
+                        <div class="message-avatar">AI</div>
+                        <div class="message-author">NeuroMatrix AI</div>
+                    </div>
+                    <div class="message-text"></div>
+                    <div class="message-time">${new Date().toLocaleTimeString()}</div>
+                </div>
+            `;
+            aiMessageReady = true;
+        };
+
+        const updateAiMessage = (delta) => {
+            aiContent += delta;
+            ensureAiMessage();
+            const messageText = loadingElement.querySelector('.message-text');
+            if (messageText) {
+                messageText.innerHTML = renderMarkdown(aiContent);
+            }
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        };
+
+        const finalizeAiMessage = () => {
+            if (!aiContent) {
+                loadingElement.remove();
+                return;
+            }
+
+            const aiMessage = {
+                id: 'msg-' + Date.now(),
+                role: 'assistant',
+                content: aiContent,
+                timestamp: new Date().toISOString()
+            };
+
+            currentConversation.messages.push(aiMessage);
+            currentConversation.updatedAt = new Date().toISOString();
+
+            const analysis = generateSafetyAnalysis(message, message, currentConversation);
+            if (!currentConversation.analysisHistory) {
+                currentConversation.analysisHistory = [];
+            }
+            currentConversation.analysisHistory.push(analysis);
+
+            saveConversations();
+            updateSafetyCard(currentConversation);
+            loadConversations();
+        };
+
+        const readStream = () => {
+            return reader.read().then(({ value, done }) => {
+                if (done) {
+                    finalizeAiMessage();
+                    return;
+                }
+
+                buffer += decoder.decode(value, { stream: true });
+                const events = buffer.split('\n\n');
+                buffer = events.pop() || '';
+
+                events.forEach(event => {
+                    event.split('\n').forEach(line => {
+                        if (!line.startsWith('data:')) return;
+                        const dataStr = line.slice(5).trim();
+                        if (!dataStr || dataStr === '[DONE]') return;
+
+                        let payload = null;
+                        try {
+                            payload = JSON.parse(dataStr);
+                        } catch (e) {
+                            payload = null;
+                        }
+
+                        if (!payload) return;
+                        if (payload.type === 'delta' && payload.content) {
+                            updateAiMessage(payload.content);
+                        }
+                        if (payload.type === 'error' && payload.error) {
+                            updateAiMessage('\n\n错误：' + payload.error);
+                        }
+                    });
+                });
+
+                return readStream();
+            });
+        };
+
+        return readStream();
+    })
+    .catch(error => {
+        loadingElement.remove();
+
+        const errorMessageElement = document.createElement('div');
+        errorMessageElement.className = 'message ai';
+        errorMessageElement.innerHTML = `
+            <div class="message-content">
+                <div class="message-header">
+                    <div class="message-avatar">AI</div>
+                    <div class="message-author">NeuroMatrix AI</div>
+                </div>
+                <div class="message-text">错误：${error.message || '网络错误，请稍后重试'}</div>
+                <div class="message-time">${new Date().toLocaleTimeString()}</div>
+            </div>
+        `;
+        messagesContainer.appendChild(errorMessageElement);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    });
+}
+
+
+
+// 更新安全卡
+function updateSafetyCard(conversation) {
+    const safetyContent = document.getElementById('safety-content');
+    if (!safetyContent) return;
+
+    if (!conversation.analysisHistory || conversation.analysisHistory.length === 0) {
+        safetyContent.innerHTML = `
+            <div class="safety-empty">
+                <p>暂无安全提示</p>
+                <p class="hint">开始医疗对话后将显示安全分析</p>
+            </div>
+        `;
+        return;
+    }
+
+    const latestAnalysis = conversation.analysisHistory[conversation.analysisHistory.length - 1];
+
+    safetyContent.innerHTML = '';
+
+    if (!latestAnalysis || (!latestAnalysis.risks?.length && !latestAnalysis.keypoints?.length)) {
+        safetyContent.innerHTML = `
+            <div class="safety-empty">
+                <p>暂无安全提示</p>
+                <p class="hint">当前对话未触发安全分析</p>
+            </div>
+        `;
+        return;
+    }
+
+    // 添加风险卡片
+    latestAnalysis.risks.forEach(risk => {
+        const safetyCard = document.createElement('div');
+        safetyCard.className = `safety-card ${risk.level}`;
+        safetyCard.innerHTML = `
+            <div class="safety-card-header">
+                <div class="safety-card-icon">${risk.level === 'high' ? '!' : 'ℹ'}</div>
+                <div class="safety-card-title">${risk.description}</div>
+            </div>
+            <div class="safety-card-content">${risk.description}</div>
+            <div class="safety-card-suggestion">
+                <strong>处置建议：</strong>${risk.suggestion}
+            </div>
+        `;
+        safetyContent.appendChild(safetyCard);
+    });
+
+    // 添加要点卡片
+    if (latestAnalysis.keypoints && latestAnalysis.keypoints.length > 0) {
+        const keypointsCard = document.createElement('div');
+        keypointsCard.className = 'safety-card';
+        keypointsCard.innerHTML = `
+            <div class="safety-card-header">
+                <div class="safety-card-icon">📋</div>
+                <div class="safety-card-title">治疗要点</div>
+            </div>
+            <div class="safety-card-content">
+                ${latestAnalysis.keypoints.map(point => `<div>- ${point}</div>`).join('')}
+            </div>
+        `;
+        safetyContent.appendChild(keypointsCard);
+    }
+
+    // 添加临床指导卡片
+    if (latestAnalysis.guidelines && latestAnalysis.guidelines.length > 0) {
+        const guidelinesCard = document.createElement('div');
+        guidelinesCard.className = 'safety-card';
+        guidelinesCard.innerHTML = `
+            <div class="safety-card-header">
+                <div class="safety-card-icon">⚕️</div>
+                <div class="safety-card-title">临床指导</div>
+            </div>
+            <div class="safety-card-content">
+                ${latestAnalysis.guidelines.map(guideline => `<div>- ${guideline}</div>`).join('')}
+            </div>
+        `;
+        safetyContent.appendChild(guidelinesCard);
+    }
+
+    // 添加检查建议卡片
+    if (latestAnalysis.recommendations && latestAnalysis.recommendations.length > 0) {
+        const recommendationsCard = document.createElement('div');
+        recommendationsCard.className = 'safety-card';
+        recommendationsCard.innerHTML = `
+            <div class="safety-card-header">
+                <div class="safety-card-icon">🔬</div>
+                <div class="safety-card-title">检查建议</div>
+            </div>
+            <div class="safety-card-content">
+                ${latestAnalysis.recommendations.map(recommendation => `<div>- ${recommendation}</div>`).join('')}
+            </div>
+        `;
+        safetyContent.appendChild(recommendationsCard);
+    }
+
+    // 添加健康提示卡片
+    if (latestAnalysis.healthTips && latestAnalysis.healthTips.length > 0) {
+        const healthTipsCard = document.createElement('div');
+        healthTipsCard.className = 'safety-card';
+        healthTipsCard.innerHTML = `
+            <div class="safety-card-header">
+                <div class="safety-card-icon">💡</div>
+                <div class="safety-card-title">健康提示</div>
+            </div>
+            <div class="safety-card-content">
+                ${latestAnalysis.healthTips.map(tip => `<div>- ${tip}</div>`).join('')}
+            </div>
+        `;
+        safetyContent.appendChild(healthTipsCard);
+    }
+
+    // 添加脑卒中专业知识卡片
+    if (latestAnalysis.detectedTopics && latestAnalysis.detectedTopics.includes('脑血管疾病')) {
+        const strokeKnowledgeCard = document.createElement('div');
+        strokeKnowledgeCard.className = 'safety-card';
+        strokeKnowledgeCard.innerHTML = `
+            <div class="safety-card-header">
+                <div class="safety-card-icon">🧠</div>
+                <div class="safety-card-title">脑卒中专业知识</div>
+            </div>
+            <div class="safety-card-content">
+                <div><strong>发病机制与病因：</strong></div>
+                <div>- 缺血性：动脉粥样硬化、心源性栓塞、小血管病、动脉夹层、血液高凝状态</div>
+                <div>- 出血性：高血压性脑出血、动脉瘤破裂、血管畸形、凝血功能障碍</div>
+                <div>- 蛛网膜下腔出血：颅内动脉瘤、动静脉畸形、外伤</div>
+                <div><strong>危险因素与高危人群：</strong></div>
+                <div>- 不可控：年龄、男性、家族史</div>
+                <div>- 可控：高血压、糖尿病、高脂血症、吸烟、酗酒、肥胖、缺乏运动、心房颤动</div>
+                <div><strong>典型与非典型临床表现：</strong></div>
+                <div>- 典型：突发面部下垂、肢体无力、言语困难、视力障碍、眩晕</div>
+                <div>- 非典型：头痛、意识障碍、认知障碍、精神行为异常、癫痫发作</div>
+                <div><strong>影像学鉴别诊断：</strong></div>
+                <div>- 缺血性：CT低密度灶，MRI DWI高信号，FLAIR高信号</div>
+                <div>- 出血性：CT高密度灶，MRI T1高信号，T2低信号，SWI低信号</div>
+                <div>- 蛛网膜下腔出血：CT脑沟脑池高密度，CTA可显示动脉瘤</div>
+                <div><strong>急性期诊疗要点：</strong></div>
+                <div>- 缺血性：静脉溶栓（rt-PA）、血管内取栓、抗血小板治疗</div>
+                <div>- 出血性：控制血压、降低颅内压、手术治疗（必要时）</div>
+                <div>- 并发症：脑水肿、颅内高压、脑疝、感染、深静脉血栓</div>
+                <div><strong>二级预防与康复：</strong></div>
+                <div>- 药物：抗血小板、他汀、降压、降糖</div>
+                <div>- 康复：早期介入、综合康复、长期随访</div>
+            </div>
+        `;
+        safetyContent.appendChild(strokeKnowledgeCard);
+    }
+
+    // 添加主题识别信息
+    if (latestAnalysis.detectedTopics && latestAnalysis.detectedTopics.length > 0) {
+        const topicsCard = document.createElement('div');
+        topicsCard.className = 'safety-card';
+        topicsCard.innerHTML = `
+            <div class="safety-card-header">
+                <div class="safety-card-icon">🎯</div>
+                <div class="safety-card-title">识别的主题</div>
+            </div>
+            <div class="safety-card-content">
+                ${latestAnalysis.detectedTopics.map(topic => `<div>- ${topic}</div>`).join('')}
+            </div>
+            <div class="safety-card-suggestion">
+                <strong>置信度：</strong>${(latestAnalysis.confidence * 100).toFixed(0)}%
+            </div>
+        `;
+        safetyContent.appendChild(topicsCard);
+    }
+}
+
+// 保存对话
+function saveConversations() {
+    localStorage.setItem('neuromatrix-conversations', JSON.stringify(conversations));
+}
+
+// 页面加载完成后初始化
+window.onload = initChat;
+</script>
+{% endblock %}

@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>临床诊断报告 | NeuroMatrix AI</title>
+    <link rel="stylesheet" href="/static/css/report.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div id="report-root"></div>
+
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <!-- 引入编译后的 report.js -->
+    <script src="/static/js/report.js?v=2"></script>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        
+        // 从 URL 路径获取 patient_id: /report/123
+        const pathParts = window.location.pathname.split('/');
+        const patientId = parseInt(pathParts[pathParts.length - 1]) || null;
+        
+        const fileId = urlParams.get('file_id') || null;
+
+        // 从 localStorage 获取分析数据（跨标签页共享）
+        const viewerData = JSON.parse(localStorage.getItem('analysis_data') || '{}');
+        const analysisData = {
+            core_volume: viewerData.core_infarct_volume || 0,
+            penumbra_volume: viewerData.penumbra_volume || 0,
+            mismatch_ratio: viewerData.mismatch_ratio || 0,
+            has_mismatch: viewerData.has_mismatch || false,
+            hemisphere: viewerData.hemisphere || 'both',
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('report-root'));
+        root.render(
+            React.createElement(window.StructuredReport, {
+                patientId: patientId,
+                fileId: fileId,
+                analysisData: analysisData,
+            })
+        );
+    </script>
+</body>
+</html>

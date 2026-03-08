@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block tools %}
+<button class="tool-btn" onclick="backToUpload()">返回上传</button>
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="page">
+        <div class="processing-shell">
+            <div class="processing-header">
+                <div class="processing-title">智能工作流处理中</div>
+                <div class="processing-subtitle">系统将依次完成模态识别、CTP处理、脑卒中分析与AI报告生成</div>
+            </div>
+            <div class="processing-main">
+                <div class="processing-left">
+                    <div class="processing-progress">
+                        <div class="processing-progress-top">
+                            <span>总进度</span>
+                            <span id="processingPercent">0%</span>
+                        </div>
+                        <div class="processing-progress-track">
+                            <div class="processing-progress-fill" id="processingProgressFill"></div>
+                        </div>
+                    </div>
+                    <div id="processingSteps" class="processing-steps"></div>
+                    <div class="processing-current" id="processingCurrent">任务已创建，等待系统开始处理...</div>
+                    <div class="processing-error" id="processingError" style="display:none;"></div>
+                    <div class="processing-actions">
+                        <button id="processingRetryBtn" class="tool-btn" style="display:none;" onclick="backToUpload()">返回上传重试</button>
+                        <button id="processingViewerBtn" class="tool-btn primary" style="display:none;" onclick="goToViewerNow()">立即进入 Viewer</button>
+                    </div>
+                </div>
+                <div class="processing-right">
+                    <div class="processing-card">
+                        <div class="processing-card-title">任务信息</div>
+                        <div class="processing-kv">
+                            <span>患者ID</span><span id="processingPatientId">-</span>
+                        </div>
+                        <div class="processing-kv">
+                            <span>病例ID</span><span id="processingFileId">-</span>
+                        </div>
+                        <div class="processing-kv">
+                            <span>任务ID</span><span id="processingJobId">-</span>
+                        </div>
+                        <div class="processing-kv">
+                            <span>任务状态</span><span id="processingStatus">queued</span>
+                        </div>
+                        <div class="processing-kv">
+                            <span>当前步骤</span><span id="processingStepName">-</span>
+                        </div>
+                        <div class="processing-kv">
+                            <span>耗时</span><span id="processingElapsed">0s</span>
+                        </div>
+                    </div>
+                    <div class="processing-card">
+                        <div class="processing-card-title">模态识别</div>
+                        <div class="processing-modality-list" id="processingModalities">-</div>
+                    </div>
+                    <div class="processing-card">
+                        <div class="processing-card-title">系统说明</div>
+                        <div class="processing-note">
+                            当前页面为实时处理监控页。任务完成后系统将自动跳转到 Viewer，
+                            并携带已就绪的影像数据和报告缓存。
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/processing.js"></script>
+{% endblock %}

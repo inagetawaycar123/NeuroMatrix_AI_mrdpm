@@ -1,0 +1,31 @@
+# trae
+.trae/
+
+# bmad
+.bmad/
+
+# weights
+**/weights/
+
+# __pycache__
+**/__pycache__/
+
+# static
+static/uploads/
+static/processed/
+static/dist/  # Vite 构建产物（由 frontend/npm run build 生成）
+
+# log日志
+web_system.log
+
+# MedGemma 模型文件（大型模型权重，不提交）
+MedGemma_Model/*.safetensors
+MedGemma_Model/*.safetensors.index.json
+*.safetensors
+*.safetensors.index.json
+
+node_modules/
+
+.venv
+
+.env

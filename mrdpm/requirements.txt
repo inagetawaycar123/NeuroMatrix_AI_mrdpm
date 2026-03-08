@@ -1,0 +1,13 @@
+torch>=1.6
+torchvision
+numpy
+pandas
+tqdm
+tensorboardX>=1.14
+scipy 
+opencv-python
+clean-fid
+dropblock
+torchviz
+pydot_ng
+einops

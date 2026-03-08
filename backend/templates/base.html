@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}NeuroMatrix AI | 脑卒中影像分析系统{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/contrast_control.css">
+    <link rel="stylesheet" href="/static/css/main.css">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <div class="top-bar">
+        <div class="logo">NeuroMatrix AI</div>
+        <div class="patient-info" id="patientInfo" style="display: none;">
+            <span>患者ID: <span id="patientId">-</span></span>
+            <span>切片: <span id="topSliceInfo">1/100</span></span>
+        </div>
+        <div class="disclaimer">⚠️ AI分析结果仅供临床参考 | 请确保输入数据无明显伪影</div>
+        <div class="tools">
+            {% block tools %}{% endblock %}
+        </div>
+    </div>
+
+    {% block content %}{% endblock %}
+
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <div class="loading-text">处理中...</div>
+            <div class="loading-detail" id="loadingDetail">正在初始化AI模型</div>
+        </div>
+    </div>
+
+    <div class="message" id="messageBox"></div>
+    <div id="contrast-panel-container" class="contrast-floating-panel hidden"></div>
+
+    <script src="/static/js/contrast_control.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+    <script src="/static/js/common.js"></script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

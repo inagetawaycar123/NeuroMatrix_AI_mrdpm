@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuroMatrix AI | 脑卒中影像分析系统</title>
+    <link rel="stylesheet" href="/static/css/contrast_control.css">
+    <style>
+        * { margin:0;padding:0;box-sizing:border-box; }
+        body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#fff; overflow:hidden; height:100vh; }
+        .top-bar { height:40px; background:#000; border-bottom:1px solid #1a1a1a; display:flex; align-items:center; padding:0 16px; justify-content:space-between; }
+        .logo { font-size:13px; color:#fff; }
+        .patient-info { font-size:11px; color:#808080; display: flex; gap: 16px; }
+        .disclaimer { font-size:11px; color:#ffd43b; background:rgba(255,212,59,0.08); padding:5px 12px; border-left:2px solid #ffd43b; }
+        .tools { display:flex; gap:8px; }
+        .tool-btn { background:transparent; border:1px solid #333; color:#fff; padding:4px 12px; font-size:11px; cursor:pointer; }
+        .tool-btn.primary { background:#00a8ff; border-color:#00a8ff; }
+        .loading-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.95); display:none; align-items:center; justify-content:center; z-index:1000; }
+        .spinner { width:32px; height:32px; border:2px solid #1a1a1a; border-top-color:#00a8ff; border-radius:50%; animation:spin 0.8s linear infinite; margin:0 auto 16px; }
+        @keyframes spin { to { transform:rotate(360deg); } }
+        .message { position:fixed; top:50px; right:16px; padding:10px 16px; font-size:11px; background:#0a0a0a; border:1px solid; z-index:999; display:none; }
+        .message.error { border-color:#ff6b6b; color:#ff6b6b; }
+        .message.success { border-color:#51cf66; color:#51cf66; }
+        .message.show { display:block; }
+
+        /* ==================== 页面容器切换 - 核心修改【患者信息页居中】==================== */
+        .container { display: flex; align-items: center; justify-content: center; height: calc(100vh - 40px); padding:20px; }
+        .page { width: 100%; height: 100%; display: none; }
+        .page.active { display: flex; align-items: center; justify-content: center; }
+        .info-box { width:800px; background:#0a0a0a; border:1px solid #1a1a1a; padding:40px; margin: 0 auto; }
+        .info-title { font-size:18px; margin-bottom:32px; color:#fff; }
+        .form-group { margin-bottom:28px; border-bottom:1px solid #1a1a1a; padding-bottom:24px; }
+        .group-title { font-size:14px; color:#808080; margin-bottom:16px; }
+        .form-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+        .form-grid-2 { grid-template-columns:repeat(2,1fr); }
+        .form-item { display:flex; flex-direction:column; gap:8px; }
+        .form-label { font-size:13px; color:#808080; }
+        .form-label.required::after { content:'*'; color:#ff6b6b; margin-left:4px; }
+        .form-input, .form-select { background:#000; border:1px solid #333; color:#fff; padding:10px 16px; font-size:14px; outline:none; height:44px; }
+        .form-input:focus { border-color:#00a8ff; }
+
+        /* ==================== Viz LVO 风格 - 极简专业 ==================== */
+        .upload-container { display: flex; align-items: center; justify-content: center; height: 100%; background: #000; }
+        .upload-box { width: 700px; background: #0a0a0a; border:1px solid #1a1a1a; padding:40px; }
+        .upload-title { font-size:16px; font-weight:500; margin-bottom:24px; color:#fff; }
+        .file-input-row { display:flex; align-items:center; margin-bottom:16px; gap:16px; }
+        .file-label { width:100px; font-size:12px; color:#808080; text-align:right; }
+        .file-input { display:none; }
+        .file-select { flex:1; background:#000; border:1px solid #333; color:#808080; padding:10px 16px; font-size:12px; cursor:pointer; text-align:left; transition:border-color 0.2s; }
+        .file-select:hover { border-color:#00a8ff; }
+        .file-select.selected { color:#fff; border-color:#00a8ff; }
+        .upload-btn { width:100%; background:#00a8ff; border:none; color:#fff; padding:12px; font-size:14px; font-weight:500; cursor:pointer; margin-top:24px; transition:background 0.2s; }
+        .upload-btn:hover:not(:disabled) { background:#0095e0; }
+        .upload-btn:disabled { background:#1a1a1a; color:#404040; cursor:pointer; }
+        .upload-info { font-size:11px; color:#808080; marginTop:20px; padding-top:20px; border-top:1px solid #1a1a1a; line-height:1.6; }
+
+        .viewer-container { display: flex; height:100%; flex-direction: column; }
+        .image-grid { flex:1; display:grid; grid-template-columns:repeat(3,1fr); grid-template-rows:repeat(2,1fr); gap:1px; background:#0a0a0a; overflow:hidden; }
+        .grid-cell { background:#000; position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center; }
+        .grid-cell:hover { background:#0a0a0a; }
+        .cell-label { position:absolute; top:6px; left:6px; font-size:10px; color:#808080; background:rgba(0,0,0,0.8); padding:2px 8px; z-index:10; font-weight:400; letter-spacing:0.3px; }
+        .cell-status { position:absolute; top:6px; right:6px; font-size:9px; padding:2px 6px; background:rgba(0,0,0,0.8); z-index:10; }
+        .status-ready { color:#51cf66; }
+        .status-processing { color:#ffd43b; }
+        .status-error { color:#ff6b6b; }
+        .grid-image { max-width:100%; max-height:100%; object-fit:contain; transform:rotate(-90deg); }
+
+        .bottom-bar { height:60px; background:#000; border-top:1px solid #1a1a1a; display:flex; align-items:center; padding:0 16px; justify-content:space-between; }
+        .slice-controls { display:flex; align-items:center; gap:12px; }
+        .nav-btn { width:28px; height:28px; background:transparent; border:1px solid #333; color:#fff; cursor:pointer; font-size:12px; transition:border-color 0.2s; }
+        .nav-btn:hover:not(:disabled) { border-color:#00a8ff; }
+        .nav-btn:disabled { color:#404040; border-color:#1a1a1a; cursor:not-allowed; }
+        .slice-slider { width:400px; height:2px; background:#333; outline:none; -webkit-appearance:none; }
+        .slice-slider::-webkit-slider-thumb { -webkit-appearance:none; width:12px; height:12px; background:#00a8ff; cursor:pointer; }
+        .slice-slider::-moz-range-thumb { width:12px; height:12px; background:#00a8ff; cursor:pointer; border:none; }
+        .slice-info { font-size:11px; color:#808080; min-width:60px; }
+        .metrics-display { display:flex; gap:20px; font-size:11px; }
+        .metric-item { color:#808080; padding:4px 10px; background:#0a0a0a; border-left:2px solid #333; }
+        .metric-item.highlight { color:#fff; border-left-color:#00a8ff; }
+        .metric-item.warning { color:#ffd43b; border-left-color:#ffd43b; }
+
+        .analysis-panel { position:fixed; right:0; top:40px; width:320px; height:calc(100vh - 100px); background:#0a0a0a; border-left:1px solid #1a1a1a; transform:translateX(100%); transition:transform 0.3s ease; z-index:100; overflow-y:auto; }
+        .analysis-panel.open { transform:translateX(0); }
+        .panel-header { padding:12px 16px; border-bottom:1px solid #1a1a1a; display:flex; justify-content:space-between; align-items:center; }
+        .panel-title { font-size:12px; font-weight:500; color:#fff; }
+        .close-btn { background:transparent; border:none; color:#808080; cursor:pointer; font-size:16px; padding:0; width:24px; height:24px; }
+        .close-btn:hover { color:#fff; }
+        .panel-section { padding:16px; border-bottom:1px solid #1a1a1a; }
+        .section-title { font-size:11px; color:#808080; margin-bottom:12px; text-transform:uppercase; letter-spacing:0.5px; }
+        .hemisphere-btns { display:flex; gap:6px; }
+        .hemisphere-btn { flex:1; background:#000; border:1px solid #333; color:#808080; padding:6px; font-size:11px; cursor:pointer; transition:all 0.2s; }
+        .hemisphere-btn.active { background:#00a8ff; border-color:#00a8ff; color:#fff; }
+        .analyze-btn { width:100%; background:#00a8ff; border:none; color:#fff; padding:8px; font-size:11px; font-weight:500; cursor:pointer; marginTop:12px; }
+        .analyze-btn:hover { background:#0095e0; }
+        .analysis-results { display:none; }
+        .analysis-results.show { display:block; }
+        .result-images { display:grid; grid-template-columns:repeat(3,1fr); gap:1px; background:#1a1a1a; margin:12px 0; }
+        .result-img-cell { aspect-ratio:1; background:#000; position:relative; }
+        .result-img-cell img { width:100%; height:100%; object-fit:contain; transform:rotate(-90deg); }
+        .result-img-label { position:absolute; bottom:2px; left:2px; font-size:9px; color:#808080; background:rgba(0,0,0,0.8); padding:1px 4px; }
+        .metrics-list { display:flex; flex-direction:column; gap:8px; }
+        .metric-row { display:flex; justify-content:space-between; font-size:11px; padding:6px 0; border-bottom:1px solid #1a1a1a; }
+        .metric-label { color:#808080; }
+        .metric-value { color:#fff; font-weight:500; }
+        .metric-value.alert { color:#ff6b6b; }
+        .metric-value.good { color:#51cf66; }
+
+        .loading-content { text-align:center; }
+        .loading-text { font-size:12px; color:#fff; margin-bottom:6px; }
+        .loading-detail { font-size:10px; color:#808080; }
+        .pseudocolor-toggle { position:absolute; bottom:6px; right:6px; font-size:9px; color:#808080; background:rgba(0,0,0,0.8); padding:2px 6px; cursor:pointer; z-index:10; border:1px solid #333; }
+        .pseudocolor-toggle:hover { color:#fff; border-color:#00a8ff; }
+        .pseudocolor-toggle.active { color:#00a8ff; border-color:#00a8ff; }
+        
+        @media (max-width: 1600px) { .image-grid { grid-template-columns: repeat(3,1fr); grid-template-rows: repeat(3,1fr); } }
+        @media (max-width: 1200px) { .image-grid { grid-template-columns: repeat(2,1fr); grid-template-rows: repeat(4,1fr); } }
+    </style>
+</head>
+<body>
+    <!-- 顶部工具栏 -->
+    <div class="top-bar">
+        <div class="logo">NeuroMatrix AI</div>
+        <div class="patient-info" id="patientInfo" style="display: none;">
+            <span>患者ID: <span id="patientId">-</span></span>
+            <span>切片: <span id="topSliceInfo">1/100</span></span>
+        </div>
+        <div class="disclaimer">⚠️ AI分析结果仅供临床参考 | 请确保输入数据无明显伪影</div>
+        <div class="tools" id="patientTools">
+            <button class="tool-btn" onclick="resetForm()">重置表单</button>
+            <button class="tool-btn primary" onclick="submitPatientInfo()">提交存储</button>
+        </div>
+        <div class="tools" id="mainTools" style="display: none;">
+            <button class="tool-btn" id="contrastBtn" onclick="toggleContrastPanel()">对比度调节</button>
+            <button class="tool-btn" id="pseudocolorBtn" onclick="togglePseudocolor()">生成伪彩图</button>
+            <button class="tool-btn" onclick="toggleAnalysisPanel()">脑卒中分析</button>
+            <button class="tool-btn" onclick="downloadData()">下载</button>
+            <button class="tool-btn" onclick="resetAll()">重新开始</button>
+        </div>
+    </div>
+
+    <!-- 核心容器 - 页面切换 -->
+    <div class="container">
+        <!-- 1. 患者信息录入页面 - 已完美居中 -->
+        <div class="page active" id="patientPage">
+            <div class="info-box">
+                <div class="info-title">脑卒中患者核心信息录入</div>
+                <form id="patientForm">
+                    <div class="form-group">
+                        <div class="group-title">👤 患者基础信息</div>
+                        <div class="form-grid">
+                            <div class="form-item"><label class="form-label required">姓名</label><input type="text" id="patient_name" class="form-input" required></div>
+                            <div class="form-item"><label class="form-label required">年龄</label><input type="number" id="patient_age" class="form-input" min="0" max="120" required></div>
+                            <div class="form-item"><label class="form-label required">性别</label><select id="patient_sex" class="form-select" required><option value="">请选择</option><option value="男">男</option><option value="女">女</option></select></div>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <div class="group-title">⏱️ 病程时间信息</div>
+                        <div class="form-grid form-grid-2">
+                            <div class="form-item"><label class="form-label required">发病精确时间</label><input type="datetime-local" id="onset_exact_time" class="form-input" required></div>
+                            <div class="form-item"><label class="form-label required">入院时间</label><input type="datetime-local" id="admission_time" class="form-input" required></div>
+                        </div>
+                        <div class="form-item" style="margin-top:12px;"><label class="form-label required">入院到发病时间差</label><input type="text" id="surgery_time" class="form-input" readonly value="选择时间后自动计算"></div>
+                    </div>
+                    <div class="form-group">
+                        <div class="group-title">📊 入院NIHSS评分</div>
+                        <div class="form-grid">
+                            <div class="form-item"><label class="form-label required">评分 (0-42)</label><input type="number" id="admission_nihss" class="form-input" min="0" max="42" required></div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 2. 双影像上传页面 -->
+        <div class="page" id="uploadPage">
+            <div class="upload-container">
+                <div class="upload-box">
+                    <div class="upload-title">上传医学影像文件</div>
+                    <div class="file-input-row">
+                        <label class="file-label">CTA文件:</label>
+                        <input type="file" id="mctaFile" class="file-input" accept=".nii,.nii.gz">
+                        <button class="file-select" id="mctaBtn" onclick="document.getElementById('mctaFile').click()">选择文件...</button>
+                    </div>
+                    <div class="file-input-row">
+                        <label class="file-label">NCCT文件:</label>
+                        <input type="file" id="ncctFile" class="file-input" accept=".nii,.nii.gz">
+                        <button class="file-select" id="ncctBtn" onclick="document.getElementById('ncctFile').click()">选择文件...</button>
+                    </div>
+                    <div class="file-input-row">
+                        <label class="file-label">模型选择:</label>
+                        <select id="modelSelect" class="form-select" style="width: auto; flex: 1;">
+                            <option value="palette">palette模型</option>
+                            <option value="mrdpm" selected>mrdpm模型 (默认)</option>
+                        </select>
+                    </div>
+                    <button class="upload-btn" id="uploadBtn" onclick="processFiles()" disabled>开始处理</button>
+                    <div class="upload-info">
+                        支持格式: NIfTI (.nii, .nii.gz)<br>
+                        文件大小: 最大 100MB<br>
+                        系统将自动生成: RGB合成、脑部掩码、AI灌注图(CBF/CBV/Tmax)
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 3. 影像分析查看页面 -->
+        <div class="page" id="viewerPage">
+            <div class="viewer-container">
+                <div class="image-grid">
+                    <div class="grid-cell" id="cell-cta">
+                        <div class="cell-label">CTA</div>
+                        <div class="cell-status status-ready" id="status-cta" style="display:none;">✓</div>
+                        <div class="contrast-indicator" id="contrast-indicator-cta">W:80 L:40</div>
+                        <img id="img-cta" class="grid-image" src="" alt="CTA">
+                    </div>
+                    <div class="grid-cell" id="cell-ncct">
+                        <div class="cell-label">NCCT</div>
+                        <div class="cell-status status-ready" id="status-ncct" style="display:none;">✓</div>
+                        <div class="contrast-indicator" id="contrast-indicator-ncct">W:80 L:40</div>
+                        <img id="img-ncct" class="grid-image" src="" alt="NCCT">
+                    </div>
+                    <div class="grid-cell" id="cell-stroke">
+                        <div class="cell-label">STROKE ANALYSIS</div>
+                        <div class="cell-status" id="status-stroke" style="display:none;">-</div>
+                        <img id="img-stroke" class="grid-image" src="" alt="Stroke">
+                    </div>
+                    <div class="grid-cell" id="cell-cbf">
+                        <div class="cell-label">CBF</div>
+                        <div class="cell-status" id="status-cbf" style="display:none;">-</div>
+                        <div class="pseudocolor-toggle" id="toggle-cbf" onclick="toggleCellPseudocolor('cbf')">伪彩</div>
+                        <img id="img-cbf" class="grid-image" src="" alt="CBF">
+                    </div>
+                    <div class="grid-cell" id="cell-cbv">
+                        <div class="cell-label">CBV</div>
+                        <div class="cell-status" id="status-cbv" style="display:none;">-</div>
+                        <div class="pseudocolor-toggle" id="toggle-cbv" onclick="toggleCellPseudocolor('cbv')">伪彩</div>
+                        <img id="img-cbv" class="grid-image" src="" alt="CBV">
+                    </div>
+                    <div class="grid-cell" id="cell-tmax">
+                        <div class="cell-label">TMAX</div>
+                        <div class="cell-status" id="status-tmax" style="display:none;">-</div>
+                        <div class="pseudocolor-toggle" id="toggle-tmax" onclick="toggleCellPseudocolor('tmax')">伪彩</div>
+                        <img id="img-tmax" class="grid-image" src="" alt="Tmax">
+                    </div>
+                </div>
+                <div class="bottom-bar">
+                    <div class="slice-controls">
+                        <button class="nav-btn" id="prevBtn" onclick="changeSlice(-1)">◀</button>
+                        <input type="range" class="slice-slider" id="sliceSlider" min="0" max="100" value="0" oninput="updateSlice(this.value)">
+                        <span class="slice-info" id="sliceInfo">1 / 100</span>
+                        <button class="nav-btn" id="nextBtn" onclick="changeSlice(1)">▶</button>
+                    </div>
+                    <div class="metrics-display" id="metricsDisplay">
+                        <div class="metric-item">
+                            <span>半暗带: <span id="metric-penumbra">--</span> ml</span>
+                        </div>
+                        <div class="metric-item">
+                            <span>核心: <span id="metric-core">--</span> ml</span>
+                        </div>
+                        <div class="metric-item" id="metric-mismatch-container">
+                            <span>不匹配: <span id="metric-mismatch">--</span></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 脑卒中分析面板 -->
+    <div class="analysis-panel" id="analysisPanel">
+        <div class="panel-header">
+            <div class="panel-title">脑卒中分析</div>
+            <button class="close-btn" onclick="toggleAnalysisPanel()">×</button>
+        </div>
+        <div class="panel-section">
+            <div class="section-title">偏侧选择</div>
+            <div class="hemisphere-btns">
+                <button class="hemisphere-btn" data-hemisphere="right">右脑</button>
+                <button class="hemisphere-btn" data-hemisphere="left">左脑</button>
+                <button class="hemisphere-btn active" data-hemisphere="both">双侧</button>
+            </div>
+            <button class="analyze-btn" onclick="startStrokeAnalysis()">开始分析</button>
+        </div>
+        <div class="panel-section analysis-results" id="analysisResults">
+            <div class="section-title">病灶可视化</div>
+            <div class="result-images">
+                <div class="result-img-cell">
+                    <div class="result-img-label">半暗带</div>
+                    <img id="img-penumbra" src="" alt="Penumbra">
+                </div>
+                <div class="result-img-cell">
+                    <div class="result-img-label">核心</div>
+                    <img id="img-core" src="" alt="Core">
+                </div>
+                <div class="result-img-cell">
+                    <div class="result-img-label">综合</div>
+                    <img id="img-combined" src="" alt="Combined">
+                </div>
+            </div>
+        </div>
+        <div class="panel-section analysis-results" id="analysisMetrics">
+            <div class="section-title">量化结果</div>
+            <div class="metrics-list">
+                <div class="metric-row">
+                    <span class="metric-label">半暗带体积</span>
+                    <span class="metric-value" id="value-penumbra">-- ml</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">核心梗死体积</span>
+                    <span class="metric-value" id="value-core">-- ml</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">不匹配比例</span>
+                    <span class="metric-value" id="value-ratio">--</span>
+                </div>
+                <div class="metric-row">
+                    <span class="metric-label">不匹配状态</span>
+                    <span class="metric-value" id="value-status">--</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 加载遮罩 -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <div class="loading-text">处理中...</div>
+            <div class="loading-detail" id="loadingDetail">正在初始化AI模型</div>
+        </div>
+    </div>
+
+    <!-- 消息提示 -->
+    <div class="message" id="messageBox"></div>
+    
+    <!-- 对比度调节面板容器 -->
+    <div id="contrast-panel-container" class="contrast-floating-panel hidden"></div>
+
+    <!-- 只保留必须依赖，删除dicom-parser -->
+    <script src="/static/js/contrast_control.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+    
+    <script>
+        // ==================== 全局变量 ====================
+        let currentPatientId = ""; // 核心：存储患者ID，用于绑定影像
+        let currentFileId = null;
+        let currentSlice = 0;
+        let totalSlices = 0;
+        let currentRgbFiles = [];
+        let mctaFile = null;
+        let ncctFile = null;
+        let hasAI = false;
+        let availableModels = [];
+        let currentHemisphere = 'both';
+        let analysisResults = null;
+        let pseudocolorMode = {};
+        let pseudocolorGenerated = false;
+        let isPseudocolorActive = false;
+        let contrastController = null;
+
+        // ==================== 初始化 ====================
+        document.addEventListener('DOMContentLoaded', function() {
+            // 时间差自动计算
+            const onset = document.getElementById('onset_exact_time'), admission = document.getElementById('admission_time'), diff = document.getElementById('surgery_time');
+            [onset, admission].forEach(el => el.addEventListener('change', () => {
+                if (onset.value && admission.value) {
+                    const d1 = new Date(onset.value), d2 = new Date(admission.value), ms = d2 - d1;
+                    const h = Math.floor(ms/3600000), m = Math.floor((ms%3600000)/60000);
+                    diff.value = `${h}小时 ${m}分钟`;
+                }
+            }));
+            initializeFileInputs();
+            initializeHemisphereButtons();
+            initializeContrastController();
+        });
+
+        // ==================== 患者信息提交核心方法 ====================
+        async function submitPatientInfo() {
+            const form = document.getElementById('patientForm');
+            if (!form.checkValidity()) { showMsg('请填写完整必填项', 'error'); return; }
+            document.getElementById('loadingOverlay').style.display = 'flex';
+            try {
+                const data = {
+                    patient_name: document.getElementById('patient_name').value.trim(),
+                    patient_age: parseInt(document.getElementById('patient_age').value),
+                    patient_sex: document.getElementById('patient_sex').value,
+                    onset_exact_time: new Date(document.getElementById('onset_exact_time').value).toISOString(),
+                    admission_time: new Date(document.getElementById('admission_time').value).toISOString(),
+                    surgery_time: document.getElementById('surgery_time').value,
+                    admission_nihss: parseInt(document.getElementById('admission_nihss').value),
+                    create_time: new Date().toISOString()
+                };
+                // 提交患者信息到后端接口
+                const res = await $.ajax({
+                    url: '/api/insert_patient',
+                    type: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify(data)
+                });
+                currentPatientId = res.data.id; // 保存患者ID
+                showMsg(`提交成功！患者ID: ${currentPatientId}`, 'success');
+                // 切换到影像上传页面
+                document.getElementById('patientTools').style.display = 'none';
+                document.getElementById('patientPage').classList.remove('active');
+                document.getElementById('uploadPage').classList.add('active');
+            } catch (err) {
+                showMsg(err.message || '服务器连接失败', 'error');
+            } finally {
+                document.getElementById('loadingOverlay').style.display = 'none';
+            }
+        }
+
+        // ==================== 基础初始化方法 ====================
+        function initializeContrastController() {
+            contrastController = new ContrastController({
+                containerId: 'contrast-panel-container',
+                onUpdate: function(imageId, settings) {
+                    updateContrastIndicator(imageId, settings);
+                }
+            });
+        }
+        function updateContrastIndicator(imageId, settings) {
+            const indicator = document.getElementById(`contrast-indicator-${imageId}`);
+            if (indicator) indicator.textContent = `W:${Math.round(settings.windowWidth)} L:${Math.round(settings.windowLevel)}`;
+        }
+        function toggleContrastPanel() {
+            if (contrastController) {
+                contrastController.togglePanel();
+                const btn = document.getElementById('contrastBtn');
+                const panel = document.getElementById('contrast-panel-container');
+                if (btn && panel) btn.classList.toggle('active', !panel.classList.contains('hidden'));
+            }
+        }
+        function initializeFileInputs() {
+            document.getElementById('mctaFile').addEventListener('change', function(e) {
+                if (e.target.files.length > 0) {
+                    mctaFile = e.target.files[0];
+                    document.getElementById('mctaBtn').textContent = mctaFile.name;
+                    document.getElementById('mctaBtn').classList.add('selected');
+                    checkFilesReady();
+                }
+            });
+            document.getElementById('ncctFile').addEventListener('change', function(e) {
+                if (e.target.files.length > 0) {
+                    ncctFile = e.target.files[0];
+                    document.getElementById('ncctBtn').textContent = ncctFile.name;
+                    document.getElementById('ncctBtn').classList.add('selected');
+                    checkFilesReady();
+                }
+            });
+        }
+        function initializeHemisphereButtons() {
+            document.querySelectorAll('.hemisphere-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    document.querySelectorAll('.hemisphere-btn').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    currentHemisphere = this.dataset.hemisphere;
+                });
+            });
+        }
+        function checkFilesReady() {
+            document.getElementById('uploadBtn').disabled = !(mctaFile && ncctFile);
+        }
+
+        // ==================== 影像上传+处理核心方法 (带患者ID绑定) ====================
+        function processFiles() {
+            if (!mctaFile || !ncctFile || !currentPatientId) return;
+            const formData = new FormData();
+            formData.append('mcta_file', mctaFile);
+            formData.append('ncct_file', ncctFile);
+            formData.append('patient_id', currentPatientId); // ✅ 核心：把患者ID传给后端
+            // 获取所选模型类型
+            const modelType = document.getElementById('modelSelect').value;
+            formData.append('model_type', modelType); // ✅ 核心：把模型类型传给后端
+
+            showLoading(true, '正在上传文件...');
+            fetch('/upload', { method: 'POST', body: formData })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    initializeViewer(data);
+                    showMessage('处理完成', 'success');
+                } else {
+                    showMessage('处理失败: ' + data.error, 'error');
+                }
+            })
+            .catch(error => showMessage('处理失败: ' + error.message, 'error'))
+            .finally(() => showLoading(false));
+        }
+
+        // ==================== 影像查看器初始化 ====================
+        function initializeViewer(data) {
+            currentFileId = data.file_id;
+            currentRgbFiles = data.rgb_files;
+            totalSlices = data.total_slices;
+            hasAI = data.has_ai || false;
+            availableModels = data.available_models || [];
+            currentSlice = 0;
+
+            document.getElementById('uploadPage').classList.remove('active');
+            document.getElementById('viewerPage').classList.add('active');
+            document.getElementById('patientInfo').style.display = 'flex';
+            document.getElementById('mainTools').style.display = 'flex';
+            document.getElementById('patientId').textContent = currentPatientId; // 显示患者ID
+            document.getElementById('sliceSlider').max = totalSlices - 1;
+            
+            if (contrastController) {
+                contrastController.enableDragAdjust('cta');
+                contrastController.enableDragAdjust('ncct');
+            }
+            loadSlice(0);
+        }
+
+        // ==================== 切片加载/切换 ====================
+        function loadSlice(sliceIndex) {
+            if (sliceIndex <0 || sliceIndex >= totalSlices) return;
+            currentSlice = sliceIndex;
+            const sliceData = currentRgbFiles[currentSlice];
+            updateImage('cta', sliceData.mcta_image);
+            updateImage('ncct', sliceData.ncct_image);
+            if (contrastController) {
+                contrastController.applyContrastToImage('cta');
+                contrastController.applyContrastToImage('ncct');
+            }
+            updateAIImage('cbf', sliceData);
+            updateAIImage('cbv', sliceData);
+            updateAIImage('tmax', sliceData);
+            updateStrokeImage();
+            updateSliceInfo();
+        }
+        function updateImage(cellId, imageUrl) {
+            const img = document.getElementById('img-' + cellId);
+            const status = document.getElementById('status-' + cellId);
+            if (imageUrl) { img.src = imageUrl; img.style.display='block'; if(status){status.textContent='✓';status.className='cell-status status-ready';status.style.display='block';}}
+            else { img.style.display='none'; if(status) status.style.display='none'; }
+        }
+        function updateAIImage(modelKey, sliceData) {
+            const img = document.getElementById('img-' + modelKey);
+            const status = document.getElementById('status-' + modelKey);
+            const hasModel = sliceData['has_' + modelKey];
+            const imageUrl = sliceData[modelKey + '_image'];
+            const usePseudocolor = pseudocolorMode[modelKey];
+            let finalUrl = imageUrl;
+            
+            if (usePseudocolor && currentFileId) {
+                finalUrl = `/get_image/${currentFileId}/slice_${String(currentSlice).padStart(3, '0')}_${modelKey}_pseudocolor.png`;
+            }
+            if (hasModel && finalUrl) { img.src = finalUrl; img.style.display='block'; if(status){status.textContent='✓';status.className='cell-status status-ready';status.style.display='block';}}
+            else { img.style.display='none'; if(status){status.textContent='-';status.className='cell-status';status.style.display='block';}}
+        }
+        function updateSliceInfo() {
+            const info = `${currentSlice +1} / ${totalSlices}`;
+            document.getElementById('sliceInfo').textContent = info;
+            document.getElementById('topSliceInfo').textContent = info;
+            document.getElementById('sliceSlider').value = currentSlice;
+            document.getElementById('prevBtn').disabled = currentSlice ===0;
+            document.getElementById('nextBtn').disabled = currentSlice === totalSlices-1;
+        }
+        function changeSlice(delta) { loadSlice(currentSlice + delta); }
+        function updateSlice(value) { loadSlice(parseInt(value)); }
+
+        // ==================== 伪彩图功能 ====================
+        function togglePseudocolor() {
+            const btn = document.getElementById('pseudocolorBtn');
+            if (!pseudocolorGenerated) {
+                showLoading(true, '正在为所有切片生成伪彩图...'); btn.disabled=true;
+                fetch(`/generate_all_pseudocolors/${currentFileId}`)
+                .then(res=>res.json()).then(data=>{
+                    if(data.success){
+                        pseudocolorGenerated=true; isPseudocolorActive=true;
+                        ['cbf','cbv','tmax'].forEach(model=>{pseudocolorMode[model]=true; document.getElementById('toggle-'+model).classList.add('active');});
+                        btn.textContent='取消伪彩图'; btn.disabled=false; loadSlice(currentSlice);
+                        showMessage(`伪彩图生成完成 (${data.total_success}/${data.total_attempts})`, 'success');
+                    } else { btn.disabled=false; showMessage('生成失败: '+data.error, 'error'); }
+                }).catch(err=>{btn.disabled=false; showMessage('生成失败: '+err.message, 'error');}).finally(()=>showLoading(false));
+            } else {
+                isPseudocolorActive = !isPseudocolorActive;
+                ['cbf','cbv','tmax'].forEach(model=>{
+                    pseudocolorMode[model] = isPseudocolorActive;
+                    document.getElementById('toggle-'+model).classList.toggle('active', isPseudocolorActive);
+                });
+                btn.textContent = isPseudocolorActive ? '取消伪彩图' : '显示伪彩图';
+                loadSlice(currentSlice);
+            }
+        }
+        function toggleCellPseudocolor(modelKey) {
+            pseudocolorMode[modelKey] = !pseudocolorMode[modelKey];
+            document.getElementById('toggle-'+modelKey).classList.toggle('active');
+            updateAIImage(modelKey, currentRgbFiles[currentSlice]);
+        }
+
+        // ==================== 脑卒中分析 ====================
+        function toggleAnalysisPanel() { document.getElementById('analysisPanel').classList.toggle('open'); }
+        function startStrokeAnalysis() {
+            showLoading(true, '正在进行脑卒中分析...');
+            fetch(`/analyze_stroke/${currentFileId}?hemisphere=${currentHemisphere}`)
+            .then(res=>res.json()).then(data=>{
+                if(data.success || data.analysis_results) {
+                    analysisResults = data.analysis_results || data;
+                    displayAnalysisResults();
+                    showMessage('分析完成', 'success');
+                } else { showMessage('分析失败: '+data.error, 'error'); }
+            }).catch(err=>showMessage('分析失败: '+err.message, 'error')).finally(()=>showLoading(false));
+        }
+        function displayAnalysisResults() {
+            if(!analysisResults) return;
+            document.getElementById('analysisResults').classList.add('show');
+            document.getElementById('analysisMetrics').classList.add('show');
+            updateStrokeImage();
+            const report = analysisResults.report?.summary;
+            if(report){
+                const penumbra = report.penumbra_volume_ml?.toFixed(1)||'--';
+                const core = report.core_volume_ml?.toFixed(1)||'--';
+                const ratio = report.mismatch_ratio?.toFixed(2)||'--';
+                document.getElementById('value-penumbra').textContent = penumbra+' ml';
+                document.getElementById('value-core').textContent = core+' ml';
+                document.getElementById('value-ratio').textContent = ratio;
+                document.getElementById('metric-penumbra').textContent = penumbra;
+                document.getElementById('metric-core').textContent = core;
+                document.getElementById('metric-mismatch').textContent = ratio;
+                const statusEl = document.getElementById('value-status');
+                const mismatchContainer = document.getElementById('metric-mismatch-container');
+                if(report.has_mismatch){
+                    statusEl.textContent='存在不匹配'; statusEl.className='metric-value alert';
+                    mismatchContainer.classList.add('warning');
+                } else {
+                    statusEl.textContent='无显著不匹配'; statusEl.className='metric-value good';
+                    mismatchContainer.classList.remove('warning');
+                }
+            }
+        }
+        function updateStrokeImage() {
+            if(!analysisResults) return;
+            const vis = analysisResults.visualizations;
+            if(vis){
+                if(vis.penumbra&&vis.penumbra[currentSlice]) document.getElementById('img-penumbra').src=vis.penumbra[currentSlice];
+                if(vis.core&&vis.core[currentSlice]) document.getElementById('img-core').src=vis.core[currentSlice];
+                if(vis.combined&&vis.combined[currentSlice]){
+                    document.getElementById('img-combined').src=vis.combined[currentSlice];
+                    document.getElementById('img-stroke').src=vis.combined[currentSlice];
+                    document.getElementById('status-stroke').textContent='✓';
+                    document.getElementById('status-stroke').className='cell-status status-ready';
+                    document.getElementById('status-stroke').style.display='block';
+                }
+            }
+        }
+
+        // ==================== 下载/重置 ====================
+        function downloadData() {
+            const currentFile = currentRgbFiles[currentSlice];
+            if(currentFile){
+                if(currentFile.npy_url) window.open(currentFile.npy_url, '_blank');
+                if(currentFile.cbf_npy_url) window.open(currentFile.cbf_npy_url, '_blank');
+                if(currentFile.cbv_npy_url) window.open(currentFile.cbv_npy_url, '_blank');
+                if(currentFile.tmax_npy_url) window.open(currentFile.tmax_npy_url, '_blank');
+            }
+        }
+        function resetForm() { document.getElementById('patientForm').reset(); }
+        function resetAll() {
+            window.location.reload(); // 一键重置所有状态，回到患者信息页
+        }
+
+        // ==================== 弹窗/提示 ====================
+        function showLoading(show, msg='处理中...') {
+            const overlay = document.getElementById('loadingOverlay');
+            overlay.style.display = show?'flex':'none';
+            if(show) document.getElementById('loadingDetail').textContent = msg;
+        }
+        function showMessage(text, type='success') { showMsg(text, type); }
+        function showMsg(text, type) {
+            const box = document.getElementById('messageBox');
+            box.textContent = text; box.className = `message ${type} show`;
+            setTimeout(()=>box.classList.remove('show'),3000);
+        }
+    </script>
+</body>
+</html>

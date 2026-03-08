@@ -1,0 +1,1869 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NeuroMatrix AI - 基于生成式人工智能与多模态融合的卒中诊断决策平台</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 2400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.8em;
+            margin-bottom: 10px;
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4, #45b7d1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header p {
+            font-size: 1.3em;
+            opacity: 0.9;
+            margin-top: 10px;
+        }
+
+        .upload-section {
+            padding: 40px;
+            text-align: center;
+        }
+
+        .upload-area {
+            border: 3px dashed #3498db;
+            border-radius: 15px;
+            padding: 40px 20px;
+            margin: 20px 0;
+            transition: all 0.3s ease;
+            background: #f8f9fa;
+        }
+
+        .upload-area:hover {
+            border-color: #2980b9;
+            background: #e3f2fd;
+            transform: translateY(-2px);
+        }
+
+        .upload-icon {
+            font-size: 64px;
+            margin-bottom: 20px;
+            color: #3498db;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .file-upload-group {
+            display: flex;
+            gap: 30px;
+            justify-content: center;
+            margin: 30px 0;
+            flex-wrap: wrap;
+        }
+
+        .file-upload-box {
+            border: 2px solid #bdc3c7;
+            border-radius: 12px;
+            padding: 25px;
+            min-width: 280px;
+            background: white;
+            transition: all 0.3s ease;
+        }
+
+        .file-upload-box:hover {
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            transform: translateY(-3px);
+        }
+
+        .file-upload-box h4 {
+            margin-bottom: 15px;
+            color: #2c3e50;
+            font-size: 1.1em;
+        }
+
+        .channel-label {
+            display: inline-block;
+            padding: 6px 15px;
+            border-radius: 20px;
+            color: white;
+            font-size: 0.9em;
+            margin-bottom: 12px;
+            font-weight: bold;
+        }
+
+        .channel-r { background: linear-gradient(135deg, #e74c3c, #c0392b); }
+        .channel-g { background: linear-gradient(135deg, #27ae60, #229954); }
+        .channel-cbf { background: linear-gradient(135deg, #e67e22, #d35400); }
+        .channel-cbv { background: linear-gradient(135deg, #3498db, #2980b9); }
+        .channel-tmax { background: linear-gradient(135deg, #9b59b6, #8e44ad); }
+
+        .btn {
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            color: white;
+            border: none;
+            padding: 14px 30px;
+            border-radius: 30px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 10px;
+            box-shadow: 0 4px 15px rgba(52, 152, 219, 0.3);
+        }
+
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(52, 152, 219, 0.4);
+        }
+
+        .btn:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .btn-process {
+            background: linear-gradient(135deg, #27ae60, #219653);
+            box-shadow: 0 4px 15px rgba(39, 174, 96, 0.3);
+        }
+
+        .btn-process:hover {
+            box-shadow: 0 6px 20px rgba(39, 174, 96, 0.4);
+        }
+
+        .btn-ai {
+            background: linear-gradient(135deg, #9b59b6, #8e44ad);
+        }
+
+        .btn-ai:hover {
+            box-shadow: 0 6px 20px rgba(155, 89, 182, 0.4);
+        }
+
+        .viewer-section {
+            display: none;
+            padding: 20px;
+        }
+
+        /* 关键修改1：为所有图片添加旋转90度样式 */
+        .brain-image {
+            max-width: 100%;
+            max-height: 450px;
+            border: 3px solid #ddd;
+            border-radius: 12px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.15);
+            transition: all 0.3s ease;
+            /* 顺时针旋转90度 */
+            transform: rotate(-90deg);
+            /* 确保旋转后图片不会超出容器 */
+            object-fit: contain;
+        }
+
+        .brain-image:hover {
+            transform: rotate(-90deg) scale(1.02);
+            box-shadow: 0 15px 35px rgba(0,0,0,0.2);
+        }
+
+        /* 关键修改2：重新设计图像网格布局 */
+        .base-image-grid {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 20px;
+            margin: 30px 0;
+        }
+
+        /* 新增：AI图像专用网格布局 */
+        .ai-image-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 30px;
+            margin: 40px 0;
+            justify-items: center;
+        }
+
+        .image-card {
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* AI结果卡片特殊样式 */
+        .ai-image-card {
+            border: 3px solid;
+            padding: 25px;
+            min-width: 350px;
+            max-width: 450px;
+            margin: 0 auto;
+        }
+
+        /* 为不同AI模型设置不同的边框颜色 */
+        .ai-image-card.cbf-card {
+            border-color: #e67e22;
+            border-left: 6px solid #e67e22;
+        }
+
+        .ai-image-card.cbv-card {
+            border-color: #3498db;
+            border-left: 6px solid #3498db;
+        }
+
+        .ai-image-card.tmax-card {
+            border-color: #9b59b6;
+            border-left: 6px solid #9b59b6;
+        }
+
+        /* 伪彩图卡片特殊样式 */
+        .pseudocolor-card {
+            border: 3px solid;
+            border-left: 6px solid;
+            animation: pulse 2s infinite;
+        }
+
+        .pseudocolor-card.cbf-card {
+            border-color: #e67e22;
+            border-left-color: #e67e22;
+        }
+
+        .pseudocolor-card.cbv-card {
+            border-color: #3498db;
+            border-left-color: #3498db;
+        }
+
+        .pseudocolor-card.tmax-card {
+            border-color: #9b59b6;
+            border-left-color: #9b59b6;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(230, 126, 34, 0.4); }
+            70% { box-shadow: 0 0 0 10px rgba(230, 126, 34, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(230, 126, 34, 0); }
+        }
+
+        /* 伪彩图下载按钮样式 */
+        .pseudocolor-download-btn {
+            background: linear-gradient(135deg, #e67e22, #d35400);
+            margin-top: 10px;
+            padding: 8px 15px;
+            font-size: 0.9em;
+        }
+
+        .pseudocolor-download-btn:hover {
+            background: linear-gradient(135deg, #d35400, #e67e22);
+        }
+
+        .ai-image-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 15px 35px rgba(0,0,0,0.2);
+        }
+
+        .image-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #3498db, #2980b9);
+        }
+
+        .ai-image-card::before {
+            height: 6px;
+        }
+
+        .image-card:hover {
+            box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+            transform: translateY(-5px);
+        }
+
+        .image-card h4 {
+            margin-bottom: 15px;
+            color: #2c3e50;
+            font-size: 1em;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        /* AI卡片标题更大 */
+        .ai-image-card h4 {
+            font-size: 1.3em;
+            margin-bottom: 20px;
+        }
+
+        .ai-status {
+            font-size: 0.85em;
+            padding: 6px 12px;
+            border-radius: 15px;
+            margin-top: 8px;
+            display: inline-block;
+            font-weight: 500;
+        }
+
+        .ai-status-available {
+            background: linear-gradient(135deg, #d5f4e6, #b8e6b8);
+            color: #27ae60;
+        }
+
+        .ai-status-unavailable {
+            background: linear-gradient(135deg, #fadbd8, #f5b7b1);
+            color: #e74c3c;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 25px;
+            margin: 30px 0;
+            flex-wrap: wrap;
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 15px;
+        }
+
+        .slice-slider {
+            flex: 1;
+            max-width: 500px;
+            min-width: 250px;
+            height: 10px;
+            border-radius: 5px;
+            background: #ddd;
+            outline: none;
+        }
+
+        .slice-slider::-webkit-slider-thumb {
+            appearance: none;
+            width: 25px;
+            height: 25px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #3498db, #2980b9);
+            cursor: pointer;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        }
+
+        .metadata {
+            background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+            padding: 25px;
+            border-radius: 15px;
+            margin-top: 30px;
+            border-left: 5px solid #3498db;
+        }
+
+        .metadata-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .metadata-item {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            border-left: 4px solid #3498db;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+            transition: all 0.3s ease;
+        }
+
+        .metadata-item:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.12);
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            padding: 50px;
+            background: rgba(255,255,255,0.95);
+            border-radius: 15px;
+            margin: 20px 0;
+        }
+
+        .spinner {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #3498db;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            animation: spin 1.5s linear infinite;
+            margin: 0 auto 25px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error {
+            color: #e74c3c;
+            background: linear-gradient(135deg, #fadbd8, #f5b7b1);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 25px 0;
+            display: none;
+            border-left: 5px solid #e74c3c;
+            font-weight: 500;
+        }
+
+        .success {
+            color: #27ae60;
+            background: linear-gradient(135deg, #d5f4e6, #b8e6b8);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 25px 0;
+            display: none;
+            border-left: 5px solid #27ae60;
+            font-weight: 500;
+        }
+
+        .preview-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            gap: 12px;
+            margin: 25px 0;
+            max-height: 350px;
+            overflow-y: auto;
+            padding: 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+        }
+
+        .preview-item {
+            border: 3px solid transparent;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            overflow: hidden;
+            position: relative;
+            background: white;
+        }
+
+        .preview-item:hover {
+            border-color: #3498db;
+            transform: scale(1.08);
+            box-shadow: 0 8px 20px rgba(52, 152, 219, 0.3);
+        }
+
+        .preview-item.active {
+            border-color: #27ae60;
+            box-shadow: 0 8px 20px rgba(39, 174, 96, 0.3);
+        }
+
+        .preview-item.model-processed {
+            position: relative;
+        }
+
+        .preview-item.model-processed::after {
+            content: "🤖";
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            background: linear-gradient(135deg, #9b59b6, #8e44ad);
+            color: white;
+            border-radius: 50%;
+            width: 25px;
+            height: 25px;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+        }
+
+        .preview-img {
+            width: 100%;
+            height: 100px;
+            object-fit: cover;
+            transition: transform 0.3s ease;
+            /* 预览图也旋转90度 */
+            transform: rotate(-90deg);
+        }
+
+        .preview-item:hover .preview-img {
+            transform: rotate(-90deg) scale(1.1);
+        }
+
+        .file-name {
+            margin-top: 8px;
+            font-size: 0.9em;
+            color: #666;
+            word-break: break-all;
+            padding: 5px;
+        }
+
+        .download-buttons {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin: 20px 0;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 15px;
+        }
+
+        .file-info {
+            margin-top: 12px;
+            padding: 10px;
+            background: #e9ecef;
+            border-radius: 8px;
+            font-size: 0.9em;
+            border-left: 3px solid #3498db;
+        }
+
+        .ai-info-panel {
+            background: linear-gradient(135deg, #f8f9fa, #e3f2fd);
+            border-left: 5px solid #9b59b6;
+            padding: 20px;
+            border-radius: 12px;
+            margin: 20px 0;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
+        }
+
+        .ai-info-panel h4 {
+            color: #8e44ad;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 1.2em;
+        }
+
+        .feature-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 15px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .feature-new {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+            color: white;
+        }
+
+        .model-status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .model-status-item {
+            background: white;
+            padding: 15px;
+            border-radius: 10px;
+            text-align: center;
+            border: 2px solid #e0e0e0;
+            transition: all 0.3s ease;
+        }
+
+        .model-status-item:hover {
+            border-color: #3498db;
+            transform: translateY(-3px);
+        }
+
+        .model-status-item.available {
+            border-color: #27ae60;
+            background: linear-gradient(135deg, #f0fff4, #e6ffed);
+        }
+
+        .model-status-item.unavailable {
+            border-color: #e74c3c;
+            background: linear-gradient(135deg, #fff5f5, #ffe6e6);
+        }
+
+        /* 新增：旋转控制按钮 */
+        .rotation-controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 15px;
+            margin: 15px 0;
+            padding: 15px;
+            background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+            border-radius: 10px;
+            border: 2px solid #90caf9;
+        }
+
+        .rotation-btn {
+            background: linear-gradient(135deg, #5c6bc0, #3949ab);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .rotation-btn:hover {
+            background: linear-gradient(135deg, #3949ab, #283593);
+            transform: translateY(-2px);
+        }
+
+        .rotation-indicator {
+            font-size: 14px;
+            font-weight: 600;
+            color: #1565c0;
+            background: white;
+            padding: 8px 15px;
+            border-radius: 15px;
+            border: 1px solid #90caf9;
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 2000px) {
+            .base-image-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+
+            .ai-image-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+
+        @media (max-width: 1600px) {
+            .base-image-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+
+            .ai-image-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+
+        @media (max-width: 1200px) {
+            .base-image-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .ai-image-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .file-upload-group {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .ai-image-card {
+                min-width: 300px;
+                max-width: 400px;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .base-image-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .ai-image-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .download-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .btn {
+                width: 100%;
+                max-width: 300px;
+            }
+
+            .controls {
+                flex-direction: column;
+                gap: 15px;
+            }
+
+            .slice-slider {
+                max-width: 100%;
+            }
+
+            .ai-image-card {
+                min-width: 280px;
+                max-width: 350px;
+                padding: 20px;
+            }
+
+            .ai-image-card h4 {
+                font-size: 1.1em;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .base-image-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .ai-image-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .upload-section {
+                padding: 20px;
+            }
+
+            .ai-image-card {
+                min-width: 250px;
+                max-width: 300px;
+                padding: 15px;
+            }
+        }
+
+        /* ===== 新增：用户提示功能样式 ===== */
+        /* 确认模态框动画 */
+        #confirmationModal > div {
+            transform: scale(0.7);
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+
+        .important-notice {
+            animation: pulse-gentle 2s infinite;
+        }
+
+        @keyframes pulse-gentle {
+            0% { box-shadow: 0 5px 15px rgba(255, 193, 7, 0.2); }
+            50% { box-shadow: 0 5px 20px rgba(255, 193, 7, 0.4); }
+            100% { box-shadow: 0 5px 15px rgba(255, 193, 7, 0.2); }
+        }
+
+        /* 按钮悬停效果 */
+        #confirmAIProcessing:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(39, 174, 96, 0.4);
+        }
+
+        #cancelAIProcessing:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(231, 76, 60, 0.4);
+        }
+        /* ===== 用户提示功能样式结束 ===== */
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🧠 NeuroMatrix AI - 基于生成式人工智能与多模态融合的卒中诊断决策平台</h1>
+            <p>上传mCTA1和NCCT文件，生成RGB合成图像、NPY数据、脑部掩码和三种AI灌注图（CBF、CBV、Tmax）</p>
+        </div>
+
+        <div class="upload-section" id="uploadSection">
+            <div class="upload-area" id="uploadArea">
+                <div class="upload-icon">⚡</div>
+                <h3>请上传两个NIfTI文件进行多模型灌注图分析</h3>
+                <p>R通道: mCTA1 | G通道: NCCT | B通道: 空通道 | AI模型: CBF、CBV、Tmax</p>
+
+                <div class="ai-info-panel">
+                    <h4>🤖 多模型AI灌注图分析 <span class="feature-badge feature-new">MULTI-MODEL</span></h4>
+                    <p>系统将同时使用三个训练好的深度学习模型对输入图像进行智能分析，生成三种不同类型的灌注图：</p>
+                    <div class="model-status-grid">
+                        <div class="model-status-item available">
+                            <strong>🧠 CBF灌注图</strong>
+                            <div class="model-description">脑血流量 (Cerebral Blood Flow)</div>
+                        </div>
+                        <div class="model-status-item available">
+                            <strong>💙 CBV灌注图</strong>
+                            <div class="model-description">脑血容量 (Cerebral Blood Volume)</div>
+                        </div>
+                        <div class="model-status-item available">
+                            <strong>⏱ Tmax灌注图</strong>
+                            <div class="model-description">达峰时间 (Time to Maximum)</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="file-upload-group">
+                    <div class="file-upload-box">
+                        <span class="channel-label channel-r">R通道</span>
+                        <h4>mCTA1 文件</h4>
+                        <input type="file" id="mctaFile" class="file-input" accept=".nii,.nii.gz">
+                        <button class="btn" onclick="document.getElementById('mctaFile').click()">
+                            📁 选择mCTA1文件
+                        </button>
+                        <div id="mctaFileName" class="file-name">未选择文件</div>
+                        <div id="mctaFileInfo" class="file-info" style="display: none;"></div>
+                    </div>
+
+                    <div class="file-upload-box">
+                        <span class="channel-label channel-g">G通道</span>
+                        <h4>NCCT 文件</h4>
+                        <input type="file" id="ncctFile" class="file-input" accept=".nii,.nii.gz">
+                        <button class="btn" onclick="document.getElementById('ncctFile').click()">
+                            📁 选择NCCT文件
+                        </button>
+                        <div id="ncctFileName" class="file-name">未选择文件</div>
+                        <div id="ncctFileInfo" class="file-info" style="display: none;"></div>
+                    </div>
+                </div>
+
+                <button class="btn btn-process" id="processBtn" onclick="processFiles()" disabled>
+                    🚀 开始RGB合成处理 + 多模型AI推理
+                </button>
+            </div>
+
+            <div class="error" id="errorMessage"></div>
+            <div class="success" id="successMessage"></div>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <h3>正在处理RGB合成和多模型AI推理...</h3>
+            <p>这可能需要一些时间，请耐心等待</p>
+            <p id="loadingDetails">初始化AI模型...</p>
+        </div>
+
+        <div class="viewer-section" id="viewerSection">
+            <h2 class="section-title">多模型灌注图分析结果</h2>
+
+            <div class="preview-grid" id="previewGrid">
+                <!-- 预览图将通过JavaScript动态生成 -->
+            </div>
+
+            <!-- 关键修改1：基础图像网格（6个图像） -->
+            <div class="base-image-grid">
+                <div class="image-card">
+                    <h4>🎨 RGB合成图像</h4>
+                    <div class="image-container">
+                        <img id="rgbImage" class="brain-image" src="" alt="RGB合成图像">
+                    </div>
+                </div>
+                <div class="image-card">
+                    <h4>🔴 mCTA1通道 (R)</h4>
+                    <div class="image-container">
+                        <img id="mctaImage" class="brain-image" src="" alt="mCTA1图像">
+                    </div>
+                </div>
+                <div class="image-card">
+                    <h4>🟢 NCCT通道 (G)</h4>
+                    <div class="image-container">
+                        <img id="ncctImage" class="brain-image" src="" alt="NCCT图像">
+                    </div>
+                </div>
+                <div class="image-card">
+                    <h4>🎭 脑部掩码</h4>
+                    <div class="image-container">
+                        <img id="maskImage" class="brain-image" src="" alt="脑部掩码">
+                    </div>
+                </div>
+                <div class="image-card">
+                    <h4>🔍 掩码叠加</h4>
+                    <div class="image-container">
+                        <img id="overlayImage" class="brain-image" src="" alt="掩码叠加">
+                    </div>
+                </div>
+            </div>
+
+            <!-- 关键修改2：AI结果专用网格（3个图像，单独一行，居中显示） -->
+            <h3 class="ai-section-title">🤖 AI灌注图推理结果</h3>
+
+            <div class="ai-image-grid">
+                <!-- CBF结果 -->
+                <div class="image-card ai-image-card cbf-card" id="cbfResultCard">
+                    <h4>🧠 CBF灌注图 <span class="channel-label channel-cbf">脑血流量</span></h4>
+                    <div class="ai-image-container">
+                        <img id="cbfImage" class="brain-image" src="" alt="CBF灌注图"
+                             style="display: none;"
+                             onerror="this.style.display='none'"
+                             onload="this.style.display='block'">
+                    </div>
+                    <div id="cbfInfo" class="ai-status">等待CBF结果...</div>
+                </div>
+
+                <!-- CBV结果 -->
+                <div class="image-card ai-image-card cbv-card" id="cbvResultCard">
+                    <h4>💙 CBV灌注图 <span class="channel-label channel-cbv">脑血容量</span></h4>
+                    <div class="ai-image-container">
+                        <img id="cbvImage" class="brain-image" src="" alt="CBV灌注图"
+                             style="display: none;"
+                             onerror="this.style.display='none'"
+                             onload="this.style.display='block'">
+                    </div>
+                    <div id="cbvInfo" class="ai-status">等待CBV结果...</div>
+                </div>
+
+                <!-- Tmax结果 -->
+                <div class="image-card ai-image-card tmax-card" id="tmaxResultCard">
+                    <h4>⏱ Tmax灌注图 <span class="channel-label channel-tmax">达峰时间</span></h4>
+                    <div class="ai-image-container">
+                        <img id="tmaxImage" class="brain-image" src="" alt="Tmax灌注图"
+                             style="display: none;"
+                             onerror="this.style.display='none'"
+                             onload="this.style.display='block'">
+                    </div>
+                    <div id="tmaxInfo" class="ai-status">等待Tmax结果...</div>
+                </div>
+            </div>
+
+            <!-- 新增：伪彩图显示区域 -->
+            <h3 class="ai-section-title" style="background: linear-gradient(135deg, #e67e22, #d35400); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; border-bottom: 3px solid #e67e22;">
+                🎨 伪彩图显示(Jet颜色映射)
+            </h3>
+
+            <div class="ai-image-grid" id="pseudocolorGrid">
+                <!-- CBF伪彩图 -->
+                <div class="image-card pseudocolor-card cbf-card" id="cbfPseudocolorCard">
+                    <h4>🧠 CBF伪彩图 <span class="channel-label channel-cbf">标准伪彩图</span></h4>
+                    <div class="ai-image-container">
+                        <img id="cbfPseudocolorImage" class="brain-image" src="" alt="CBF伪彩图"
+                            style="display: none;"
+                            onerror="this.style.display='none'"
+                            onload="this.style.display='block'">
+                    </div>
+                    <div id="cbfPseudocolorInfo" class="ai-status">等待生成伪彩图...</div>
+                    <button class="btn" onclick="downloadPseudocolor('cbf')" style="display: none; margin-top: 10px; padding: 8px 15px; font-size: 0.9em;" id="cbfPseudocolorDownloadBtn">💾 下载CBF伪彩图</button>
+                </div>
+
+                <!-- CBV伪彩图 -->
+                <div class="image-card pseudocolor-card cbv-card" id="cbvPseudocolorCard">
+                    <h4>💙 CBV伪彩图 <span class="channel-label channel-cbv">标准伪彩图</span></h4>
+                    <div class="ai-image-container">
+                        <img id="cbvPseudocolorImage" class="brain-image" src="" alt="CBV伪彩图"
+                            style="display: none;"
+                            onerror="this.style.display='none'"
+                            onload="this.style.display='block'">
+                    </div>
+                    <div id="cbvPseudocolorInfo" class="ai-status">等待生成伪彩图...</div>
+                    <button class="btn" onclick="downloadPseudocolor('cbv')" style="display: none; margin-top: 10px; padding: 8px 15px; font-size: 0.9em;" id="cbvPseudocolorDownloadBtn">💾 下载CBV伪彩图</button>
+                </div>
+
+                <!-- Tmax伪彩图 -->
+                <div class="image-card pseudocolor-card tmax-card" id="tmaxPseudocolorCard">
+                    <h4>⏱ Tmax伪彩图 <span class="channel-label channel-tmax">标准伪彩图</span></h4>
+                    <div class="ai-image-container">
+                        <img id="tmaxPseudocolorImage" class="brain-image" src="" alt="Tmax伪彩图"
+                            style="display: none;"
+                            onerror="this.style.display='none'"
+                            onload="this.style.display='block'">
+                    </div>
+                    <div id="tmaxPseudocolorInfo" class="ai-status">等待生成伪彩图...</div>
+                    <button class="btn" onclick="downloadPseudocolor('tmax')" style="display: none; margin-top: 10px; padding: 8px 15px; font-size: 0.9em;" id="tmaxPseudocolorDownloadBtn">💾 下载Tmax伪彩图</button>
+                </div>
+            </div>
+
+            <div class="controls">
+                <button class="btn" onclick="changeSlice(-1)" id="prevBtn">⬅️ 上一张</button>
+                <input type="range" class="slice-slider" id="sliceSlider"
+                       min="0" max="100" value="0" oninput="updateSlice(this.value)">
+                <span id="sliceInfo" style="font-weight: 600; color: #2c3e50;">切片: 1/100</span>
+                <button class="btn" onclick="changeSlice(1)" id="nextBtn">下一张 ➡️</button>
+
+                <!-- 新增：生成伪彩图按钮 -->
+                <button class="btn" onclick="generatePseudocolor()" style="background: linear-gradient(135deg, #9b59b6, #8e44ad);">🎨 生成伪彩图</button>
+                <button class="btn" onclick="generateAllPseudocolors()" style="background: linear-gradient(135deg, #e67e22, #d35400);">✨ 生成全部伪彩图</button>
+                <button class="btn" onclick="resetViewer()" style="background: linear-gradient(135deg, #e74c3c, #c0392b);">🔄 重新上传</button>
+            </div>
+
+            <div class="download-buttons">
+                <button class="btn" onclick="downloadNpy()" style="background: linear-gradient(135deg, #9b59b6, #8e44ad);">💾 下载当前NPY数据</button>
+                <button class="btn" onclick="downloadMask()" style="background: linear-gradient(135deg, #f39c12, #e67e22);">🎭 下载当前掩码数据</button>
+                <button class="btn btn-ai" onclick="downloadCBF()" style="display: none;" id="cbfDownloadBtn">🧠 下载CBF数据</button>
+                <button class="btn btn-ai" onclick="downloadCBV()" style="display: none;" id="cbvDownloadBtn">💙 下载CBV数据</button>
+                <button class="btn btn-ai" onclick="downloadTmax()" style="display: none;" id="tmaxDownloadBtn">⏱ 下载Tmax数据</button>
+                <!-- 新增：伪彩图下载按钮 -->
+                <button class="btn" onclick="downloadAllPseudocolors()" style="background: linear-gradient(135deg, #e67e22, #d35400); display: none;" id="allPseudocolorDownloadBtn">🎨 下载全部伪彩图</button>
+            </div>
+
+            <div class="metadata">
+                <h3>📊 文件信息</h3>
+                <div class="metadata-grid" id="metadataGrid">
+                    <!-- 元数据将通过JavaScript动态生成 -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 脑卒中分析前端功能 -->
+    <script src="/static/js/stroke_analysis_frontend.js"></script>
+    <!-- 用户提示功能 -->
+    <script src="/static/js/user_prompts.js"></script>
+
+    <script>
+        let currentFileId = null;
+        let currentMetadata = null;
+        let currentRgbFiles = [];
+        let currentSlice = 0;
+        let totalSlices = 0;
+        let mctaFile = null;
+        let ncctFile = null;
+        let hasAI = false;
+        let availableModels = [];
+        // 伪彩图相关功能
+        let pseudocolorGenerated = false;
+        let currentPseudocolorResults = {};
+
+        // 页面加载完成后初始化事件监听
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log("页面加载完成，初始化事件监听...");
+
+            // 监听mCTA1文件选择
+            const mctaFileInput = document.getElementById('mctaFile');
+            if (mctaFileInput) {
+                mctaFileInput.addEventListener('change', function(e) {
+                    console.log("mCTA1文件选择事件触发");
+                    if (e.target.files.length > 0) {
+                        mctaFile = e.target.files[0];
+                        console.log("选择的mCTA1文件:", mctaFile.name, "大小:", mctaFile.size);
+                        document.getElementById('mctaFileName').textContent = mctaFile.name;
+                        document.getElementById('mctaFileName').style.color = '#2c3e50';
+
+                        // 显示文件信息
+                        const fileInfo = document.getElementById('mctaFileInfo');
+                        fileInfo.textContent = `大小: ${(mctaFile.size / 1024 / 1024).toFixed(2)} MB`;
+                        fileInfo.style.display = 'block';
+
+                        checkFilesReady();
+                    } else {
+                        console.log("未选择mCTA1文件");
+                    }
+                });
+            }
+
+            // 监听NCCT文件选择
+            const ncctFileInput = document.getElementById('ncctFile');
+            if (ncctFileInput) {
+                ncctFileInput.addEventListener('change', function(e) {
+                    console.log("NCCT文件选择事件触发");
+                    if (e.target.files.length > 0) {
+                        ncctFile = e.target.files[0];
+                        console.log("选择的NCCT文件:", ncctFile.name, "大小:", ncctFile.size);
+                        document.getElementById('ncctFileName').textContent = ncctFile.name;
+                        document.getElementById('ncctFileName').style.color = '#2c3e50';
+
+                        // 显示文件信息
+                        const fileInfo = document.getElementById('ncctFileInfo');
+                        fileInfo.textContent = `大小: ${(ncctFile.size / 1024 / 1024).toFixed(2)} MB`;
+                        fileInfo.style.display = 'block';
+
+                        checkFilesReady();
+                    } else {
+                        console.log("未选择NCCT文件");
+                    }
+                });
+            }
+        });
+
+
+        function checkFilesReady() {
+            const processBtn = document.getElementById('processBtn');
+            const isReady = !!(mctaFile && ncctFile);
+            console.log("检查文件准备状态:", isReady, {mctaFile: !!mctaFile, ncctFile: !!ncctFile});
+            processBtn.disabled = !isReady;
+
+            if (isReady) {
+                processBtn.style.background = '#27ae60';
+                showSuccess('文件已选择，点击"开始RGB合成处理 + 多模型AI推理"按钮继续');
+            }
+        }
+
+        function generatePseudocolor() {
+            if (!currentFileId) {
+                showError('没有可用的文件ID');
+                return;
+            }
+
+            showLoading(true);
+            updateLoadingDetails('生成当前切片的伪彩图...');
+
+            fetch(`/generate_pseudocolor/${currentFileId}/${currentSlice}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP错误: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.success) {
+                        showSuccess(`伪彩图生成成功！成功生成 ${data.success_count}/${data.total_models} 个模型的伪彩图`);
+                        currentPseudocolorResults = data.pseudocolor_results;
+                        pseudocolorGenerated = true;
+                        updatePseudocolorDisplay();
+                    } else {
+                        throw new Error(data.error || '生成伪彩图失败');
+                    }
+                })
+                .catch(error => {
+                    console.error("生成伪彩图错误:", error);
+                    showError('生成伪彩图失败: ' + error.message);
+                })
+                .finally(() => {
+                    showLoading(false);
+                });
+        }
+
+        function generateAllPseudocolors() {
+            if (!currentFileId) {
+                showError('没有可用的文件ID');
+                return;
+            }
+
+            showLoading(true);
+            updateLoadingDetails('为所有切片生成伪彩图...');
+
+            fetch(`/generate_all_pseudocolors/${currentFileId}`)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP错误: ${response.status}`);
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.success) {
+                        showSuccess(`全部伪彩图生成成功！共处理 ${data.total_slices} 个切片，成功生成 ${data.total_success}/${data.total_attempts} 个伪彩图`);
+                        // 重新加载当前切片以显示伪彩图
+                        loadSlice(currentSlice);
+                    } else {
+                        throw new Error(data.error || '生成全部伪彩图失败');
+                    }
+                })
+                .catch(error => {
+                    console.error("生成全部伪彩图错误:", error);
+                    showError('生成全部伪彩图失败: ' + error.message);
+                })
+                .finally(() => {
+                    showLoading(false);
+                });
+        }
+
+        function isModelAvailable(modelKey) {
+            return availableModels.includes(modelKey);
+        }
+
+        function updatePseudocolorDisplay() {
+            const modelKeys = ['cbf', 'cbv', 'tmax'];
+
+            modelKeys.forEach(modelKey => {
+                const result = currentPseudocolorResults[modelKey];
+                const imageElement = document.getElementById(`${modelKey}PseudocolorImage`);
+                const infoElement = document.getElementById(`${modelKey}PseudocolorInfo`);
+                const downloadBtn = document.getElementById(`${modelKey}PseudocolorDownloadBtn`);
+                const cardElement = document.getElementById(`${modelKey}PseudocolorCard`);
+
+                if (result && result.success) {
+                    // 显示伪彩图
+                    imageElement.src = result.pseudocolor_url;
+                    imageElement.style.display = 'block';
+                    infoElement.textContent = `伪彩图生成成功 (${result.colormap})`;
+                    infoElement.className = 'ai-status ai-status-available';
+                    downloadBtn.style.display = 'inline-block';
+                    cardElement.style.display = 'block';
+                } else {
+                    // 隐藏或显示错误
+                    imageElement.style.display = 'none';
+                    infoElement.textContent = result ? result.error : '生成失败';
+                    infoElement.className = 'ai-status ai-status-unavailable';
+                    downloadBtn.style.display = 'none';
+
+                    // 如果这个模型不可用，隐藏整个卡片
+                    if (!isModelAvailable(modelKey)) {
+                        cardElement.style.display = 'none';
+                    }
+                }
+            });
+
+            // 显示全部下载按钮
+            document.getElementById('allPseudocolorDownloadBtn').style.display = 'inline-block';
+        }
+
+        function downloadPseudocolor(modelKey) {
+            if (!currentFileId || !currentPseudocolorResults[modelKey]) {
+                showError('伪彩图不可用');
+                return;
+            }
+
+            const pseudocolorUrl = currentPseudocolorResults[modelKey].pseudocolor_url;
+            if (pseudocolorUrl) {
+                window.open(pseudocolorUrl, '_blank');
+            } else {
+                showError('伪彩图URL不可用');
+            }
+        }
+
+        function downloadAllPseudocolors() {
+            if (!currentFileId) {
+                showError('没有可用的文件ID');
+                return;
+            }
+
+            // 下载当前切片的全部伪彩图
+            const modelKeys = ['cbf', 'cbv', 'tmax'];
+            modelKeys.forEach(modelKey => {
+                if (currentPseudocolorResults[modelKey] && currentPseudocolorResults[modelKey].pseudocolor_url) {
+                    window.open(currentPseudocolorResults[modelKey].pseudocolor_url, '_blank');
+                }
+            });
+        }
+
+        function processFiles() {
+            console.log("开始处理文件...");
+
+            if (!mctaFile || !ncctFile) {
+                showError('请选择mCTA1和NCCT两个文件');
+                return;
+            }
+
+            // 检查文件类型
+            const validExtensions = ['.nii', '.nii.gz'];
+            const mctaExt = mctaFile.name.toLowerCase().split('.').slice(-2).join('.');
+            const ncctExt = ncctFile.name.toLowerCase().split('.').slice(-2).join('.');
+
+            if (!validExtensions.some(ext => mctaFile.name.toLowerCase().endsWith(ext)) ||
+                !validExtensions.some(ext => ncctFile.name.toLowerCase().endsWith(ext))) {
+                showError('请上传NIfTI文件 (.nii 或 .nii.gz)');
+                return;
+            }
+
+            const formData = new FormData();
+            formData.append('mcta_file', mctaFile);
+            formData.append('ncct_file', ncctFile);
+
+            console.log("发送上传请求...");
+            showLoading(true);
+            hideMessages();
+
+            // 更新加载详情
+            updateLoadingDetails('初始化AI模型...');
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                console.log("收到响应:", response.status);
+                if (!response.ok) {
+                    throw new Error(`HTTP错误: ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log("处理结果:", data);
+                if (data.success) {
+                    // 关键修正：使用多重方式检测AI状态
+                    const detectedHasAI = detectAIStatus(data);
+
+                    if (detectedHasAI) {
+                        showSuccess('RGB合成和多模型AI推理处理成功！');
+                    } else {
+                        showSuccess('RGB合成处理成功！（AI功能暂不可用）');
+                    }
+                    initializeRGBViewer(data, detectedHasAI);
+                } else {
+                    throw new Error(data.error || '处理失败');
+                }
+            })
+            .catch(error => {
+                console.error("处理错误:", error);
+                showError('处理失败: ' + error.message);
+            })
+            .finally(() => {
+                showLoading(false);
+            });
+        }
+
+        // 关键修正：多重方式检测AI状态
+        function detectAIStatus(data) {
+            console.log("=== AI状态检测开始 ===");
+
+            // 方法1: 检查顶层has_ai字段
+            if (data.has_ai !== undefined) {
+                console.log("方法1 - 顶层has_ai字段:", data.has_ai);
+                if (data.has_ai) return true;
+            }
+
+            // 方法2: 检查元数据中的AI状态
+            if (data.metadata && data.metadata.ai_status) {
+                console.log("方法2 - 元数据AI状态:", data.metadata.ai_status);
+                if (data.metadata.ai_status === '已启用') return true;
+            }
+
+            // 方法3: 检查是否有切片包含AI结果
+            if (data.rgb_files && data.rgb_files.length > 0) {
+                const slicesWithAI = data.rgb_files.filter(slice => slice.has_ai).length;
+                console.log("方法3 - 有AI结果的切片数量:", slicesWithAI);
+                if (slicesWithAI > 0) return true;
+            }
+
+            // 方法4: 检查是否有AI图像URL
+            if (data.rgb_files && data.rgb_files.length > 0) {
+                const hasAIImages = data.rgb_files.some(slice => slice.ai_image);
+                console.log("方法4 - 存在AI图像URL:", hasAIImages);
+                if (hasAIImages) return true;
+            }
+
+            console.log("所有检测方法都返回false");
+            return false;
+        }
+
+        function updateLoadingDetails(message) {
+            const detailsElement = document.getElementById('loadingDetails');
+            if (detailsElement) {
+                detailsElement.textContent = message;
+            }
+        }
+
+        function initializeRGBViewer(data, detectedHasAI) {
+            console.log("=== 初始化查看器调试信息 ===");
+            console.log("完整响应数据:", JSON.stringify(data, null, 2));
+            console.log("检测到的AI状态:", detectedHasAI);
+            console.log("顶层has_ai字段:", data.has_ai);
+            console.log("元数据AI状态:", data.metadata?.ai_status);
+            console.log("第一个切片的AI数据:", data.rgb_files?.[0]?.has_ai, data.rgb_files?.[0]?.ai_image);
+            console.log("===========================");
+
+            currentFileId = data.file_id;
+            currentMetadata = data.metadata;
+            currentRgbFiles = data.rgb_files;
+            totalSlices = data.total_slices;
+            currentSlice = 0;
+            hasAI = detectedHasAI; // 使用检测到的AI状态
+            availableModels = data.available_models || [];
+
+            // 显示查看器，隐藏上传区域
+            document.getElementById('uploadSection').style.display = 'none';
+            document.getElementById('viewerSection').style.display = 'block';
+
+            // 显示/隐藏AI结果区域
+            updateAIDisplay(hasAI);
+
+            // 初始化切片控制器
+            const slider = document.getElementById('sliceSlider');
+            slider.max = Math.max(0, totalSlices - 1);
+            slider.value = currentSlice;
+
+            // 加载第一个切片
+            if (currentRgbFiles.length > 0) {
+                loadSlice(currentSlice);
+            } else {
+                console.error("没有可用的切片数据");
+                showError('没有生成可用的切片数据');
+                return;
+            }
+
+            updateSliceInfo();
+            generatePreviewGrid();
+            displayMetadata();
+
+            // 检查并初始化伪彩图显示
+            checkAndUpdatePseudocolorDisplay();
+        }
+
+        function updateAIDisplay(hasAI) {
+            const cbfCard = document.getElementById('cbfResultCard');
+            const cbvCard = document.getElementById('cbvResultCard');
+            const tmaxCard = document.getElementById('tmaxResultCard');
+            const cbfDownloadBtn = document.getElementById('cbfDownloadBtn');
+            const cbvDownloadBtn = document.getElementById('cbvDownloadBtn');
+            const tmaxDownloadBtn = document.getElementById('tmaxDownloadBtn');
+
+            if (hasAI) {
+                cbfCard.style.display = 'block';
+                cbvCard.style.display = 'block';
+                tmaxCard.style.display = 'block';
+                if (cbfDownloadBtn) cbfDownloadBtn.style.display = 'inline-block';
+                if (cbvDownloadBtn) cbvDownloadBtn.style.display = 'inline-block';
+                if (tmaxDownloadBtn) tmaxDownloadBtn.style.display = 'inline-block';
+                console.log("✓ 显示AI结果区域");
+            } else {
+                cbfCard.style.display = 'none';
+                cbvCard.style.display = 'none';
+                tmaxCard.style.display = 'none';
+                if (cbfDownloadBtn) cbfDownloadBtn.style.display = 'none';
+                if (cbvDownloadBtn) cbvDownloadBtn.style.display = 'none';
+                if (tmaxDownloadBtn) tmaxDownloadBtn.style.display = 'none';
+                console.log("⚠ 隐藏AI结果区域 - 原因: hasAI=" + hasAI);
+            }
+        }
+
+        function generatePreviewGrid() {
+            const previewGrid = document.getElementById('previewGrid');
+            previewGrid.innerHTML = '';
+
+            if (!currentRgbFiles || currentRgbFiles.length === 0) {
+                console.error("没有可用的切片数据");
+                return;
+            }
+
+            // 显示所有切片
+            for (let sliceIndex = 0; sliceIndex < currentRgbFiles.length; sliceIndex++) {
+                const sliceData = currentRgbFiles[sliceIndex];
+                if (!sliceData) continue;
+
+                const previewItem = document.createElement('div');
+                previewItem.className = 'preview-item';
+
+                // 如果有AI结果，添加特殊标记
+                if (sliceData.has_ai) {
+                    previewItem.classList.add('model-processed');
+                }
+
+                previewItem.onclick = () => {
+                    console.log("点击预览图:", sliceIndex, "AI状态:", sliceData.has_ai);
+                    loadSlice(sliceIndex);
+                };
+
+                const img = document.createElement('img');
+                img.className = 'preview-img';
+                img.src = sliceData.rgb_image || '';
+                img.alt = `切片 ${sliceIndex + 1}`;
+                img.loading = 'lazy';
+                img.onerror = function() {
+                    this.style.display = 'none';
+                };
+
+                const label = document.createElement('div');
+                label.textContent = `切片 ${sliceIndex + 1}`;
+                label.style.textAlign = 'center';
+                label.style.fontSize = '0.8em';
+                label.style.padding = '5px';
+
+                // 添加AI标记
+                if (sliceData.has_ai) {
+                    const aiBadge = document.createElement('div');
+                    aiBadge.textContent = '🤖';
+                    aiBadge.style.position = 'absolute';
+                    aiBadge.style.top = '8px';
+                    aiBadge.style.right = '8px';
+                    aiBadge.style.background = 'linear-gradient(135deg, #9b59b6, #8e44ad)';
+                    aiBadge.style.color = 'white';
+                    aiBadge.style.borderRadius = '50%';
+                    aiBadge.style.width = '25px';
+                    aiBadge.style.height = '25px';
+                    aiBadge.style.fontSize = '14px';
+                    aiBadge.style.display = 'flex';
+                    aiBadge.style.alignItems = 'center';
+                    aiBadge.style.justifyContent = 'center';
+                    aiBadge.style.zIndex = '2';
+                    aiBadge.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+                    previewItem.appendChild(aiBadge);
+                }
+
+                previewItem.appendChild(img);
+                previewItem.appendChild(label);
+                previewGrid.appendChild(previewItem);
+            }
+
+        }
+
+        function loadSlice(sliceIndex) {
+            if (sliceIndex < 0 || sliceIndex >= totalSlices || !currentRgbFiles[sliceIndex]) {
+                console.error("无效的切片索引:", sliceIndex);
+                return;
+            }
+
+            console.log("加载切片:", sliceIndex);
+            currentSlice = sliceIndex;
+            const currentFile = currentRgbFiles[currentSlice];
+
+            // 更新所有基础图像
+            updateBasicImages(currentFile);
+
+            // 关键修正：更新三个AI模型的结果
+            updateAIResult(currentFile, 'cbf');
+            updateAIResult(currentFile, 'cbv');
+            updateAIResult(currentFile, 'tmax');
+
+            // 检查并更新伪彩图显示
+            checkAndUpdatePseudocolorDisplay();
+
+            updateSliceInfo();
+            document.getElementById('sliceSlider').value = currentSlice;
+            updatePreviewActiveState();
+        }
+
+        // 添加新函数
+        function checkAndUpdatePseudocolorDisplay() {
+            const modelKeys = ['cbf', 'cbv', 'tmax'];
+            let hasAnyPseudocolor = false;
+
+            modelKeys.forEach(modelKey => {
+                const imageUrl = `/get_image/${currentFileId}/slice_${currentSlice.toString().padStart(3, '0')}_${modelKey}_pseudocolor.png`;
+                const img = new Image();
+
+                img.onload = function() {
+                    // 伪彩图存在，显示它
+                    const imageElement = document.getElementById(`${modelKey}PseudocolorImage`);
+                    const infoElement = document.getElementById(`${modelKey}PseudocolorInfo`);
+                    const downloadBtn = document.getElementById(`${modelKey}PseudocolorDownloadBtn`);
+
+                    if (imageElement) {
+                        imageElement.src = imageUrl;
+                        imageElement.style.display = 'block';
+                    }
+                    if (infoElement) {
+                        infoElement.textContent = '医学标准伪彩图已生成';
+                        infoElement.className = 'ai-status ai-status-available';
+                    }
+                    if (downloadBtn) {
+                        downloadBtn.style.display = 'inline-block';
+                    }
+
+                    hasAnyPseudocolor = true;
+                    document.getElementById('allPseudocolorDownloadBtn').style.display = 'inline-block';
+                };
+
+                img.onerror = function() {
+                    // 伪彩图不存在，隐藏或显示等待消息
+                    const imageElement = document.getElementById(`${modelKey}PseudocolorImage`);
+                    const infoElement = document.getElementById(`${modelKey}PseudocolorInfo`);
+                    const downloadBtn = document.getElementById(`${modelKey}PseudocolorDownloadBtn`);
+
+                    if (imageElement) {
+                        imageElement.style.display = 'none';
+                    }
+                    if (infoElement) {
+                        infoElement.textContent = '等待生成伪彩图...';
+                        infoElement.className = 'ai-status ai-status-unavailable';
+                    }
+                    if (downloadBtn) {
+                        downloadBtn.style.display = 'none';
+                    }
+                };
+
+                img.src = imageUrl;
+            });
+
+            // 如果没有伪彩图，隐藏全部下载按钮
+            if (!hasAnyPseudocolor) {
+                document.getElementById('allPseudocolorDownloadBtn').style.display = 'none';
+            }
+        }
+
+        function updateBasicImages(currentFile) {
+            // 更新RGB合成图像
+            updateImageElement('rgbImage', currentFile.rgb_image, 'RGB合成图像');
+            updateImageElement('mctaImage', currentFile.mcta_image, 'mCTA图像');
+            updateImageElement('ncctImage', currentFile.ncct_image, 'NCCT图像');
+            updateImageElement('maskImage', currentFile.mask_image, '掩码图像');
+            updateImageElement('overlayImage', currentFile.overlay_url, '叠加图像');
+        }
+
+        function updateImageElement(elementId, imageUrl, altText) {
+            const imgElement = document.getElementById(elementId);
+            if (imgElement && imageUrl) {
+                imgElement.src = imageUrl;
+                imgElement.alt = altText;
+                imgElement.style.display = 'block';
+                imgElement.onerror = function() {
+                    console.error(`图片加载失败: ${imageUrl}`);
+                    this.style.display = 'none';
+                };
+            } else if (imgElement) {
+                imgElement.style.display = 'none';
+            }
+        }
+
+        function updateAIResult(currentFile, modelKey) {
+            const aiImage = document.getElementById(modelKey + 'Image');
+            const aiInfo = document.getElementById(modelKey + 'Info');
+            const hasAI = currentFile['has_' + modelKey] || false;
+            const aiImageUrl = currentFile[modelKey + '_image'] || '';
+
+            console.log("更新" + modelKey.toUpperCase() + "结果:", {
+                slice: currentSlice,
+                has_ai: hasAI,
+                ai_image: aiImageUrl
+            });
+
+            if (hasAI && aiImageUrl) {
+                aiImage.src = aiImageUrl;
+                aiImage.style.display = 'block';
+                aiInfo.textContent = modelKey.toUpperCase() + '生成结果可用';
+                aiInfo.className = 'ai-status ai-status-available';
+                console.log("✓ 显示" + modelKey.toUpperCase() + "图像:", aiImageUrl);
+
+                // 添加图像加载事件处理
+                aiImage.onload = function() {
+                    console.log(modelKey.toUpperCase() + "图像加载成功");
+                    this.style.display = 'block';
+                    aiInfo.textContent = modelKey.toUpperCase() + '生成结果可用';
+                    aiInfo.className = 'ai-status ai-status-available';
+                };
+
+                aiImage.onerror = function() {
+                    console.error(modelKey.toUpperCase() + "图像加载失败:", aiImageUrl);
+                    this.style.display = 'none';
+                    aiInfo.textContent = modelKey.toUpperCase() + '图像加载失败';
+                    aiInfo.className = 'ai-status ai-status-unavailable';
+                };
+            } else {
+                aiImage.src = '';
+                aiImage.style.display = 'none';
+                aiInfo.textContent = hasAI ? modelKey.toUpperCase() + '图像加载中...' : modelKey.toUpperCase() + '结果不可用';
+                aiInfo.className = 'ai-status ai-status-unavailable';
+                console.log("⚠ 隐藏" + modelKey.toUpperCase() + "图像 - 原因:", hasAI ? "URL为空" : "has_ai=false");
+            }
+        }
+
+        function updateSlice(sliceIndex) {
+            loadSlice(parseInt(sliceIndex));
+        }
+
+        function changeSlice(direction) {
+            const newSlice = currentSlice + direction;
+            loadSlice(newSlice);
+        }
+
+        function updateSliceInfo() {
+            document.getElementById('sliceInfo').textContent =
+                `切片: ${currentSlice + 1}/${totalSlices}`;
+
+            // 更新按钮状态
+            document.getElementById('prevBtn').disabled = currentSlice === 0;
+            document.getElementById('nextBtn').disabled = currentSlice === totalSlices - 1;
+        }
+
+        function updatePreviewActiveState() {
+            const previewItems = document.querySelectorAll('.preview-item');
+            previewItems.forEach((item, index) => {
+                if (index === currentSlice) {
+                    item.classList.add('active');
+                } else {
+                    item.classList.remove('active');
+                }
+            });
+        }
+
+        function displayMetadata() {
+            const metadataGrid = document.getElementById('metadataGrid');
+            if (!currentMetadata) {
+                metadataGrid.innerHTML = '<div class="metadata-item">元数据不可用</div>';
+                return;
+            }
+
+            const metadata = currentMetadata;
+
+            // 关键修正：从元数据中获取AI状态，如果没有则使用全局hasAI
+            const aiStatusFromMetadata = metadata.ai_status;
+            const aiSuccessCount = metadata.ai_success_count || 0;
+            const displayHasAI = aiStatusFromMetadata === '已启用' || hasAI;
+
+            let aiStatusHtml = '';
+            if (displayHasAI) {
+                aiStatusHtml = `
+                <div class="metadata-item">
+                    <strong>🤖 AI推理状态</strong>
+                    <div style="color: #27ae60;">✓ 已启用</div>
+                    <div style="font-size: 0.8em; color: #666;">
+                        成功处理: ${aiSuccessCount}/${totalSlices} 个切片
+                    </div>
+                </div>
+                `;
+            } else {
+                aiStatusHtml = `
+                <div class="metadata-item">
+                    <strong>🤖 AI推理状态</strong>
+                    <div style="color: #e74c3c;">✗ 未启用</div>
+                    <div style="font-size: 0.8em; color: #666;">
+                        原因: 后端返回has_ai=false或无AI结果
+                    </div>
+                </div>
+                `;
+            }
+
+            // 添加模型状态信息
+            let modelsStatusHtml = '';
+            if (availableModels.length > 0) {
+                modelsStatusHtml = `
+                <div class="metadata-item">
+                    <strong>🔧 可用模型</strong>
+                    <div style="margin-top: 8px;">
+                        ${availableModels.map(model =>
+                            `<span class="channel-label" style="margin: 2px; padding: 3px 8px; font-size: 0.8em;">${model.toUpperCase()}</span>`
+                        ).join('')}
+                    </div>
+                </div>
+                `;
+            }
+
+            metadataGrid.innerHTML = `
+                <div class="metadata-item">
+                    <strong>mCTA1 维度</strong>
+                    <div>${metadata.mcta_shape?.join(' × ') || 'N/A'}</div>
+                </div>
+                <div class="metadata-item">
+                    <strong>NCCT 维度</strong>
+                    <div>${metadata.ncct_shape?.join(' × ') || 'N/A'}</div>
+                </div>
+                <div class="metadata-item">
+                    <strong>mCTA1 数据范围</strong>
+                    <div>${formatDataRange(metadata.mcta_range)}</div>
+                </div>
+                <div class="metadata-item">
+                    <strong>NCCT 数据范围</strong>
+                    <div>${formatDataRange(metadata.ncct_range)}</div>
+                </div>
+                <div class="metadata-item">
+                    <strong>体素尺寸</strong>
+                    <div>${metadata.voxel_dims?.join(' × ') || 'N/A'} mm</div>
+                </div>
+                <div class="metadata-item">
+                    <strong>总切片数</strong>
+                    <div>${totalSlices}</div>
+                </div>
+                ${aiStatusHtml}
+                ${modelsStatusHtml}
+            `;
+        }
+
+        function formatDataRange(range) {
+            if (!range || !Array.isArray(range) || range.length < 2) return 'N/A';
+            return `${range[0]?.toFixed(2) || 0} - ${range[1]?.toFixed(2) || 0}`;
+        }
+
+        // 在JavaScript部分添加
+        function checkPseudocolorStatus() {
+            const modelKeys = ['cbf', 'cbv', 'tmax'];
+            let hasAnyPseudocolor = false;
+
+            modelKeys.forEach(modelKey => {
+                const imageElement = document.getElementById(`${modelKey}PseudocolorImage`);
+                if (imageElement && imageElement.style.display !== 'none') {
+                    hasAnyPseudocolor = true;
+                }
+            });
+
+            return hasAnyPseudocolor;
+        }
+
+        function downloadNpy() {
+            // 下载当前切片的NPY文件
+            const currentFile = currentRgbFiles[currentSlice];
+            if (currentFile && currentFile.npy_url) {
+                window.open(currentFile.npy_url, '_blank');
+            } else {
+                showError('NPY文件不可用');
+            }
+        }
+
+        function downloadMask() {
+            // 下载当前切片的掩码NPY文件
+            const currentFile = currentRgbFiles[currentSlice];
+            if (currentFile && currentFile.mask_npy_url) {
+                window.open(currentFile.mask_npy_url, '_blank');
+            } else {
+                showError('掩码文件不可用');
+            }
+        }
+
+        function downloadCBF() {
+            // 下载当前切片的CBF结果NPY文件
+            const currentFile = currentRgbFiles[currentSlice];
+            if (currentFile && currentFile.cbf_npy_url) {
+                window.open(currentFile.cbf_npy_url, '_blank');
+            } else {
+                showError('CBF数据不可用');
+            }
+        }
+
+        function downloadCBV() {
+            // 下载当前切片的CBV结果NPY文件
+            const currentFile = currentRgbFiles[currentSlice];
+            if (currentFile && currentFile.cbv_npy_url) {
+                window.open(currentFile.cbv_npy_url, '_blank');
+            } else {
+                showError('CBV数据不可用');
+            }
+        }
+
+        function downloadTmax() {
+            // 下载当前切片的Tmax结果NPY文件
+            const currentFile = currentRgbFiles[currentSlice];
+            if (currentFile && currentFile.tmax_npy_url) {
+                window.open(currentFile.tmax_npy_url, '_blank');
+            } else {
+                showError('Tmax数据不可用');
+            }
+        }
+
+        function resetViewer() {
+            console.log("重置查看器");
+            // 重置到上传界面
+            document.getElementById('viewerSection').style.display = 'none';
+            document.getElementById('uploadSection').style.display = 'block';
+            hideMessages();
+
+            // 重置文件选择
+            document.getElementById('mctaFile').value = '';
+            document.getElementById('ncctFile').value = '';
+            document.getElementById('mctaFileName').textContent = '未选择文件';
+            document.getElementById('mctaFileName').style.color = '#666';
+            document.getElementById('ncctFileName').textContent = '未选择文件';
+            document.getElementById('ncctFileName').style.color = '#666';
+
+            document.getElementById('mctaFileInfo').style.display = 'none';
+            document.getElementById('ncctFileInfo').style.display = 'none';
+
+            mctaFile = null;
+            ncctFile = null;
+            hasAI = false;
+            availableModels = [];
+            checkFilesReady();
+        }
+
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            console.error("错误:", message);
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.getElementById('successMessage');
+            successDiv.textContent = message;
+            successDiv.style.display = 'block';
+            console.log("成功:", message);
+        }
+
+        function hideMessages() {
+            document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('successMessage').style.display = 'none';
+        }
+    </script>
+</body>
+</html>

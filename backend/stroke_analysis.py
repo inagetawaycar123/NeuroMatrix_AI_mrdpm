@@ -1,0 +1,817 @@
+# stroke_analysis.py - 脑卒中病灶分析模块
+# stroke_analysis.py - 脑卒中病灶分析模块
+import os
+import numpy as np
+
+# 设置matplotlib使用非GUI后端，避免Tkinter线程问题
+import matplotlib
+
+matplotlib.use("Agg")  # 必须在导入pyplot之前设置
+import matplotlib.pyplot as plt
+
+import cv2
+from scipy import ndimage
+import json
+import re
+
+
+class StrokeAnalysis:
+    """脑卒中病灶分析类 - 专门处理Tmax图像的后处理分析"""
+
+    def __init__(self, voxel_spacing=(0.42968 * 2, 0.42968 * 2, 5)):
+        """初始化分析参数"""
+        self.voxel_spacing = voxel_spacing
+        self.voxel_volume = np.prod(voxel_spacing)
+
+        # 分析参数配置
+        self.penumbra_threshold_pred = 9  # 预测半暗带阈值
+        self.penumbra_threshold_gt = 9  # 真实半暗带阈值
+        self.core_threshold_pred = 12  # 预测核心梗死阈值
+        self.core_threshold_gt = 12  # 真实核心梗死阈值
+
+        # 后处理参数
+        self.penumbra_min_area_pred = 200  # 预测半暗带最小面积
+        self.penumbra_min_area_gt = 50  # 真实半暗带最小面积
+        self.core_min_area_pred = 50  # 预测核心梗死最小面积
+        self.core_min_area_gt = 200  # 真实核心梗死最小面积
+
+        # 不匹配分析阈值
+        self.mismatch_threshold = 1.8
+
+        print("✓ 脑卒中分析模块初始化完成")
+
+    def postprocess_mask(self, mask, min_area):
+        """对掩码进行后处理：开运算 + 连通域分析"""
+        mask_255 = np.where(mask, 255, 0).astype(np.uint8)
+
+        # 形态学开运算
+        kernel = np.ones((5, 5), np.uint8)
+        cleaned = cv2.morphologyEx(mask_255, cv2.MORPH_OPEN, kernel)
+
+        # 连通域分析
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cleaned)
+        final_mask = np.zeros_like(cleaned)
+
+        for i in range(1, num_labels):
+            if stats[i, cv2.CC_STAT_AREA] > min_area:
+                final_mask[labels == i] = 255
+
+        return final_mask
+
+    def apply_hemisphere_processing(self, image, mask, hemisphere):
+        """
+        根据偏侧信息处理图像
+        """
+        height = image.shape[0]
+
+        if hemisphere == "left":
+            # 左脑：取上半部分进行分析，下半部分保留但不分析
+            analysis_region = image[: height // 2, :]
+            analysis_mask = mask[: height // 2, :] if mask is not None else None
+            return (
+                analysis_region,
+                analysis_mask,
+                (0, height // 2),
+                (height // 2, height),
+            )
+
+        elif hemisphere == "right":
+            # 右脑：取下半部分进行分析，上半部分保留但不分析
+            analysis_region = image[height // 2 :, :]
+            analysis_mask = mask[height // 2 :, :] if mask is not None else None
+            return (
+                analysis_region,
+                analysis_mask,
+                (height // 2, height),
+                (0, height // 2),
+            )
+
+        else:  # 'both'
+            # 双侧：整个图像都分析
+            return image, mask, (0, height), None
+
+    def reconstruct_full_image(
+        self, analysis_result, analysis_coords, other_coords, original_shape
+    ):
+        """
+        将分析结果重建为完整图像
+        """
+        full_result = np.zeros(original_shape, dtype=analysis_result.dtype)
+
+        # 放置分析区域
+        a_start, a_end = analysis_coords
+        full_result[a_start:a_end, :] = analysis_result
+
+        # 如果有其他区域（非分析区域），保持为0
+        if other_coords:
+            o_start, o_end = other_coords
+            # 其他区域保持为0（无病灶）
+
+        return full_result
+
+    def analyze_slice(
+        self, tmax_data, mask_data, slice_id, hemisphere="both", output_dir=None
+    ):
+        """
+        分析单个Tmax切片
+        """
+        try:
+            print(f"分析切片 {slice_id}，偏侧: {hemisphere}")
+
+            # 应用偏侧处理
+            tmax_analysis, mask_analysis, analysis_coords, other_coords = (
+                self.apply_hemisphere_processing(tmax_data, mask_data, hemisphere)
+            )
+
+            # 在分析区域内应用脑组织掩码
+            mask_binary = mask_analysis > 0.5
+            tmax_result = np.where(mask_binary, tmax_analysis, 0)
+
+            # 将Tmax值转换为实际范围 (0-30秒)
+            tmax_scaled = tmax_result * 30
+            tmax_scaled = np.clip(tmax_scaled, 0, 30)
+
+            # 生成病灶掩码
+            # 缺血半暗带
+            penumbra_mask_pred = tmax_scaled > self.penumbra_threshold_pred
+
+            # 核心梗死
+            core_mask_pred = tmax_scaled > self.core_threshold_pred
+
+            # 后处理
+            penumbra_clean_pred = self.postprocess_mask(
+                penumbra_mask_pred, self.penumbra_min_area_pred
+            )
+            core_clean_pred = self.postprocess_mask(
+                core_mask_pred, self.core_min_area_pred
+            )
+
+            # 重建完整图像
+            penumbra_full_pred = self.reconstruct_full_image(
+                penumbra_clean_pred, analysis_coords, other_coords, tmax_data.shape
+            )
+            core_full_pred = self.reconstruct_full_image(
+                core_clean_pred, analysis_coords, other_coords, tmax_data.shape
+            )
+
+            # 统计体素数量（只统计分析区域）
+            penumbra_voxels = (penumbra_clean_pred > 0).sum()
+            core_voxels = (core_clean_pred > 0).sum()
+
+            # 生成可视化图像
+            visualization_results = {}
+            if output_dir:
+                visualization_results = self.generate_visualizations(
+                    tmax_data, penumbra_full_pred, core_full_pred, slice_id, output_dir
+                )
+
+            return {
+                "success": True,
+                "slice_id": slice_id,
+                "penumbra_voxels": penumbra_voxels,
+                "core_voxels": core_voxels,
+                "visualizations": visualization_results,
+                "analysis_region_coords": analysis_coords,
+            }
+
+        except Exception as e:
+            print(f"分析切片 {slice_id} 失败: {e}")
+            return {
+                "success": False,
+                "slice_id": slice_id,
+                "error": str(e),
+                "penumbra_voxels": 0,
+                "core_voxels": 0,
+                "visualizations": {},
+            }
+
+    def generate_visualizations(
+        self, original_image, penumbra_mask, core_mask, slice_id, output_dir
+    ):
+        """生成可视化图像 - 改进的线程安全版本"""
+        import time
+
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+            vis_results = {}
+
+            # 添加小延迟，避免matplotlib线程冲突
+            time.sleep(0.05)
+
+            # 1. 半暗带叠加图（绿色）
+            try:
+                fig, ax = plt.subplots(figsize=(10, 10), dpi=150)
+                ax.imshow(original_image, cmap="gray")
+                green_mask = np.zeros((*original_image.shape, 4))
+                green_mask[..., 0] = 0  # R
+                green_mask[..., 1] = 1  # G
+                green_mask[..., 2] = 0  # B
+                green_mask[..., 3] = (penumbra_mask > 0).astype(float) * 0.7
+                ax.imshow(green_mask)
+                ax.axis("off")
+                ax.set_position([0, 0, 1, 1])
+
+                penumbra_path = os.path.join(output_dir, f"penumbra_{slice_id}.png")
+                plt.savefig(penumbra_path, bbox_inches="tight", pad_inches=0, dpi=150)
+                plt.close(fig)
+
+                # 验证文件已保存
+                if os.path.exists(penumbra_path):
+                    vis_results["penumbra"] = penumbra_path
+                    print(f"✓ 半暗带图像已保存: {penumbra_path}")
+                else:
+                    print(f"⚠ 半暗带图像保存失败: {penumbra_path}")
+            except Exception as e:
+                print(f"生成半暗带图像失败: {e}")
+
+            time.sleep(0.05)
+
+            # 2. 核心梗死叠加图（红色）
+            try:
+                fig, ax = plt.subplots(figsize=(10, 10), dpi=150)
+                ax.imshow(original_image, cmap="gray")
+                red_mask = np.zeros((*original_image.shape, 4))
+                red_mask[..., 0] = 1  # R
+                red_mask[..., 1] = 0  # G
+                red_mask[..., 2] = 0  # B
+                red_mask[..., 3] = (core_mask > 0).astype(float) * 0.7
+                ax.imshow(red_mask)
+                ax.axis("off")
+                ax.set_position([0, 0, 1, 1])
+
+                core_path = os.path.join(output_dir, f"core_{slice_id}.png")
+                plt.savefig(core_path, bbox_inches="tight", pad_inches=0, dpi=150)
+                plt.close(fig)
+
+                # 验证文件已保存
+                if os.path.exists(core_path):
+                    vis_results["core"] = core_path
+                    print(f"✓ 核心梗死图像已保存: {core_path}")
+                else:
+                    print(f"⚠ 核心梗死图像保存失败: {core_path}")
+            except Exception as e:
+                print(f"生成核心梗死图像失败: {e}")
+
+            time.sleep(0.05)
+
+            # 3. 综合显示（绿色+红色）
+            try:
+                fig, ax = plt.subplots(figsize=(10, 10), dpi=150)
+                ax.imshow(original_image, cmap="gray")
+                combined_mask = np.zeros((*original_image.shape, 4))
+                # 半暗带 - 绿色
+                combined_mask[penumbra_mask > 0, 1] = 1
+                # 核心梗死 - 红色
+                combined_mask[core_mask > 0, 0] = 1
+                # Alpha通道
+                combined_mask[..., 3] = (
+                    np.maximum(
+                        (penumbra_mask > 0).astype(float), (core_mask > 0).astype(float)
+                    )
+                    * 0.7
+                )
+                ax.imshow(combined_mask)
+                ax.axis("off")
+                ax.set_position([0, 0, 1, 1])
+
+                combined_path = os.path.join(output_dir, f"combined_{slice_id}.png")
+                plt.savefig(combined_path, bbox_inches="tight", pad_inches=0, dpi=150)
+                plt.close(fig)
+
+                # 验证文件已保存
+                if os.path.exists(combined_path):
+                    vis_results["combined"] = combined_path
+                    print(f"✓ 综合显示图像已保存: {combined_path}")
+                else:
+                    print(f"⚠ 综合显示图像保存失败: {combined_path}")
+            except Exception as e:
+                print(f"生成综合显示图像失败: {e}")
+
+            return vis_results
+
+        except Exception as e:
+            print(f"生成可视化失败: {e}")
+            import traceback
+
+            traceback.print_exc()
+            return {}
+
+    def analyze_case(
+        self, tmax_slices, mask_slices, hemisphere="both", output_dir=None
+    ):
+        """
+        分析整个病例的所有切片
+        """
+        try:
+            print(f"开始分析病例，切片数量: {len(tmax_slices)}，偏侧: {hemisphere}")
+
+            total_penumbra_voxels = 0
+            total_core_voxels = 0
+            slice_results = []
+
+            for slice_id, (tmax_data, mask_data) in enumerate(
+                zip(tmax_slices, mask_slices)
+            ):
+                slice_result = self.analyze_slice(
+                    tmax_data, mask_data, slice_id, hemisphere, output_dir
+                )
+
+                if slice_result["success"]:
+                    total_penumbra_voxels += slice_result["penumbra_voxels"]
+                    total_core_voxels += slice_result["core_voxels"]
+
+                slice_results.append(slice_result)
+
+            # 计算不匹配分析
+            mismatch_analysis = self.calculate_mismatch(
+                total_penumbra_voxels, total_core_voxels
+            )
+
+            # 计算体积（ml）
+            volume_analysis = self.calculate_volumes(
+                total_penumbra_voxels, total_core_voxels
+            )
+
+            return {
+                "success": True,
+                "total_slices": len(tmax_slices),
+                "total_penumbra_voxels": total_penumbra_voxels,
+                "total_core_voxels": total_core_voxels,
+                "mismatch_analysis": mismatch_analysis,
+                "volume_analysis": volume_analysis,
+                "slice_results": slice_results,
+            }
+
+        except Exception as e:
+            print(f"分析病例失败: {e}")
+            return {"success": False, "error": str(e)}
+
+    def calculate_mismatch(self, penumbra_voxels, core_voxels):
+        """计算不匹配分析 - 修复JSON序列化问题"""
+        if core_voxels > 0:
+            mismatch_ratio = float(penumbra_voxels / core_voxels)
+        else:
+            # 核心梗死为0时，使用一个大数值代替Infinity
+            # 这样可以正常JSON序列化
+            mismatch_ratio = 999.99 if penumbra_voxels > 0 else 0.0
+
+        has_mismatch = mismatch_ratio > self.mismatch_threshold
+
+        return {
+            "mismatch_ratio": mismatch_ratio,
+            "has_mismatch": has_mismatch,
+            "threshold": self.mismatch_threshold,
+        }
+
+    def calculate_volumes(self, penumbra_voxels, core_voxels):
+        """计算体积"""
+        penumbra_volume = penumbra_voxels * self.voxel_volume / 1000  # 转换为ml
+        core_volume = core_voxels * self.voxel_volume / 1000
+
+        return {"penumbra_volume_ml": penumbra_volume, "core_volume_ml": core_volume}
+
+    def generate_report(self, analysis_results):
+        """生成分析报告"""
+        if not analysis_results["success"]:
+            return "分析失败"
+
+        report = {
+            "summary": {
+                "total_slices": analysis_results["total_slices"],
+                "total_penumbra_voxels": analysis_results["total_penumbra_voxels"],
+                "total_core_voxels": analysis_results["total_core_voxels"],
+                "penumbra_volume_ml": analysis_results["volume_analysis"][
+                    "penumbra_volume_ml"
+                ],
+                "core_volume_ml": analysis_results["volume_analysis"]["core_volume_ml"],
+                "mismatch_ratio": analysis_results["mismatch_analysis"][
+                    "mismatch_ratio"
+                ],
+                "has_mismatch": analysis_results["mismatch_analysis"]["has_mismatch"],
+            },
+            "parameters": {
+                "penumbra_threshold": self.penumbra_threshold_pred,
+                "core_threshold": self.core_threshold_pred,
+                "mismatch_threshold": self.mismatch_threshold,
+                "voxel_volume_mm3": self.voxel_volume,
+            },
+        }
+
+        return report
+
+
+# 全局实例
+stroke_analyzer = StrokeAnalysis()
+
+
+def normalize_modalities(available_modalities):
+    """Normalize modalities to lower-case canonical names."""
+    if not available_modalities:
+        return []
+
+    if isinstance(available_modalities, str):
+        modalities = re.findall(r"\w+", available_modalities)
+    else:
+        modalities = list(available_modalities)
+
+    alias = {"mcat": "mcta", "vcat": "vcta"}
+    normalized = []
+    for mod in modalities:
+        key = str(mod).strip().lower()
+        if not key:
+            continue
+        key = alias.get(key, key)
+        if key not in normalized:
+            normalized.append(key)
+    return normalized
+
+
+def infer_modalities_from_uploads(case_id, uploads_dir="static/uploads"):
+    """Infer modalities from uploaded nifti files as fallback source of truth."""
+    if not case_id:
+        return []
+
+    modalities = []
+    for mod in ["ncct", "mcta", "vcta", "dcta", "cbf", "cbv", "tmax"]:
+        for ext in [".nii.gz", ".nii"]:
+            p = os.path.join(uploads_dir, f"{case_id}_{mod}{ext}")
+            if os.path.exists(p):
+                modalities.append(mod)
+                break
+    return modalities
+
+
+def check_modality_combination(available_modalities):
+    """
+    Trigger auto stroke analysis only for:
+    1) NCCT + mCTA
+    2) NCCT + mCTA + real CTP(cbf+cbv+tmax)
+    """
+    try:
+        modalities = normalize_modalities(available_modalities)
+        mods = set(modalities)
+
+        has_ncct = "ncct" in mods
+        has_mcta = "mcta" in mods
+        has_real_ctp = all(x in mods for x in ["cbf", "cbv", "tmax"])
+
+        if has_ncct and has_mcta:
+            if has_real_ctp:
+                return True, "NCCT+mCTA+CTP", True
+            return True, "NCCT+mCTA", False
+
+        return False, None, False
+    except Exception as e:
+        print(f"modality combination check failed: {e}")
+        return False, None, False
+
+
+def parse_hemisphere(hemisphere):
+    """Normalize hemisphere to left/right/both."""
+    try:
+        if not hemisphere:
+            return "both"
+
+        hemisphere_str = str(hemisphere).strip().lower()
+        if hemisphere_str in ["left", "right", "both"]:
+            return hemisphere_str
+
+        # Chinese fallbacks: 左 / 右
+        if "\u5de6" in str(hemisphere):
+            return "left"
+        if "\u53f3" in str(hemisphere):
+            return "right"
+        return "both"
+    except Exception as e:
+        print(f"hemisphere parse failed: {e}")
+        return "both"
+
+
+def auto_analyze_stroke(case_id, patient_id=None):
+    """
+    Auto trigger stroke analysis using DB modalities with file-system fallback.
+    """
+    try:
+        print(
+            f"start auto stroke analysis - case_id: {case_id}, patient_id: {patient_id}"
+        )
+
+        # Init Supabase client
+        try:
+            from supabase import create_client, Client
+
+            SUPABASE_URL = "https://ppyexzqdbsnwqfyugfvc.supabase.co"
+            SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBweWV4enFkYnNud3FmeXVnZnZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1Nzc3ODAsImV4cCI6MjA4MzE1Mzc4MH0.EjDH3eufPKBF8MJiHM6SVzPQlsWvGqhLQPKKhVG5Ffo"
+            supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+            print("[OK] Supabase client initialized")
+        except Exception as e:
+            print(f"[ERR] Supabase init failed: {e}")
+            return {"success": False, "error": "database connection failed"}
+
+        # Query patient_imaging
+        try:
+            query = supabase.table("patient_imaging").select(
+                "available_modalities, hemisphere"
+            )
+            if patient_id:
+                query = query.eq("patient_id", patient_id)
+            response = query.eq("case_id", case_id).execute()
+
+            if not response.data or len(response.data) == 0:
+                print(f"[ERR] case not found: case_id={case_id}")
+                return {"success": False, "error": "case not found"}
+
+            imaging_data = response.data[0]
+            db_modalities = normalize_modalities(
+                imaging_data.get("available_modalities", [])
+            )
+            hemisphere = imaging_data.get("hemisphere", "both")
+
+            print("[OK] case info loaded")
+            print(f"  db modalities: {db_modalities}")
+            print(f"  hemisphere: {hemisphere}")
+        except Exception as e:
+            print(f"[ERR] database query failed: {e}")
+            return {"success": False, "error": "database query failed"}
+
+        # File-system fallback
+        file_modalities = infer_modalities_from_uploads(case_id)
+        print(f"  file modalities: {file_modalities}")
+
+        # Prefer DB; fallback to files when DB combination is invalid
+        is_valid, combination_type, use_real_ctp = check_modality_combination(
+            db_modalities
+        )
+        chosen_modalities = db_modalities
+        source = "db"
+
+        if not is_valid:
+            is_valid, combination_type, use_real_ctp = check_modality_combination(
+                file_modalities
+            )
+            if is_valid:
+                chosen_modalities = file_modalities
+                source = "files"
+                print("[OK] db modalities invalid, using file-system fallback")
+
+        if not is_valid:
+            print(
+                f"[ERR] invalid modality combination: db={db_modalities}, files={file_modalities}"
+            )
+            return {
+                "success": False,
+                "error": "invalid modality combination, skip stroke analysis",
+            }
+
+        print(f"[OK] valid modality combination: {combination_type} (source={source})")
+        print(f"  use_real_ctp: {use_real_ctp}")
+
+        # Backfill valid modalities to DB when fallback is used
+        if source == "files":
+            try:
+                merged = []
+                for mod in db_modalities + chosen_modalities:
+                    if mod not in merged:
+                        merged.append(mod)
+                upd = (
+                    supabase.table("patient_imaging")
+                    .update({"available_modalities": merged})
+                    .eq("case_id", case_id)
+                )
+                if patient_id:
+                    upd = upd.eq("patient_id", patient_id)
+                upd.execute()
+                print(f"[OK] backfilled available_modalities: {merged}")
+            except Exception as e:
+                print(f"[WARN] backfill available_modalities failed: {e}")
+
+        parsed_hemisphere = parse_hemisphere(hemisphere)
+        print(f"[OK] parsed hemisphere: {parsed_hemisphere}")
+
+        print("start stroke analysis execution...")
+        analysis_result = analyze_stroke_case(case_id, parsed_hemisphere)
+
+        if analysis_result.get("success"):
+            print("[OK] stroke analysis succeeded")
+            try:
+                update_data = {
+                    "analysis_result": analysis_result,
+                    "hemisphere": parsed_hemisphere,
+                    "available_modalities": chosen_modalities,
+                }
+                upd = (
+                    supabase.table("patient_imaging")
+                    .update(update_data)
+                    .eq("case_id", case_id)
+                )
+                if patient_id:
+                    upd = upd.eq("patient_id", patient_id)
+                upd.execute()
+                print("[OK] patient_imaging updated")
+            except Exception as e:
+                print(f"[WARN] patient_imaging update failed: {e}")
+        else:
+            print(f"[ERR] stroke analysis failed: {analysis_result.get('error')}")
+
+        return analysis_result
+
+    except Exception as e:
+        print(f"auto stroke analysis failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}
+
+
+def analyze_stroke_case(file_id, hemisphere="both", output_base_dir=None):
+    """分析脑卒中病例的主函数 - 改进的错误处理版本"""
+    import time
+
+    try:
+        print(f"开始脑卒中分析 - 病例: {file_id}, 偏侧: {hemisphere}")
+
+        # 构建路径
+        if output_base_dir is None:
+            output_base_dir = os.path.join("static", "processed")
+
+        case_dir = os.path.join(output_base_dir, file_id)
+        analysis_output_dir = os.path.join(case_dir, "stroke_analysis")
+
+        # 检查病例目录是否存在
+        if not os.path.exists(case_dir):
+            print(f"✗ 病例目录不存在: {case_dir}")
+            return {"success": False, "error": "病例目录不存在"}
+
+        # 查找所有Tmax切片
+        tmax_slices = []
+        mask_slices = []
+
+        # 查找所有切片文件
+        try:
+            all_files = os.listdir(case_dir)
+            slice_files = [
+                f
+                for f in all_files
+                if f.startswith("slice_") and f.endswith("_tmax_output.npy")
+            ]
+        except Exception as e:
+            print(f"✗ 读取目录失败: {e}")
+            return {"success": False, "error": f"读取目录失败: {str(e)}"}
+
+        slice_indices = []
+
+        for file in slice_files:
+            try:
+                # 提取切片索引：slice_001_tmax_output.npy -> 1
+                index_str = file.split("_")[1]
+                slice_index = int(index_str)
+                slice_indices.append(slice_index)
+            except Exception as e:
+                print(f"⚠ 解析文件名失败: {file}, 错误: {e}")
+                continue
+
+        slice_indices.sort()
+
+        if not slice_indices:
+            print(f"✗ 未找到Tmax切片文件，目录: {case_dir}")
+            print(f"目录中的文件: {all_files[:10]}")  # 显示前10个文件
+            return {"success": False, "error": "未找到Tmax切片文件，请确保AI推理已完成"}
+
+        print(f"找到 {len(slice_indices)} 个Tmax切片: {slice_indices}")
+
+        # 加载所有切片数据
+        for slice_idx in slice_indices:
+            # 加载Tmax数据
+            tmax_path = os.path.join(case_dir, f"slice_{slice_idx:03d}_tmax_output.npy")
+            if os.path.exists(tmax_path):
+                try:
+                    tmax_data = np.load(tmax_path)
+                    tmax_slices.append(tmax_data)
+                    print(f"✓ 加载Tmax切片 {slice_idx}: shape={tmax_data.shape}")
+                except Exception as e:
+                    print(f"✗ 加载Tmax文件失败 {tmax_path}: {e}")
+                    continue
+            else:
+                print(f"⚠ Tmax文件不存在: {tmax_path}")
+                continue
+
+            # 加载掩码数据
+            mask_path = os.path.join(case_dir, f"slice_{slice_idx:03d}_mask.npy")
+            if os.path.exists(mask_path):
+                try:
+                    mask_data = np.load(mask_path)
+                    mask_slices.append(mask_data)
+                    print(f"✓ 加载掩码切片 {slice_idx}")
+                except Exception as e:
+                    print(f"⚠ 加载掩码文件失败，使用默认掩码: {e}")
+                    mask_slices.append(np.ones_like(tmax_data))
+            else:
+                print(f"⚠ 掩码文件不存在，使用默认掩码: {mask_path}")
+                mask_slices.append(np.ones_like(tmax_data))
+
+        if not tmax_slices:
+            print(f"✗ 未能加载任何Tmax数据")
+            return {"success": False, "error": "未能加载任何Tmax数据"}
+
+        print(f"成功加载 {len(tmax_slices)} 个Tmax切片和 {len(mask_slices)} 个掩码")
+
+        # 进行分析
+        print("开始执行脑卒中分析...")
+        analysis_results = stroke_analyzer.analyze_case(
+            tmax_slices, mask_slices, hemisphere, analysis_output_dir
+        )
+
+        if not analysis_results["success"]:
+            print(f"✗ 分析失败: {analysis_results.get('error', '未知错误')}")
+            return analysis_results
+
+        # 生成报告
+        print("生成分析报告...")
+        report = stroke_analyzer.generate_report(analysis_results)
+        analysis_results["report"] = report
+
+        # 等待文件系统同步
+        time.sleep(0.2)
+
+        # 构建所有切片的可视化URL
+        if os.path.exists(analysis_output_dir):
+            visualizations = {"penumbra": [], "core": [], "combined": []}
+
+            # 为每个切片构建URL
+            for slice_id in range(len(tmax_slices)):
+                penumbra_path = os.path.join(
+                    analysis_output_dir, f"penumbra_{slice_id}.png"
+                )
+                core_path = os.path.join(analysis_output_dir, f"core_{slice_id}.png")
+                combined_path = os.path.join(
+                    analysis_output_dir, f"combined_{slice_id}.png"
+                )
+
+                # 等待文件写入完成（最多等待1秒）
+                for attempt in range(10):
+                    if (
+                        os.path.exists(penumbra_path)
+                        and os.path.exists(core_path)
+                        and os.path.exists(combined_path)
+                    ):
+                        break
+                    time.sleep(0.1)
+
+                # 只添加存在的图像
+                if os.path.exists(penumbra_path):
+                    visualizations["penumbra"].append(
+                        f"/get_stroke_analysis_image/{file_id}/penumbra_{slice_id}.png"
+                    )
+                else:
+                    print(f"⚠ 半暗带图像不存在: {penumbra_path}")
+
+                if os.path.exists(core_path):
+                    visualizations["core"].append(
+                        f"/get_stroke_analysis_image/{file_id}/core_{slice_id}.png"
+                    )
+                else:
+                    print(f"⚠ 核心梗死图像不存在: {core_path}")
+
+                if os.path.exists(combined_path):
+                    visualizations["combined"].append(
+                        f"/get_stroke_analysis_image/{file_id}/combined_{slice_id}.png"
+                    )
+                else:
+                    print(f"⚠ 综合显示图像不存在: {combined_path}")
+
+            analysis_results["visualizations"] = visualizations
+            print(f"✓ 生成 {len(tmax_slices)} 个切片的可视化URL")
+            print(f"半暗带URL数量: {len(visualizations['penumbra'])}")
+            print(f"核心梗死URL数量: {len(visualizations['core'])}")
+            print(f"综合显示URL数量: {len(visualizations['combined'])}")
+
+            # 如果没有生成任何可视化图像，返回错误
+            if not visualizations["combined"]:
+                print(f"✗ 未生成任何可视化图像")
+                return {"success": False, "error": "可视化图像生成失败，请重试"}
+
+        # 将numpy类型转换为Python原生类型以确保JSON序列化
+        def convert_numpy_types(obj):
+            if isinstance(obj, dict):
+                return {k: convert_numpy_types(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_numpy_types(v) for v in obj]
+            elif isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            elif isinstance(obj, np.bool_):
+                return bool(obj)
+            elif isinstance(obj, np.ndarray):
+                return obj.tolist()
+            else:
+                return obj
+
+        return convert_numpy_types(analysis_results)
+
+    except Exception as e:
+        print(f"脑卒中分析失败: {e}")
+        import traceback
+
+        traceback.print_exc()
+        return {"success": False, "error": str(e)}

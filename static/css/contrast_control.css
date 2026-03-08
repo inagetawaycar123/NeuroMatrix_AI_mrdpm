@@ -1,0 +1,425 @@
+/**
+ * ITK-SNAP风格的对比度调节面板样式
+ */
+
+/* ==================== 浮动面板 ==================== */
+.contrast-floating-panel {
+    position: fixed;
+    right: 20px;
+    top: 60px;
+    z-index: 1000;
+    transition: transform 0.3s ease, opacity 0.3s ease;
+}
+
+.contrast-floating-panel.hidden {
+    transform: translateX(350px);
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* ==================== 主面板 ==================== */
+.contrast-panel {
+    width: 320px;
+    background: #0a0a0a;
+    border: 1px solid #333;
+    border-radius: 4px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 12px;
+    color: #fff;
+}
+
+/* ==================== 头部 ==================== */
+.contrast-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 14px;
+    background: #111;
+    border-bottom: 1px solid #333;
+    border-radius: 4px 4px 0 0;
+}
+
+.contrast-title {
+    font-size: 13px;
+    font-weight: 500;
+    color: #fff;
+}
+
+.contrast-close-btn {
+    background: transparent;
+    border: none;
+    color: #808080;
+    font-size: 18px;
+    cursor: pointer;
+    padding: 0;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.contrast-close-btn:hover {
+    background: #333;
+    color: #fff;
+}
+
+/* ==================== 主体 ==================== */
+.contrast-body {
+    padding: 12px;
+}
+
+/* ==================== 区块 ==================== */
+.contrast-section {
+    margin-bottom: 16px;
+}
+
+.contrast-section:last-child {
+    margin-bottom: 0;
+}
+
+.section-label {
+    font-size: 11px;
+    color: #808080;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* ==================== 图像选择器 ==================== */
+.image-selector {
+    display: flex;
+    gap: 8px;
+}
+
+.image-btn {
+    flex: 1;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #808080;
+    padding: 8px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.image-btn:hover {
+    border-color: #00a8ff;
+    color: #fff;
+}
+
+.image-btn.active {
+    background: #00a8ff;
+    border-color: #00a8ff;
+    color: #fff;
+}
+
+/* ==================== 滑块容器 ==================== */
+.slider-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.contrast-slider {
+    flex: 1;
+    height: 4px;
+    background: #333;
+    border-radius: 2px;
+    outline: none;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.contrast-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    background: #00a8ff;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: transform 0.1s;
+}
+
+.contrast-slider::-webkit-slider-thumb:hover {
+    transform: scale(1.2);
+}
+
+.contrast-slider::-moz-range-thumb {
+    width: 14px;
+    height: 14px;
+    background: #00a8ff;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.contrast-input {
+    width: 60px;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #fff;
+    padding: 6px 8px;
+    font-size: 11px;
+    border-radius: 4px;
+    text-align: center;
+}
+
+.contrast-input:focus {
+    outline: none;
+    border-color: #00a8ff;
+}
+
+/* ==================== 直方图 ==================== */
+.histogram-container {
+    position: relative;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 4px;
+}
+
+#histogramCanvas {
+    display: block;
+    width: 100%;
+    height: 80px;
+    border-radius: 2px;
+}
+
+.histogram-markers {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    right: 4px;
+    bottom: 4px;
+    pointer-events: none;
+}
+
+.marker {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: #ff6b6b;
+    transition: left 0.1s;
+}
+
+.marker-min {
+    background: #00a8ff;
+}
+
+.marker-max {
+    background: #ff6b6b;
+}
+
+/* ==================== 预设网格 ==================== */
+.presets-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+}
+
+.preset-btn {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #808080;
+    padding: 8px 4px;
+    font-size: 10px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+    text-align: center;
+}
+
+.preset-btn:hover {
+    border-color: #00a8ff;
+    color: #fff;
+}
+
+.preset-btn.active {
+    background: #00a8ff;
+    border-color: #00a8ff;
+    color: #fff;
+}
+
+.preset-name {
+    display: block;
+    font-weight: 500;
+    margin-bottom: 2px;
+}
+
+.preset-values {
+    display: block;
+    font-size: 9px;
+    opacity: 0.7;
+}
+
+/* ==================== 操作按钮 ==================== */
+.action-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+.action-btn {
+    flex: 1;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #808080;
+    padding: 8px 6px;
+    font-size: 11px;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.action-btn:hover {
+    border-color: #00a8ff;
+    color: #fff;
+}
+
+.reset-btn:hover {
+    border-color: #ff6b6b;
+    color: #ff6b6b;
+}
+
+.apply-all-btn:hover {
+    border-color: #51cf66;
+    color: #51cf66;
+}
+
+.auto-btn:hover {
+    border-color: #ffd43b;
+    color: #ffd43b;
+}
+
+/* ==================== 提示 ==================== */
+.contrast-tip {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 10px;
+    background: rgba(0, 168, 255, 0.1);
+    border: 1px solid rgba(0, 168, 255, 0.2);
+    border-radius: 4px;
+    margin-top: 12px;
+}
+
+.tip-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+}
+
+.tip-text {
+    font-size: 11px;
+    color: #808080;
+    line-height: 1.4;
+}
+
+/* ==================== 图像单元格拖拽状态 ==================== */
+.grid-cell.contrast-dragging {
+    cursor: move !important;
+}
+
+.grid-cell.contrast-dragging::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 168, 255, 0.1);
+    pointer-events: none;
+}
+
+/* ==================== 对比度指示器 ==================== */
+.contrast-indicator {
+    position: absolute;
+    bottom: 6px;
+    left: 6px;
+    font-size: 9px;
+    color: #808080;
+    background: rgba(0, 0, 0, 0.8);
+    padding: 2px 6px;
+    border-radius: 2px;
+    z-index: 10;
+    display: none;
+}
+
+.grid-cell:hover .contrast-indicator {
+    display: block;
+}
+
+/* ==================== 工具栏按钮 ==================== */
+.contrast-tool-btn {
+    background: transparent;
+    border: 1px solid #333;
+    color: #fff;
+    padding: 4px 12px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.contrast-tool-btn:hover {
+    border-color: #00a8ff;
+}
+
+.contrast-tool-btn.active {
+    background: #00a8ff;
+    border-color: #00a8ff;
+}
+
+/* ==================== 响应式 ==================== */
+@media (max-width: 768px) {
+    .contrast-floating-panel {
+        right: 10px;
+        top: 50px;
+    }
+    
+    .contrast-panel {
+        width: 280px;
+    }
+    
+    .presets-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+/* ==================== 动画 ==================== */
+@keyframes slideIn {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+.contrast-panel {
+    animation: slideIn 0.3s ease;
+}
+
+/* ==================== 滚动条样式 ==================== */
+.contrast-body::-webkit-scrollbar {
+    width: 6px;
+}
+
+.contrast-body::-webkit-scrollbar-track {
+    background: #1a1a1a;
+}
+
+.contrast-body::-webkit-scrollbar-thumb {
+    background: #333;
+    border-radius: 3px;
+}
+
+.contrast-body::-webkit-scrollbar-thumb:hover {
+    background: #444;
+}
