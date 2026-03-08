@@ -3114,6 +3114,13 @@ def report_page(patient_id):
         }), 404
 
 
+@app.route("/assets/<path:filename>")
+def serve_vite_assets(filename):
+    """为 Vite 构建的前端应用提供静态资源（JS/CSS 等）"""
+    dist_assets = os.path.join(app.static_folder, "dist", "assets")
+    return send_from_directory(dist_assets, filename)
+
+
 # ==================== 图像对比度调节API ====================
 
 

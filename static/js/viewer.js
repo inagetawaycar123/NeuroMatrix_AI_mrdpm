@@ -748,20 +748,21 @@ function getReportUrl() {
 
 function getReportCacheState(fileId = currentFileId) {
     const keys = getReportStorageKeys(fileId);
-    const hasReport = !!localStorage.getItem(keys.report);
+    const reportText = localStorage.getItem(keys.report) || '';
+    const hasReport = !!reportText;
     const isGenerating = localStorage.getItem(keys.generating) === 'true';
     const errorMessage = localStorage.getItem(keys.error) || '';
 
     if (isGenerating) {
-        return { status: 'generating', errorMessage, hasReport, isGenerating };
+        return { status: 'generating', errorMessage, hasReport, isGenerating, reportText };
     }
     if (hasReport) {
-        return { status: 'ready', errorMessage: '', hasReport, isGenerating: false };
+        return { status: 'ready', errorMessage: '', hasReport, isGenerating: false, reportText };
     }
     if (errorMessage) {
-        return { status: 'error', errorMessage, hasReport: false, isGenerating: false };
+        return { status: 'error', errorMessage, hasReport: false, isGenerating: false, reportText: '' };
     }
-    return { status: 'idle', errorMessage: '', hasReport: false, isGenerating: false };
+    return { status: 'idle', errorMessage: '', hasReport: false, isGenerating: false, reportText: '' };
 }
 
 function getTopbarReportButton() {
@@ -883,7 +884,12 @@ function initializeReportAutoFlow() {
     autoReportBootstrapped = true;
 
     const cache = getReportCacheState(currentFileId);
-    if (cache.status === 'ready' || cache.status === 'generating') {
+    // 如果已有报告，直接在侧边面板显示
+    if (cache.status === 'ready' && cache.reportText) {
+        displayAIReport(cache.reportText, false);
+        return;
+    }
+    if (cache.status === 'generating') {
         return;
     }
 
@@ -895,13 +901,17 @@ async function autoGenerateReportIfNeeded() {
     const cache = getReportCacheState(currentFileId);
     if (cache.hasReport || cache.isGenerating) {
         refreshReportStatusFromCache();
+        // 如果已有报告，尝试在侧边面板显示
+        if (cache.hasReport && cache.reportText) {
+            displayAIReport(cache.reportText, false);
+        }
         return;
     }
 
     setReportStatus('generating', '\u7cfb\u7edf\u6b63\u5728\u81ea\u52a8\u751f\u6210\u62a5\u544a\uff0c\u8bf7\u7ee7\u7eed\u9605\u7247\u3002');
     const result = await generateAIReport({
         openAfterGenerate: false,
-        showInline: false,
+        showInline: true,
         source: 'auto',
     });
 

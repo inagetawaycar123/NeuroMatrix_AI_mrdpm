@@ -516,7 +516,7 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({ patientId, f
               导出PDF
             </button>
           )}
-          <button className="action-btn ai-consult-btn" onClick={() => setShowAIChat(!showAIChat)}>
+          <button className="action-btn ai-consult-btn" onClick={() => window.location.href = '/chat'}>
             AI问诊
           </button>
         </div>
