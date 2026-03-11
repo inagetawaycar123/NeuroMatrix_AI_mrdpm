@@ -15,6 +15,10 @@ import json
 import re
 
 
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
+
+
 class StrokeAnalysis:
     """脑卒中病灶分析类 - 专门处理Tmax图像的后处理分析"""
 
@@ -426,10 +430,13 @@ def normalize_modalities(available_modalities):
     return normalized
 
 
-def infer_modalities_from_uploads(case_id, uploads_dir="static/uploads"):
+def infer_modalities_from_uploads(case_id, uploads_dir=None):
     """Infer modalities from uploaded nifti files as fallback source of truth."""
     if not case_id:
         return []
+
+    if uploads_dir is None:
+        uploads_dir = os.path.join(PROJECT_ROOT, "static", "uploads")
 
     modalities = []
     for mod in ["ncct", "mcta", "vcta", "dcta", "cbf", "cbv", "tmax"]:
@@ -632,7 +639,7 @@ def analyze_stroke_case(file_id, hemisphere="both", output_base_dir=None):
 
         # 构建路径
         if output_base_dir is None:
-            output_base_dir = os.path.join("static", "processed")
+            output_base_dir = os.path.join(PROJECT_ROOT, "static", "processed")
 
         case_dir = os.path.join(output_base_dir, file_id)
         analysis_output_dir = os.path.join(case_dir, "stroke_analysis")
