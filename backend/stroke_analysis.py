@@ -15,6 +15,10 @@ import json
 import re
 
 
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
+
+
 class StrokeAnalysis:
     """脑卒中病灶分析类 - 专门处理Tmax图像的后处理分析"""
 
@@ -25,9 +29,9 @@ class StrokeAnalysis:
 
         # 分析参数配置
         self.penumbra_threshold_pred = 9  # 预测半暗带阈值
-        self.penumbra_threshold_gt = 9  # 真实半暗带阈值
+        self.penumbra_threshold_gt = 16  # 真实半暗带阈值
         self.core_threshold_pred = 12  # 预测核心梗死阈值
-        self.core_threshold_gt = 12  # 真实核心梗死阈值
+        self.core_threshold_gt = 26  # 真实核心梗死阈值
 
         # 后处理参数
         self.penumbra_min_area_pred = 200  # 预测半暗带最小面积
@@ -110,13 +114,22 @@ class StrokeAnalysis:
         return full_result
 
     def analyze_slice(
-        self, tmax_data, mask_data, slice_id, hemisphere="both", output_dir=None
+        self,
+        tmax_data,
+        mask_data,
+        slice_id,
+        hemisphere="both",
+        output_dir=None,
+        tmax_type="pred",
     ):
         """
         分析单个Tmax切片
+
+        参数:
+        - tmax_type: "pred"（预测/AI生成）或 "gt"（真实CTP）
         """
         try:
-            print(f"分析切片 {slice_id}，偏侧: {hemisphere}")
+            print(f"分析切片 {slice_id}，偏侧: {hemisphere}，类型: {tmax_type}")
 
             # 应用偏侧处理
             tmax_analysis, mask_analysis, analysis_coords, other_coords = (
@@ -124,52 +137,65 @@ class StrokeAnalysis:
             )
 
             # 在分析区域内应用脑组织掩码
-            mask_binary = mask_analysis > 0.5
+            mask_binary = mask_analysis > 0.5 if mask_analysis is not None else np.ones_like(
+                tmax_analysis, dtype=bool
+            )
             tmax_result = np.where(mask_binary, tmax_analysis, 0)
 
             # 将Tmax值转换为实际范围 (0-30秒)
             tmax_scaled = tmax_result * 30
             tmax_scaled = np.clip(tmax_scaled, 0, 30)
 
-            # 生成病灶掩码
-            # 缺血半暗带
-            penumbra_mask_pred = tmax_scaled > self.penumbra_threshold_pred
+            # 根据输入类型选择阈值与后处理参数（支持多种输入标识）
+            if str(tmax_type).strip().lower() in (
+                "gt",
+                "ground",
+                "ground_truth",
+                "true",
+                "real",
+            ):
+                penumbra_threshold = self.penumbra_threshold_gt
+                core_threshold = self.core_threshold_gt
+                penumbra_min_area = self.penumbra_min_area_gt
+                core_min_area = self.core_min_area_gt
+            else:
+                penumbra_threshold = self.penumbra_threshold_pred
+                core_threshold = self.core_threshold_pred
+                penumbra_min_area = self.penumbra_min_area_pred
+                core_min_area = self.core_min_area_pred
 
-            # 核心梗死
-            core_mask_pred = tmax_scaled > self.core_threshold_pred
+            # 生成病灶掩码（按选定阈值判断）
+            penumbra_mask = tmax_scaled > penumbra_threshold
+            core_mask = tmax_scaled > core_threshold
 
             # 后处理
-            penumbra_clean_pred = self.postprocess_mask(
-                penumbra_mask_pred, self.penumbra_min_area_pred
-            )
-            core_clean_pred = self.postprocess_mask(
-                core_mask_pred, self.core_min_area_pred
-            )
+            penumbra_clean = self.postprocess_mask(penumbra_mask, penumbra_min_area)
+            core_clean = self.postprocess_mask(core_mask, core_min_area)
 
             # 重建完整图像
-            penumbra_full_pred = self.reconstruct_full_image(
-                penumbra_clean_pred, analysis_coords, other_coords, tmax_data.shape
+            penumbra_full = self.reconstruct_full_image(
+                penumbra_clean, analysis_coords, other_coords, tmax_data.shape
             )
-            core_full_pred = self.reconstruct_full_image(
-                core_clean_pred, analysis_coords, other_coords, tmax_data.shape
+            core_full = self.reconstruct_full_image(
+                core_clean, analysis_coords, other_coords, tmax_data.shape
             )
 
             # 统计体素数量（只统计分析区域）
-            penumbra_voxels = (penumbra_clean_pred > 0).sum()
-            core_voxels = (core_clean_pred > 0).sum()
+            penumbra_voxels = (penumbra_clean > 0).sum()
+            core_voxels = (core_clean > 0).sum()
 
             # 生成可视化图像
             visualization_results = {}
             if output_dir:
                 visualization_results = self.generate_visualizations(
-                    tmax_data, penumbra_full_pred, core_full_pred, slice_id, output_dir
+                    tmax_data, penumbra_full, core_full, slice_id, output_dir
                 )
 
             return {
                 "success": True,
                 "slice_id": slice_id,
-                "penumbra_voxels": penumbra_voxels,
-                "core_voxels": core_voxels,
+                "penumbra_voxels": int(penumbra_voxels),
+                "core_voxels": int(core_voxels),
                 "visualizations": visualization_results,
                 "analysis_region_coords": analysis_coords,
             }
@@ -297,7 +323,7 @@ class StrokeAnalysis:
             return {}
 
     def analyze_case(
-        self, tmax_slices, mask_slices, hemisphere="both", output_dir=None
+        self, tmax_slices, mask_slices, hemisphere="both", output_dir=None, tmax_types=None
     ):
         """
         分析整个病例的所有切片
@@ -309,11 +335,20 @@ class StrokeAnalysis:
             total_core_voxels = 0
             slice_results = []
 
+            # 兼容 tmax_types：如果未提供，则全部视为预测版（pred）
+            if tmax_types is None:
+                tmax_types = ["pred"] * len(tmax_slices)
+            elif len(tmax_types) < len(tmax_slices):
+                tmax_types = list(tmax_types) + ["pred"] * (
+                    len(tmax_slices) - len(tmax_types)
+                )
+
             for slice_id, (tmax_data, mask_data) in enumerate(
                 zip(tmax_slices, mask_slices)
             ):
+                tmax_type = tmax_types[slice_id] if slice_id < len(tmax_types) else "pred"
                 slice_result = self.analyze_slice(
-                    tmax_data, mask_data, slice_id, hemisphere, output_dir
+                    tmax_data, mask_data, slice_id, hemisphere, output_dir, tmax_type=tmax_type
                 )
 
                 if slice_result["success"]:
@@ -426,10 +461,13 @@ def normalize_modalities(available_modalities):
     return normalized
 
 
-def infer_modalities_from_uploads(case_id, uploads_dir="static/uploads"):
+def infer_modalities_from_uploads(case_id, uploads_dir=None):
     """Infer modalities from uploaded nifti files as fallback source of truth."""
     if not case_id:
         return []
+
+    if uploads_dir is None:
+        uploads_dir = os.path.join(PROJECT_ROOT, "static", "uploads")
 
     modalities = []
     for mod in ["ncct", "mcta", "vcta", "dcta", "cbf", "cbv", "tmax"]:
@@ -589,7 +627,7 @@ def auto_analyze_stroke(case_id, patient_id=None):
         print(f"[OK] parsed hemisphere: {parsed_hemisphere}")
 
         print("start stroke analysis execution...")
-        analysis_result = analyze_stroke_case(case_id, parsed_hemisphere)
+        analysis_result = analyze_stroke_case(case_id, parsed_hemisphere, use_real_ctp=use_real_ctp)
 
         if analysis_result.get("success"):
             print("[OK] stroke analysis succeeded")
@@ -623,7 +661,7 @@ def auto_analyze_stroke(case_id, patient_id=None):
         return {"success": False, "error": str(e)}
 
 
-def analyze_stroke_case(file_id, hemisphere="both", output_base_dir=None):
+def analyze_stroke_case(file_id, hemisphere="both", output_base_dir=None, use_real_ctp=False):
     """分析脑卒中病例的主函数 - 改进的错误处理版本"""
     import time
 
@@ -632,7 +670,7 @@ def analyze_stroke_case(file_id, hemisphere="both", output_base_dir=None):
 
         # 构建路径
         if output_base_dir is None:
-            output_base_dir = os.path.join("static", "processed")
+            output_base_dir = os.path.join(PROJECT_ROOT, "static", "processed")
 
         case_dir = os.path.join(output_base_dir, file_id)
         analysis_output_dir = os.path.join(case_dir, "stroke_analysis")
@@ -717,8 +755,10 @@ def analyze_stroke_case(file_id, hemisphere="both", output_base_dir=None):
 
         # 进行分析
         print("开始执行脑卒中分析...")
+        # 根据 use_real_ctp 决定是否将所有切片视为真实CTP (gt)
+        tmax_types = ["gt"] * len(tmax_slices) if use_real_ctp else None
         analysis_results = stroke_analyzer.analyze_case(
-            tmax_slices, mask_slices, hemisphere, analysis_output_dir
+            tmax_slices, mask_slices, hemisphere, analysis_output_dir, tmax_types=tmax_types
         )
 
         if not analysis_results["success"]:

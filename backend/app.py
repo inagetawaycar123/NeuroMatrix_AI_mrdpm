@@ -8,7 +8,6 @@ import html
 import glob
 import threading
 import shutil
-from .ai_inference import get_ai_model
 import os
 import requests  # 添加 requests 导入，用于调用百川 M3 API
 from flask import (
@@ -21,7 +20,13 @@ from flask import (
     Response,
     stream_with_context,
 )
-from extensions import NumpyJSONEncoder
+try:
+    from .ai_inference import get_ai_model
+    from .extensions import NumpyJSONEncoder
+except ImportError:
+    # 兼容直接运行 backend/app.py 的场景
+    from ai_inference import get_ai_model
+    from extensions import NumpyJSONEncoder
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -794,8 +799,12 @@ import colorsys
 import matplotlib as mpl
 
 # 在app.py的导入部分添加
-from stroke_analysis import analyze_stroke_case
-from medgemma_report import generate_report_with_medgemma
+try:
+    from .stroke_analysis import analyze_stroke_case
+    from .medgemma_report import generate_report_with_medgemma
+except ImportError:
+    from stroke_analysis import analyze_stroke_case
+    from medgemma_report import generate_report_with_medgemma
 
 # 尝试导入 nibabel
 try:
@@ -807,10 +816,14 @@ except ImportError as e:
     print(f"✗ nibabel 导入失败: {e}")
     NIBABEL_AVAILABLE = False
 
-app = Flask(__name__, static_folder="../static")
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+app = Flask(__name__, static_folder=os.path.join(PROJECT_ROOT, "static"))
 app.config["SECRET_KEY"] = "your-secret-key-here"
-app.config["UPLOAD_FOLDER"] = "static/uploads"
-app.config["PROCESSED_FOLDER"] = "static/processed"
+app.config["UPLOAD_FOLDER"] = os.path.join(PROJECT_ROOT, "static", "uploads")
+app.config["PROCESSED_FOLDER"] = os.path.join(
+    PROJECT_ROOT, "static", "processed"
+)
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
 app.config["TEMPLATES_AUTO_RELOAD"] = True  # 禁用HTML缓存，修改立即生效
 app.jinja_env.auto_reload = True
@@ -1082,7 +1095,10 @@ def _run_upload_processing_job(job_id, payload):
         if should_stroke:
             _update_step(job_id, "stroke_analysis", "running", "正在执行脑卒中自动分析")
             try:
-                from stroke_analysis import auto_analyze_stroke
+                try:
+                    from .stroke_analysis import auto_analyze_stroke
+                except ImportError:
+                    from stroke_analysis import auto_analyze_stroke
 
                 analysis_result = auto_analyze_stroke(
                     payload["file_id"], payload["patient_id"]
@@ -1159,9 +1175,6 @@ def _run_upload_processing_job(job_id, payload):
         if temp_dir and os.path.exists(temp_dir):
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-
-# 获取项目根目录
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # AI模型配置 - 扩展为三个模型
 AI_CONFIG_BASE = os.path.join(PROJECT_ROOT, "palette", "config")
@@ -1333,7 +1346,10 @@ def init_single_ai_model(config_path, weight_base, use_ema=True, device="cpu"):
     """初始化单个AI模型"""
     try:
         # 这里需要根据您的ai_inference模块调整初始化方式
-        from ai_inference import MedicalAIModel
+        try:
+            from .ai_inference import MedicalAIModel
+        except ImportError:
+            from ai_inference import MedicalAIModel
 
         model = MedicalAIModel(config_path, weight_base, use_ema=use_ema, device=device)
         return model
@@ -1372,8 +1388,7 @@ def get_available_models():
 def check_mrdpm_models_available():
     """检查MRDPM模型是否可用"""
     available = []
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    mrdpm_weights_dir = os.path.join(current_dir, "mrdpm", "weights")
+    mrdpm_weights_dir = os.path.join(PROJECT_ROOT, "mrdpm", "weights")
 
     if not os.path.exists(mrdpm_weights_dir):
         return available
@@ -2027,7 +2042,10 @@ def api_auto_analyze_stroke():
         print(f"收到自动脑卒中分析请求 - case_id: {case_id}, patient_id: {patient_id}")
 
         # 导入auto_analyze_stroke函数
-        from stroke_analysis import auto_analyze_stroke
+        try:
+            from .stroke_analysis import auto_analyze_stroke
+        except ImportError:
+            from stroke_analysis import auto_analyze_stroke
 
         # 执行自动分析
         analysis_result = auto_analyze_stroke(case_id, patient_id)
@@ -3786,23 +3804,29 @@ def process_ai_inference(
             print(f"开始{model_key.upper()}模型推理 (使用MRDPM模型)...")
             # MRDPM模型推理逻辑
             # 1. 获取mrdpm模型权重路径
-            from ai_inference import MRDPMModel
+            try:
+                from .ai_inference import MRDPMModel
+            except ImportError:
+                from ai_inference import MRDPMModel
             import torch
 
             # 确定mrdpm子模型（当model_key为'mrdpm'时，默认使用'cbf'）
             mrdpm_submodel = model_key if model_key != "mrdpm" else "cbf"
 
             # 构建mrdpm模型权重路径
-            current_dir = os.path.dirname(os.path.abspath(__file__))
             bran_pretrained_path = os.path.join(
-                current_dir,
+                PROJECT_ROOT,
                 "mrdpm",
                 "weights",
                 mrdpm_submodel,
                 "bran_pretrained_3channel.pth",
             )
             residual_weight_path = os.path.join(
-                current_dir, "mrdpm", "weights", mrdpm_submodel, "200_Network_ema.pth"
+                PROJECT_ROOT,
+                "mrdpm",
+                "weights",
+                mrdpm_submodel,
+                "200_Network_ema.pth",
             )
 
             # 验证权重文件是否存在
@@ -4932,7 +4956,10 @@ def upload_files():
             if patient_id and not defer_stroke_analysis:
                 print("尝试自动触发脑卒中分析...")
                 try:
-                    from stroke_analysis import auto_analyze_stroke
+                    try:
+                        from .stroke_analysis import auto_analyze_stroke
+                    except ImportError:
+                        from stroke_analysis import auto_analyze_stroke
 
                     analysis_result = auto_analyze_stroke(file_id, patient_id)
                     print(
@@ -4976,7 +5003,10 @@ def upload_files():
                 if patient_id and not defer_stroke_analysis:
                     print("尝试自动触发脑卒中分析...")
                     try:
-                        from stroke_analysis import auto_analyze_stroke
+                        try:
+                            from .stroke_analysis import auto_analyze_stroke
+                        except ImportError:
+                            from stroke_analysis import auto_analyze_stroke
 
                         analysis_result = auto_analyze_stroke(file_id, patient_id)
                         print(

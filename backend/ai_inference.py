@@ -8,9 +8,10 @@ import json
 from PIL import Image
 import torchvision.transforms as transforms
 
-# 添加项目根目录到Python路径
-current_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, current_dir)
+# 统一路径基准：backend 目录与项目根目录
+BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
+sys.path.insert(0, BACKEND_DIR)
 
 # 不要将mrdpm目录添加到Python路径的最前面，以免覆盖Palette模型的模块
 # 而是使用完整路径导入mrdpm模块
@@ -34,9 +35,11 @@ class MultiModelAISystem:
         self.model_configs = {
             "cbf": {
                 "name": "CBF灌注图模型",
-                "config_path": os.path.join(current_dir, "config", "cbf_config.json"),
+                "config_path": os.path.join(
+                    PROJECT_ROOT, "palette", "config", "cbf.json"
+                ),
                 "weight_base": os.path.join(
-                    current_dir, "weights_palette", "cbf", "150"
+                    PROJECT_ROOT, "palette", "weights", "cbf", "150"
                 ),
                 "use_ema": True,
                 "color": "#e67e22",
@@ -44,9 +47,11 @@ class MultiModelAISystem:
             },
             "cbv": {
                 "name": "CBV灌注图模型",
-                "config_path": os.path.join(current_dir, "config", "cbv_config.json"),
+                "config_path": os.path.join(
+                    PROJECT_ROOT, "palette", "config", "cbv.json"
+                ),
                 "weight_base": os.path.join(
-                    current_dir, "weights_palette", "cbv", "140"
+                    PROJECT_ROOT, "palette", "weights", "cbv", "140"
                 ),
                 "use_ema": True,
                 "color": "#3498db",
@@ -54,9 +59,11 @@ class MultiModelAISystem:
             },
             "tmax": {
                 "name": "Tmax灌注图模型",
-                "config_path": os.path.join(current_dir, "config", "tmax_config.json"),
+                "config_path": os.path.join(
+                    PROJECT_ROOT, "palette", "config", "tmax.json"
+                ),
                 "weight_base": os.path.join(
-                    current_dir, "weights_palette", "tmax", "160"
+                    PROJECT_ROOT, "palette", "weights", "tmax", "160"
                 ),
                 "use_ema": True,
                 "color": "#9b59b6",
@@ -250,7 +257,7 @@ class MRDPMModel:
         original_path = sys.path.copy()
 
         # 不要清空sys.path，而是在前面添加mrdpm路径，确保能找到已安装的第三方库
-        mrdpm_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mrdpm")
+        mrdpm_path = os.path.join(PROJECT_ROOT, "mrdpm")
         sys.path.insert(0, mrdpm_path)
 
         # 现在导入的models.network一定是mrdpm/models/network.py
@@ -296,7 +303,7 @@ class MRDPMModel:
         print(f"加载BRAN预训练权重: {self.bran_pretrained_path}")
         # 保存当前sys.path
         original_path = sys.path.copy()
-        mrdpm_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mrdpm")
+        mrdpm_path = os.path.join(PROJECT_ROOT, "mrdpm")
         sys.path.insert(0, mrdpm_path)
         try:
             # 调用Network的方法设置BRAN预训练路径
@@ -579,9 +586,7 @@ class MedicalAIModel:
             # 1. 添加palette目录到Python路径，确保能找到models.network模块
             import sys
 
-            palette_path = os.path.join(
-                os.path.dirname(os.path.dirname(__file__)), "palette"
-            )
+            palette_path = os.path.join(PROJECT_ROOT, "palette")
             sys.path.insert(0, palette_path)
             print(f"添加palette目录到Python路径: {palette_path}")
 
@@ -668,9 +673,7 @@ class MedicalAIModel:
             # 确保无论成功失败都从sys.path中移除palette_path
             import sys
 
-            palette_path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "palette"
-            )
+            palette_path = os.path.join(PROJECT_ROOT, "palette")
             if palette_path in sys.path:
                 sys.path.remove(palette_path)
             raise
