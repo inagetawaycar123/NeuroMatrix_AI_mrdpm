@@ -214,6 +214,18 @@ ls -lh mrdpm/weights/tmax
 - `backend/templates` 仅作为页面壳与路由入口。
 - 新功能、交互、展示逻辑优先在 `frontend/src` 实现。
 
+### 目录结构约定补充
+
+- 项目根目录只放启动与工程配置：`run.py`、`.env*`、`pyproject.toml`、锁文件等。
+- 后端业务逻辑统一放在 `backend/*`。
+- 异步/队列 Worker 入口统一放在 `backend/workers/*`。
+
+`report_worker.py` 已归位到：
+
+- `backend/workers/report_worker.py`
+
+根目录 `report_worker.py` 保留为兼容转发（deprecated），后续版本将移除。
+
 ## 七、推荐最小启动流程
 
 ```bash
