@@ -108,10 +108,51 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 .upload-btn:hover:not(:disabled) { background:#0095e0; }
 .upload-btn:disabled { background:#1a1a1a; color:#404040; cursor:pointer; }
 .upload-info { font-size:12px; font-weight:600; color:#808080; margin-top:20px; padding-top:20px; border-top:1px solid #1a1a1a; line-height:1.6; }
+.upload-switch-row { margin-top: 4px; }
+.upload-switch {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #d1d5db;
+    flex: 1;
+}
+.upload-switch input {
+    accent-color: #00a8ff;
+}
+.upload-agent-note {
+    margin-top: 10px;
+    border: 1px solid #1f2937;
+    background: #000;
+    color: #93c5fd;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 8px 10px;
+}
+
+.processing-page-body {
+    overflow-x: hidden;
+    overflow-y: auto;
+    height: auto;
+    min-height: 100vh;
+}
+
+.processing-page-body .container {
+    height: auto;
+    min-height: calc(100vh - 40px);
+    align-items: flex-start;
+    padding: 20px;
+}
+
+.processing-page-body .page {
+    height: auto;
+    align-items: flex-start;
+}
 
 .processing-shell {
-    width: min(1400px, 96vw);
-    height: calc(100vh - 88px);
+    width: min(1540px, 98vw);
+    min-height: calc(100vh - 86px);
+    height: auto;
     background: #0a0a0a;
     border: 1px solid #1a1a1a;
     display: flex;
@@ -125,14 +166,14 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 }
 
 .processing-title {
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 700;
     color: #fff;
     margin-bottom: 4px;
 }
 
 .processing-subtitle {
-    font-size: 12px;
+    font-size: 14px;
     color: #9ca3af;
 }
 
@@ -142,7 +183,7 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
     grid-template-columns: 2fr 1fr;
     gap: 16px;
     padding: 16px;
-    min-height: 0;
+    min-height: 620px;
 }
 
 .processing-left {
@@ -161,7 +202,7 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 .processing-progress-top {
     display: flex;
     justify-content: space-between;
-    font-size: 12px;
+    font-size: 14px;
     color: #e5e7eb;
     margin-bottom: 8px;
 }
@@ -216,18 +257,18 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 
 .processing-step-title {
     flex: 1;
-    font-size: 13px;
+    font-size: 15px;
     color: #fff;
     font-weight: 600;
 }
 
 .processing-step-status {
-    font-size: 11px;
+    font-size: 13px;
     color: #9ca3af;
 }
 
 .processing-step-msg {
-    font-size: 12px;
+    font-size: 14px;
     color: #9ca3af;
     line-height: 1.5;
 }
@@ -244,7 +285,7 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 
 .processing-current,
 .processing-error {
-    font-size: 12px;
+    font-size: 14px;
     line-height: 1.6;
     border: 1px solid #1f2937;
     padding: 10px 12px;
@@ -262,8 +303,10 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 .processing-right {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-    min-height: 0;
+    gap: 12px;
+    max-height: calc(100vh - 150px);
+    overflow: auto;
+    padding-right: 2px;
 }
 
 .processing-card {
@@ -273,7 +316,7 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 }
 
 .processing-card-title {
-    font-size: 12px;
+    font-size: 14px;
     color: #93c5fd;
     margin-bottom: 10px;
     font-weight: 700;
@@ -283,24 +326,37 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
     display: flex;
     justify-content: space-between;
     gap: 8px;
-    font-size: 12px;
+    font-size: 13px;
     color: #d1d5db;
     padding: 6px 0;
     border-bottom: 1px solid #111827;
 }
 
 .processing-kv:last-child { border-bottom: none; }
+.processing-kv span:first-child {
+    color: #9ca3af;
+}
+.processing-kv span:last-child {
+    color: #e5e7eb;
+    text-align: right;
+    max-width: 62%;
+    word-break: break-all;
+}
 
 .processing-modality-list {
-    font-size: 12px;
+    font-size: 13px;
     color: #e5e7eb;
     line-height: 1.6;
 }
 
 .processing-note {
-    font-size: 12px;
+    font-size: 13px;
     color: #9ca3af;
     line-height: 1.7;
+}
+#agentLastError {
+    color: #fca5a5;
+    font-size: 12px;
 }
 
 .viewer-container { display: flex; height:100%; flex-direction: column; }

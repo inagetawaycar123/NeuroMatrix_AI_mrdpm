@@ -1,7 +1,7 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 
 {% block tools %}
-<button class="tool-btn" onclick="resetAll()">重新开始</button>
+<button class="tool-btn" onclick="resetAll()">重置</button>
 {% endblock %}
 
 {% block content %}
@@ -9,26 +9,26 @@
     <div class="page">
         <div class="upload-container">
             <div class="upload-box">
-                <div class="upload-title">上传医学影像文件</div>
+                <div class="upload-title">医学影像上传</div>
                 <div class="file-input-row">
-                    <label class="file-label">上传模式:</label>
+                    <label class="file-label">模式:</label>
                     <select id="uploadModeSelect" class="form-select" style="width: auto; flex: 1;">
                         <option value="ncct">1. NCCT-only</option>
                         <option value="ncct_single_cta">2. NCCT + single-phase CTA</option>
-                        <option value="ncct_3phase_cta">3. NCCT + 三期CTA</option>
-                        <option value="ncct_3phase_cta_ctp">4. NCCT + 三期CTA + CTP</option>
+                        <option value="ncct_3phase_cta">3. NCCT + mCTA</option>
+                        <option value="ncct_3phase_cta_ctp">4. NCCT + mCTA + CTP</option>
                     </select>
                 </div>
                 <div class="file-input-row" id="ctaPhaseRow" style="display:none;">
-                    <label class="file-label">选择 CTA 期数:</label>
+                    <label class="file-label">CTA期相:</label>
                     <select id="ctaPhaseSelect" class="form-select" style="width: auto; flex: 1;">
-                        <option value="mcta">动脉期 (第1期)</option>
-                        <option value="vcta">静脉期 (第2期)</option>
-                        <option value="dcta">延迟期 (第3期)</option>
+                        <option value="mcta">动脉期CTA</option>
+                        <option value="vcta">静脉期CTA</option>
+                        <option value="dcta">延迟期CTA</option>
                     </select>
                 </div>
                 <div class="file-input-row">
-                    <label class="file-label">NCCT文件:</label>
+                    <label class="file-label">NCCT:</label>
                     <input type="file" id="ncctFile" class="file-input" accept=".nii,.nii.gz,.gz,application/gzip,application/x-gzip">
                     <button class="file-select" id="ncctBtn" onclick="document.getElementById('ncctFile').click()">选择文件...</button>
                 </div>
@@ -63,7 +63,7 @@
                     <button class="file-select" id="dctaBtn" onclick="document.getElementById('dctaFile').click()">选择文件...</button>
                 </div>
                 <div class="file-input-row">
-                    <label class="file-label">偏侧选择:</label>
+                    <label class="file-label">偏侧:</label>
                     <select id="sideSelect" class="form-select" style="width: auto; flex: 1;">
                         <option value="both">双侧</option>
                         <option value="left">左侧</option>
@@ -71,18 +71,25 @@
                     </select>
                 </div>
                 <div class="file-input-row">
-                    <label class="file-label">模型选择:</label>
+                    <label class="file-label">模型:</label>
                     <select id="modelSelect" class="form-select" style="width: auto; flex: 1;">
-                        <option value="palette">palette模型</option>
-                        <option value="mrdpm" selected>mrdpm模型 (默认)</option>
+                        <option value="palette">palette</option>
+                        <option value="mrdpm" selected>mrdpm (推荐)</option>
                     </select>
                 </div>
+                <div class="file-input-row upload-switch-row">
+                    <label class="file-label">Agent:</label>
+                    <label class="upload-switch" for="agentRunToggle">
+                        <input type="checkbox" id="agentRunToggle" checked>
+                        <span>启用 Agent 主链（默认开启）</span>
+                    </label>
+                </div>
                 <button class="upload-btn" id="uploadBtn" onclick="processFiles()" disabled>开始处理</button>
+                <div id="agentRunInfo" class="upload-agent-note" style="display:none;"></div>
                 <div class="upload-info">
                     支持格式: NIfTI (.nii, .nii.gz)<br>
-                    文件大小: 最大 100MB<br>
-                    可选上传: CBF、CBV、Tmax（MCTP功能图像），如上传则直接显示，无需AI分析<br>
-                    系统将自动生成: RGB合成、脑部掩码、AI灌注图(CBF/CBV/Tmax)
+                    单文件建议不超过 100MB<br>
+                    CBF/CBV/Tmax 同时上传时视为真实 CTP，不触发伪彩 CTP 生成。
                 </div>
             </div>
         </div>
