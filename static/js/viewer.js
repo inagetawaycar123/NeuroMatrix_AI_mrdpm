@@ -234,6 +234,120 @@ function initializeViewer(data) {
     }
 
     loadSlice(0);
+    // 尝试在页面加载时直接从 localStorage 渲染 ICV（如果存在且报告文本未生成）
+    tryRenderIcvFromStoredPayload();
+}
+
+// 如果存在 `ai_report_payload_<fileId>`，且没有完整报告文本，直接渲染 ICV 区块
+function tryRenderIcvFromStoredPayload() {
+    try {
+        if (!currentFileId) return;
+        const keys = getReportStorageKeys(currentFileId);
+        const payloadRaw = localStorage.getItem(keys.payload);
+        const reportText = localStorage.getItem(keys.report);
+        if (!payloadRaw) return; // nothing to render
+
+        const payload = JSON.parse(payloadRaw || '{}');
+        let icv = null;
+        if (payload) {
+            if (payload.icv) icv = payload.icv;
+            else if (payload.success && payload.icv) icv = payload.icv;
+            else if (payload.status && (Array.isArray(payload.findings) || payload.findings)) icv = payload;
+            else if (payload.result && payload.result.icv) icv = payload.result.icv;
+        }
+        if (!icv) return;
+
+        // 无论是否已有全文报告，先更新静态 ICV 状态/问题面板
+        renderIcvStaticFields(icv);
+
+        // 如果已经有全文报告，避免覆盖由 displayAIReport 渲染的报告正文
+        if (reportText) return;
+
+        const aiReportSection = document.getElementById('aiReportSection');
+        const aiReportContent = document.getElementById('aiReportContent');
+        if (!aiReportSection || !aiReportContent) return;
+        aiReportSection.style.display = 'block';
+
+        // 构建与 displayAIReport 中相同的 ICV HTML（展开显示）
+        const status = (icv.status || '').toLowerCase();
+        const color = status === 'pass' ? '#10b981' : status === 'warn' ? '#f59e0b' : '#ef4444';
+        const findings = Array.isArray(icv.findings) ? icv.findings : [];
+        const findingsListHtml = findings.map(f => `
+            <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #eee;">
+                <div style="color:#333">${(f.id||'').replace(/_/g,' ')}</div>
+                <div style="color:${(f.status==='pass'? '#10b981' : f.status==='warn'? '#f59e0b' : '#ef4444')};font-weight:600">${f.status}</div>
+            </div>
+        `).join('');
+
+        const severitySetHigh = new Set(['fail','error','critical','high']);
+        const severitySetMedium = new Set(['warn','medium']);
+        const problemFindings = findings.filter(f => (f.status || '').toLowerCase() !== 'pass');
+        const warningCount = problemFindings.length;
+        const warningDetailsHtml = problemFindings.map(f => `
+            <div style="padding:8px;border-bottom:1px dashed #eee;margin-bottom:6px;">
+                <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+                    <div style="font-weight:700;color:${(severitySetHigh.has((f.status||'').toLowerCase())? '#ef4444' : severitySetMedium.has((f.status||'').toLowerCase()) ? '#f59e0b' : '#6b7280')}">${(f.id||'').replace(/_/g,' ')}</div>
+                    <div style="font-size:12px;font-weight:600;color:${(severitySetHigh.has((f.status||'').toLowerCase())? '#ef4444' : severitySetMedium.has((f.status||'').toLowerCase()) ? '#f59e0b' : '#6b7280')}">${f.status || 'unknown'}</div>
+                </div>
+                <div style="color:#333;margin-top:4px;">${f.message || ''}</div>
+                ${f.suggested_action ? `<div style="color:#2563eb;margin-top:6px;">建议: ${f.suggested_action}</div>` : ''}
+            </div>
+        `).join('');
+
+        const icvHtml = `
+            <div style="background:#fff7ed;border:1px solid rgba(0,0,0,0.04);padding:12px;border-radius:8px;margin-bottom:10px;">
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                    <div style="font-weight:700;color:${color};">ICV 检查：${(icv.status||'').toUpperCase()}</div>
+                    <div style="font-size:12px;color:#666">自动质量门检测</div>
+                </div>
+                <div style="font-size:13px;color:#333">${findingsListHtml || '<div style="color:#666">无详细发现</div>'}</div>
+                ${warningCount > 0 ? `
+                    <div style="margin-top:10px;border-top:1px solid rgba(0,0,0,0.03);padding-top:8px;">
+                        <div id="icvDetails" style="display:block;margin-top:8px;padding:8px;border-radius:6px;background:#fff;border:1px solid #fee2e2;">
+                            <div style="font-weight:700;color:#ef4444;margin-bottom:8px;">ICV 具体问题 (${warningCount})</div>
+                            ${warningDetailsHtml}
+                        </div>
+                    </div>
+                ` : `<div style="margin-top:10px;padding-top:8px;color:#10b981;font-weight:600;">未发现 ICV 问题</div>`}
+            </div>
+        `;
+
+        aiReportContent.innerHTML = icvHtml + `<div style="color:#666;margin-top:8px">报告文本尚未生成。</div>`;
+    } catch (e) {
+        console.warn('tryRenderIcvFromStoredPayload failed', e);
+    }
+}
+
+function renderIcvStaticFields(icv) {
+    try {
+        const statusEl = document.getElementById('icvStaticStatus');
+        const issuesEl = document.getElementById('icvStaticIssues');
+        if (!statusEl || !issuesEl) return;
+
+        const status = (icv && icv.status) ? String(icv.status).toUpperCase() : '等待';
+        statusEl.textContent = status;
+        statusEl.style.color = status === 'PASS' ? '#10b981' : status === 'WARN' ? '#f59e0b' : '#ef4444';
+
+        const findings = Array.isArray(icv && icv.findings) ? icv.findings : [];
+        const problems = findings.filter(f => String((f && f.status) || '').toLowerCase() !== 'pass');
+        if (!problems.length) {
+            issuesEl.innerHTML = '<div style="color:#10b981;font-weight:600;">未发现 ICV 问题</div>';
+            return;
+        }
+
+        issuesEl.innerHTML = problems.map((f) => `
+            <div style="padding:6px 0;border-bottom:1px dashed #eee;">
+                <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+                    <div style="font-weight:700;color:#ef4444;">${String((f.id||'unknown')).replace(/_/g,' ')}</div>
+                    <div style="font-size:12px;font-weight:700;color:#ef4444;">${f.status || 'unknown'}</div>
+                </div>
+                <div style="margin-top:4px;color:#333;">${f.message || ''}</div>
+                ${f.suggested_action ? `<div style="margin-top:4px;color:#2563eb;">建议: ${f.suggested_action}</div>` : ''}
+            </div>
+        `).join('');
+    } catch (e) {
+        // ignore
+    }
 }
 
 function setStrokePlaceholder(text) {
@@ -1083,16 +1197,120 @@ function displayAIReport(report, isMock) {
     const aiReportSection = document.getElementById('aiReportSection');
     const aiReportContent = document.getElementById('aiReportContent');
     
-    if (aiReportSection && aiReportContent) {
-        aiReportSection.style.display = 'block';
-        aiReportContent.innerHTML = `
-            <div style="background: #eff6ff; padding: 12px; border-radius: 6px; border-left: 3px solid #2563eb; margin-bottom: 8px;">
-                <div style="font-size: 11px; font-weight: 600; color: #2563eb; margin-bottom: 8px;">
-                    NeuroMatrix AI 涓撲笟璇婃柇鎶ュ憡 ${isMock ? '<span style="background: #ffd700; padding: 1px 6px; border-radius: 8px; font-size: 10px;">妯℃嫙</span>' : ''}
-                </div>
-                <div style="font-size: 12px; line-height: 1.8; color: #333;">${parseMarkdown(report)}</div>
+    if (!aiReportSection || !aiReportContent) return;
+    aiReportSection.style.display = 'block';
+
+    // build ICV summary (if present in stored report payload)
+    let icvHtml = '';
+    try {
+        const keys = getReportStorageKeys(currentFileId);
+        const payloadRaw = localStorage.getItem(keys.payload) || null;
+        if (payloadRaw) {
+                const payload = JSON.parse(payloadRaw || '{}');
+                let icv = null;
+                if (payload) {
+                    if (payload.icv) icv = payload.icv;
+                    else if (payload.success && payload.icv) icv = payload.icv;
+                    else if (payload.status && (Array.isArray(payload.findings) || payload.findings)) icv = payload;
+                    else if (payload.result && payload.result.icv) icv = payload.result.icv;
+                }
+            if (icv) {
+                // 同步固定 HTML 字段（状态 + 具体问题）
+                renderIcvStaticFields(icv);
+
+                const status = (icv.status || '').toLowerCase();
+                const color = status === 'pass' ? '#10b981' : status === 'warn' ? '#f59e0b' : '#ef4444';
+                const findings = Array.isArray(icv.findings) ? icv.findings : [];
+
+                const findingsListHtml = findings.map(f => `
+                    <div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #eee;">
+                        <div style="color:#333">${(f.id||'').replace(/_/g,' ')}</div>
+                        <div style="color:${(f.status==='pass'? '#10b981' : f.status==='warn'? '#f59e0b' : '#ef4444')};font-weight:600">${f.status}</div>
+                    </div>
+                `).join('');
+
+                // only surface high/medium severity findings
+                const severitySetHigh = new Set(['fail','error','critical','high']);
+                const severitySetMedium = new Set(['warn','medium']);
+                const problemFindings = findings.filter(f => (f.status || '').toLowerCase() !== 'pass');
+
+                const warningCount = problemFindings.length;
+                const warningDetailsHtml = problemFindings.map(f => `
+                    <div style="padding:8px;border-bottom:1px dashed #eee;margin-bottom:6px;">
+                        <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
+                            <div style="font-weight:700;color:${(severitySetHigh.has((f.status||'').toLowerCase())? '#ef4444' : severitySetMedium.has((f.status||'').toLowerCase()) ? '#f59e0b' : '#6b7280')}">${(f.id||'').replace(/_/g,' ')}</div>
+                            <div style="font-size:12px;font-weight:600;color:${(severitySetHigh.has((f.status||'').toLowerCase())? '#ef4444' : severitySetMedium.has((f.status||'').toLowerCase()) ? '#f59e0b' : '#6b7280')}">${f.status || 'unknown'}</div>
+                        </div>
+                        <div style="color:#333;margin-top:4px;">${f.message || ''}</div>
+                        ${f.suggested_action ? `<div style="color:#2563eb;margin-top:6px;">建议: ${f.suggested_action}</div>` : ''}
+                    </div>
+                `).join('');
+
+                // Render ICV block with details always visible (不折叠)
+                icvHtml = `
+                    <div style="background:#fff7ed;border:1px solid rgba(0,0,0,0.04);padding:12px;border-radius:8px;margin-bottom:10px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                            <div style="font-weight:700;color:${color};">ICV 检查：${(icv.status||'').toUpperCase()}</div>
+                            <div style="font-size:12px;color:#666">自动质量门检测</div>
+                        </div>
+                        <div style="font-size:13px;color:#333">${findingsListHtml || '<div style="color:#666">无详细发现</div>'}</div>
+                        ${warningCount > 0 ? `
+                            <div style="margin-top:10px;border-top:1px solid rgba(0,0,0,0.03);padding-top:8px;">
+                                <div id="icvDetails" style="display:block;margin-top:8px;padding:8px;border-radius:6px;background:#fff;border:1px solid #fee2e2;">
+                                    <div style="font-weight:700;color:#ef4444;margin-bottom:8px;">ICV 具体问题 (${warningCount})</div>
+                                    ${warningDetailsHtml}
+                                </div>
+                            </div>
+                        ` : `<div style="margin-top:10px;padding-top:8px;color:#10b981;font-weight:600;">未发现 ICV 问题</div>`}
+                    </div>
+                `;
+            }
+        }
+    } catch (e) {
+        console.warn('Failed to render ICV summary', e);
+        icvHtml = '';
+    }
+
+    aiReportContent.innerHTML = `
+        <div style="background: #eff6ff; padding: 12px; border-radius: 6px; border-left: 3px solid #2563eb; margin-bottom: 8px;">
+            <div style="font-size: 11px; font-weight: 600; color: #2563eb; margin-bottom: 8px;">
+                NeuroMatrix AI 报告 ${isMock ? '<span style="background: #ffd700; padding: 1px 6px; border-radius: 8px; font-size: 10px;">模拟</span>' : ''}
             </div>
-        `;
+            ${icvHtml}
+            <div style="font-size: 12px; line-height: 1.8; color: #333;">${parseMarkdown(report)}</div>
+        </div>
+    `;
+
+    // bind toggle handler for the ICV details
+    try { attachIcvToggleHandlers(); } catch (e) { /* ignore */ }
+
+    // 同步到静态面板或隐藏静态面板
+    try {
+        const staticPanel = document.getElementById('icvStaticPanel');
+        if (staticPanel && icvHtml && icvHtml.length > 0) {
+            staticPanel.style.display = 'block';
+        }
+    } catch (e) { /* ignore */ }
+}
+
+function attachIcvToggleHandlers() {
+    try {
+        const btn = document.getElementById('icvToggleBtn');
+        const box = document.getElementById('icvDetails');
+        if (!btn || !box) return;
+        if (btn.dataset.attach) return;
+        btn.dataset.attach = '1';
+        btn.addEventListener('click', () => {
+            if (box.style.display === 'none' || !box.style.display) {
+                box.style.display = 'block';
+                btn.textContent = btn.textContent.replace(/▾$/, '▴');
+            } else {
+                box.style.display = 'none';
+                btn.textContent = btn.textContent.replace(/▴$/, '▾');
+            }
+        });
+    } catch (e) {
+        // ignore
     }
 }
 

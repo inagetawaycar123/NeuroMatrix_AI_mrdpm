@@ -1307,11 +1307,13 @@ AGENT_TOOL_SEQUENCE_MAP = {
     "ncct_only": [
         "detect_modalities",
         "load_patient_context",
+        "icv",
         "generate_medgemma_report",
     ],
     "ncct_single_phase_cta": [
         "detect_modalities",
         "load_patient_context",
+        "icv",
         "generate_medgemma_report",
     ],
     "ncct_mcta": [
@@ -1319,12 +1321,14 @@ AGENT_TOOL_SEQUENCE_MAP = {
         "load_patient_context",
         "generate_ctp_maps",
         "run_stroke_analysis",
+        "icv",
         "generate_medgemma_report",
     ],
     "ncct_mcta_ctp": [
         "detect_modalities",
         "load_patient_context",
         "run_stroke_analysis",
+        "icv",
         "generate_medgemma_report",
     ],
 }
@@ -1332,6 +1336,8 @@ AGENT_TOOL_SEQUENCE_MAP = {
 POST_UPLOAD_SUMMARY_TOOL_SEQUENCE = [
     "detect_modalities",
     "load_patient_context",
+    "run_stroke_analysis",
+    "icv",
     "generate_medgemma_report",
 ]
 
@@ -1962,6 +1968,73 @@ def _tool_run_stroke_analysis(run):
     )
 
 
+def _tool_icv(run):
+    try:
+        run_id = run.get("run_id") or run.get("id") or "unknown"
+        print(f"[ICV] Starting ICV evaluation for run_id={run_id}")
+        # build context from completed tools
+        context = _build_context_from_completed_tools(run)
+        planner_output = run.get("planner_output") or {}
+        tool_results = run.get("tool_results") or []
+
+        # lazy import to avoid circular references
+        try:
+            # Load the latest `icv.py` directly from file into an isolated module
+            import importlib.util, os
+            icv_path = os.path.join(PROJECT_ROOT, "backend", "icv.py")
+            spec = importlib.util.spec_from_file_location(f"icv_runtime_{run.get('run_id')}", icv_path)
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            evaluate_icv = getattr(m, "evaluate_icv")
+        except Exception as e:
+            return (
+                False,
+                None,
+                _tool_error_contract("TOOL_EXTERNAL_API_FAILED", f"Failed to import icv module: {e}"),
+            )
+
+        # Ensure analysis_result is populated from latest tool_results if missing
+        analysis_ctx = context.get("analysis_result") or {}
+        if not analysis_ctx:
+            # try to extract from tool_results list
+            for tr in (tool_results or []):
+                if tr.get("tool_name") == "run_stroke_analysis" and tr.get("status") == "completed":
+                    analysis_ctx = tr.get("structured_output") or {}
+                    break
+        icv_out = evaluate_icv(
+            planner_output=planner_output,
+            tool_results=tool_results,
+            patient_context=context.get("patient_context"),
+            analysis_result=analysis_ctx,
+        )
+        if not icv_out or not icv_out.get("success"):
+            print(f"[ICV] Evaluation failed for run_id={run_id}: success flag missing or False")
+            return (
+                False,
+                None,
+                _tool_error_contract("TOOL_EXECUTION_FAILED", "ICV evaluation failed"),
+            )
+        icv_payload = icv_out.get("icv") or {}
+        try:
+            status = (icv_payload.get("status") or "unknown").lower()
+            findings = icv_payload.get("findings") or []
+            total = len(findings)
+            pass_cnt = sum(1 for f in findings if str(f.get("status") or "").lower() == "pass")
+            warn_cnt = sum(1 for f in findings if str(f.get("status") or "").lower() == "warn")
+            fail_cnt = sum(1 for f in findings if str(f.get("status") or "").lower() == "fail")
+            print(
+                f"[ICV] Completed for run_id={run_id}: status={status}, "
+                f"findings_total={total}, pass={pass_cnt}, warn={warn_cnt}, fail={fail_cnt}"
+            )
+        except Exception as log_exc:
+            print(f"[ICV] Completed for run_id={run_id} but failed to summarize findings: {log_exc}")
+        return True, icv_payload, None
+    except Exception as exc:
+        run_id = run.get("run_id") or run.get("id") or "unknown"
+        print(f"[ICV] Exception during evaluation for run_id={run_id}: {exc}")
+        return False, None, _tool_error_contract("TOOL_EXECUTION_FAILED", str(exc))
+
+
 def _tool_generate_medgemma_report(run):
     planner_input = run.get("planner_input") or {}
     patient_id = planner_input.get("patient_id")
@@ -1980,11 +2053,32 @@ def _tool_generate_medgemma_report(run):
             None,
             _tool_error_contract("TOOL_EXTERNAL_API_FAILED", msg),
         )
+    # attach icv tool result (if present) into report_payload so frontend can render it
+    run = run or {}
+    icv_payload = None
+    try:
+        run_results = run.get("tool_results") or []
+        for r in run_results:
+            if r.get("tool_name") == "icv" and r.get("status") == "completed":
+                icv_payload = r.get("structured_output") or r.get("raw_ref")
+                break
+    except Exception:
+        icv_payload = None
+
+    report_payload = data.get("report_payload") or {}
+    if icv_payload is not None:
+        # embed under a top-level `icv` key
+        try:
+            report_payload = dict(report_payload)
+            report_payload["icv"] = icv_payload
+        except Exception:
+            pass
+
     return (
         True,
         {
             "report": data.get("report"),
-            "report_payload": data.get("report_payload"),
+            "report_payload": report_payload,
             "json_path": data.get("json_path"),
         },
         None,
@@ -2002,6 +2096,12 @@ def _execute_agent_tool(run_id, tool_name):
     started = time.time()
     input_ref = {"run_id": run_id, "tool_name": tool_name}
 
+    # --- Terminal progress logging ---
+    try:
+        print(f"[Agent] Tool '{tool_name}' starting for run_id={run_id}, attempt={attempt}")
+    except Exception:
+        pass
+
     try:
         if tool_name == "detect_modalities":
             ok, output, err = _tool_detect_modalities(run)
@@ -2015,6 +2115,9 @@ def _execute_agent_tool(run_id, tool_name):
         elif tool_name == "run_stroke_analysis":
             ok, output, err = _tool_run_stroke_analysis(run)
             agent_name = "Clinical Tool Agent"
+        elif tool_name == "icv":
+            ok, output, err = _tool_icv(run)
+            agent_name = "ICV Agent"
         elif tool_name == "generate_medgemma_report":
             ok, output, err = _tool_generate_medgemma_report(run)
             agent_name = "Clinical Summary Agent"
@@ -2032,6 +2135,18 @@ def _execute_agent_tool(run_id, tool_name):
         agent_name = "Clinical Tool Agent"
 
     latency_ms = int((time.time() - started) * 1000)
+    try:
+        if ok:
+            print(f"[Agent] Tool '{tool_name}' completed for run_id={run_id} in {latency_ms} ms")
+        else:
+            code = getattr(err, "get", lambda k, d=None: d)("error_code", None) if isinstance(err, dict) else None
+            msg = getattr(err, "get", lambda k, d=None: d)("error_message", str(err)) if isinstance(err, dict) else str(err)
+            print(
+                f"[Agent] Tool '{tool_name}' FAILED for run_id={run_id} in {latency_ms} ms: "
+                f"error_code={code}, message={msg}"
+            )
+    except Exception:
+        pass
     if ok:
         tool_result = {
             "tool_name": tool_name,
