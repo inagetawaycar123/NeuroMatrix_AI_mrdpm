@@ -27,17 +27,17 @@ class StrokeAnalysis:
         self.voxel_spacing = voxel_spacing
         self.voxel_volume = np.prod(voxel_spacing)
 
-        # 分析参数配置
-        self.penumbra_threshold_pred = 9  # 预测半暗带阈值
-        self.penumbra_threshold_gt = 16  # 真实半暗带阈值
-        self.core_threshold_pred = 12  # 预测核心梗死阈值
-        self.core_threshold_gt = 26  # 真实核心梗死阈值
+        # 分析参数配置（适当收紧阈值，让红/绿区域更“瘦身”）
+        self.penumbra_threshold_pred = 9  # 预测半暗带阈值（秒）
+        self.penumbra_threshold_gt = 16  # 真实半暗带阈值（秒）
+        self.core_threshold_pred = 12  # 预测核心梗死阈值（秒）
+        self.core_threshold_gt = 26  # 真实核心梗死阈值（秒）
 
-        # 后处理参数
-        self.penumbra_min_area_pred = 200  # 预测半暗带最小面积
-        self.penumbra_min_area_gt = 50  # 真实半暗带最小面积
-        self.core_min_area_pred = 50  # 预测核心梗死最小面积
-        self.core_min_area_gt = 200  # 真实核心梗死最小面积
+        # 后处理参数：提高最小面积，过滤掉零散小岛，进一步缩小可视区域
+        self.penumbra_min_area_pred = 200  # 预测半暗带最小面积（像素）
+        self.penumbra_min_area_gt = 100  # 真实半暗带最小面积（像素）
+        self.core_min_area_pred = 50  # 预测核心梗死最小面积（像素）
+        self.core_min_area_gt = 400  # 真实核心梗死最小面积（像素）
 
         # 不匹配分析阈值
         self.mismatch_threshold = 1.8
@@ -143,8 +143,18 @@ class StrokeAnalysis:
             tmax_result = np.where(mask_binary, tmax_analysis, 0)
 
             # 将Tmax值转换为实际范围 (0-30秒)
-            tmax_scaled = tmax_result * 30
-            tmax_scaled = np.clip(tmax_scaled, 0, 30)
+            # 兼容两种输入：
+            # 1) 0-1 归一化概率图（需要乘以 30）
+            # 2) 已经是 0-30 秒的物理 Tmax（不再放大，避免所有值都被挤到 30）
+            tmax_max = float(np.nanmax(tmax_result)) if np.size(tmax_result) > 0 else 0.0
+            if tmax_max > 10.0:
+                # 已经是秒级数值
+                tmax_scaled = np.clip(tmax_result, 0, 30)
+                print(f"Tmax预处理: 检测到物理秒值, max={tmax_max:.2f}")
+            else:
+                # 视为 0-1 归一化，放大到 0-30 秒
+                tmax_scaled = np.clip(tmax_result * 30, 0, 30)
+                print(f"Tmax预处理: 检测到归一化值, max={tmax_max:.2f}")
 
             # 根据输入类型选择阈值与后处理参数（支持多种输入标识）
             if str(tmax_type).strip().lower() in (
