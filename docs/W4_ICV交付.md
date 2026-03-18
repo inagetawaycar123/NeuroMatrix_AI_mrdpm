@@ -134,3 +134,42 @@
 - 通过标准：**规则集 + 可见化 + 验收记录**。
 - 对应 `docs/每周任务清单_一页版.md` 中 Week4：
 - 已拆解为“规则集设计 / Tool 接入 / 前端展示 / 文档与验收记录”四个子任务。
+
+## 9. Week4 Closure Update（2026-03-18）
+
+### 9.1 Implemented in code
+
+- Backend pipeline now treats `icv` as non-blocking: failed `icv` no longer stops `generate_medgemma_report`.
+- Run stage is now aligned by tool execution:
+  - default tools -> `tooling`
+  - `icv` -> `icv`
+  - `generate_medgemma_report` -> `summary`
+  - terminal -> `done`
+- ICV contract is extended with backward compatibility:
+  - added `finding_count`, `score`, `confidence_delta`
+  - each finding now has normalized fields:
+    `id/status/message/severity/suggested_action`
+- Processing page ICV source priority is fixed:
+  - `tool_results.icv (completed)` > `run.result.report_payload.icv` > `tool_results.icv (failed)`
+  - failed ICV is rendered as `unavailable` with reason, without marking upload mainline as failed
+- Viewer ICV rendering is deduplicated with shared parser/renderer helpers.
+
+### 9.2 Files updated
+
+- `backend/app.py`
+- `backend/icv.py`
+- `static/js/processing.js`
+- `static/js/viewer.js`
+
+### 9.3 Local smoke checks
+
+- `python -m py_compile backend/app.py backend/icv.py` -> passed
+- `node --check static/js/processing.js` -> passed
+- `node --check static/js/viewer.js` -> passed
+- `evaluate_icv(...)` smoke run confirms new fields are present:
+  `finding_count/score/confidence_delta`, normalized finding shape.
+
+### 9.4 Remaining for full clinical sign-off
+
+- Run environment cases to collect real `run_id/job_id/file_id` evidence
+- Attach terminal `[AGENT]/[ICV]` logs and page screenshots in acceptance record

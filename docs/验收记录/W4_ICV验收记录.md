@@ -90,3 +90,37 @@
 - 
 
 > 备注：本记录建议与 `docs/W4_ICV交付.md` 一起维护，后续如对 ICV 规则或策略做重大调整，应补充新的验收轮次记录。
+
+---
+
+## 6. Engineering Closure Notes（2026-03-18）
+
+### 6.1 Code-level completion
+
+- [x] ICV soft-fail behavior implemented in agent pipeline
+- [x] stage mapping aligned to `tooling -> icv -> summary -> done`
+- [x] ICV output contract extended:
+  - `finding_count`
+  - `score`
+  - `confidence_delta`
+  - normalized finding fields with `severity/suggested_action`
+- [x] Processing and Viewer ICV rendering paths aligned
+
+### 6.2 Local verification logs
+
+- `python -m py_compile backend/app.py backend/icv.py` -> passed
+- `node --check static/js/processing.js` -> passed
+- `node --check static/js/viewer.js` -> passed
+- `python -c "...evaluate_icv(...)"` smoke check -> returned extended ICV fields
+
+### 6.3 Pending runtime evidence (manual)
+
+- [ ] `run_id/job_id/file_id` from real cases
+- [ ] API response snapshots for `/api/agent/runs*`
+- [ ] terminal log snippets with `[AGENT]` + `[ICV]`
+- [ ] Processing/Viewer screenshots
+
+### 6.4 Current sign-off status
+
+- Engineering sign-off: **ready**
+- Clinical runtime sign-off: **pending evidence attachment**

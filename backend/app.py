@@ -1354,6 +1354,11 @@ AGENT_TOOL_RETRY_LIMITS = {
     "generate_medgemma_report": 1,
 }
 
+AGENT_TOOL_STAGE_MAP = {
+    "icv": "icv",
+    "generate_medgemma_report": "summary",
+}
+
 TOOL_ERROR_SUGGESTIONS = {
     "TOOL_INPUT_INVALID": "Fix request fields and retry",
     "TOOL_NOT_APPLICABLE": "Check modality path and tool sequence",
@@ -1428,6 +1433,10 @@ def _tool_error_contract(error_code, error_message):
             code, "Inspect logs and retry when safe"
         ),
     }
+
+
+def _stage_for_tool(tool_name):
+    return AGENT_TOOL_STAGE_MAP.get(str(tool_name or "").strip(), "tooling")
 
 
 def _create_agent_run(
@@ -2063,16 +2072,32 @@ def _tool_generate_medgemma_report(run):
     # attach icv tool result (if present) into report_payload so frontend can render it
     run = run or {}
     icv_payload = None
+    icv_failed_result = None
     try:
         run_results = run.get("tool_results") or []
         for r in run_results:
             if r.get("tool_name") == "icv" and r.get("status") == "completed":
                 icv_payload = r.get("structured_output") or r.get("raw_ref")
                 break
+            if r.get("tool_name") == "icv" and r.get("status") == "failed":
+                icv_failed_result = r
     except Exception:
         icv_payload = None
+        icv_failed_result = None
 
     report_payload = data.get("report_payload") or {}
+    if icv_payload is None and icv_failed_result is not None:
+        icv_payload = {
+            "status": "unavailable",
+            "finding_count": 0,
+            "score": 0.0,
+            "confidence_delta": 0.0,
+            "findings": [],
+            "error_code": icv_failed_result.get("error_code"),
+            "error_message": icv_failed_result.get("error_message"),
+            "suggested_action": icv_failed_result.get("suggested_action"),
+        }
+
     if icv_payload is not None:
         # embed under a top-level `icv` key
         try:
@@ -2244,7 +2269,7 @@ def _run_agent_pipeline(run_id, start_tool=None):
     def _start_mut(run):
         run["status"] = "running"
         if start_tool:
-            run["stage"] = "tooling"
+            run["stage"] = _stage_for_tool(start_tool)
         else:
             run["stage"] = "triage"
         run["error"] = None
@@ -2318,13 +2343,13 @@ def _run_agent_pipeline(run_id, start_tool=None):
 
             def _fail_retry_step(state):
                 state["status"] = "failed"
-                state["stage"] = "tooling"
+                state["stage"] = _stage_for_tool(start_tool)
                 state["error"] = err
 
             _update_agent_run(run_id, _fail_retry_step)
             _agent_log(
                 run_id=run_id,
-                stage="tooling",
+                stage=_stage_for_tool(start_tool),
                 tool=start_tool,
                 attempt=1,
                 status="run_failed",
@@ -2336,8 +2361,26 @@ def _run_agent_pipeline(run_id, start_tool=None):
         start_index = tool_sequence.index(start_tool)
 
     for tool_name in tool_sequence[start_index:]:
+        def _set_stage_for_tool(state):
+            state["stage"] = _stage_for_tool(tool_name)
+
+        _update_agent_run(run_id, _set_stage_for_tool)
         ok, tool_result = _execute_agent_tool(run_id, tool_name)
         if not ok:
+            if tool_name == "icv":
+                # Keep ICV as non-blocking for Week4.
+                _agent_log(
+                    run_id=run_id,
+                    stage="icv",
+                    tool=tool_name,
+                    attempt=tool_result.get("attempt"),
+                    status="run_continue",
+                    error_code=tool_result.get("error_code"),
+                    latency_ms=tool_result.get("latency_ms"),
+                    message="icv_soft_failure_non_blocking",
+                )
+                continue
+
             fail_contract = _tool_error_contract(
                 tool_result.get("error_code"),
                 tool_result.get("error_message") or "Tool execution failed",
@@ -2345,13 +2388,13 @@ def _run_agent_pipeline(run_id, start_tool=None):
 
             def _fail_tool(state):
                 state["status"] = "failed"
-                state["stage"] = "tooling"
+                state["stage"] = _stage_for_tool(tool_name)
                 state["error"] = fail_contract
 
             _update_agent_run(run_id, _fail_tool)
             _agent_log(
                 run_id=run_id,
-                stage="tooling",
+                stage=_stage_for_tool(tool_name),
                 tool=tool_name,
                 attempt=tool_result.get("attempt"),
                 status="run_failed",

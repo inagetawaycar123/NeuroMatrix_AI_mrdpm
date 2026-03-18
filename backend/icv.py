@@ -32,6 +32,75 @@ def _safe_float(x: Any) -> Optional[float]:
         return None
 
 
+def _normalize_finding_status(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"pass", "warn", "fail", "not_applicable", "unavailable"}:
+        return raw
+    return "warn" if raw else "not_applicable"
+
+
+def _default_severity_from_status(status: str) -> str:
+    if status == "fail":
+        return "high"
+    if status == "warn":
+        return "medium"
+    if status == "pass":
+        return "low"
+    return "info"
+
+
+def _default_suggested_action(status: str) -> str:
+    if status == "fail":
+        return "Manual review is required before clinical sign-off."
+    if status == "warn":
+        return "Please verify this item with source images and quantitative outputs."
+    return ""
+
+
+def _normalize_findings(findings: Any) -> list:
+    normalized = []
+    for item in (findings or []):
+        if not isinstance(item, dict):
+            continue
+        status = _normalize_finding_status(item.get("status"))
+        normalized_item = dict(item)
+        normalized_item["id"] = str(item.get("id") or "unknown_rule")
+        normalized_item["status"] = status
+        normalized_item["message"] = str(item.get("message") or "")
+        normalized_item["severity"] = str(
+            item.get("severity") or _default_severity_from_status(status)
+        )
+        normalized_item["suggested_action"] = str(
+            item.get("suggested_action") or _default_suggested_action(status)
+        )
+        normalized.append(normalized_item)
+    return normalized
+
+
+def _compute_icv_score(findings: list) -> float:
+    considered = [
+        f for f in (findings or []) if f.get("status") in {"pass", "warn", "fail"}
+    ]
+    if not considered:
+        return 0.0
+    penalty = 0.0
+    for finding in considered:
+        status = finding.get("status")
+        if status == "fail":
+            penalty += 1.0
+        elif status == "warn":
+            penalty += 0.4
+    score = max(0.0, 1.0 - penalty / float(len(considered)))
+    return round(score, 4)
+
+
+def _compute_confidence_delta(findings: list) -> float:
+    fail_count = sum(1 for f in (findings or []) if f.get("status") == "fail")
+    warn_count = sum(1 for f in (findings or []) if f.get("status") == "warn")
+    delta = -(fail_count * 0.25 + warn_count * 0.08)
+    return round(max(-1.0, min(0.0, delta)), 4)
+
+
 def evaluate_icv(
     planner_output: Optional[Dict] = None,
     tool_results: Optional[list] = None,
@@ -438,4 +507,14 @@ def evaluate_icv(
     except Exception:
         findings.append({"id": "R5_status_consistency", "status": "not_applicable", "message": "无法评估分析状态与报告语气/内容的一致性"})
 
-    return {"success": True, "icv": {"status": overall, "findings": findings}}
+    normalized_findings = _normalize_findings(findings)
+    return {
+        "success": True,
+        "icv": {
+            "status": overall,
+            "findings": normalized_findings,
+            "finding_count": len(normalized_findings),
+            "score": _compute_icv_score(normalized_findings),
+            "confidence_delta": _compute_confidence_delta(normalized_findings),
+        },
+    }

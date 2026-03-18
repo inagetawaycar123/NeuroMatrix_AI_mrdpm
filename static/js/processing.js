@@ -442,6 +442,68 @@ function getLastErrorText(run) {
     return '-';
 }
 
+function parseIcvPayload(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    if (raw.icv && typeof raw.icv === 'object') return raw.icv;
+    if (raw.success && raw.icv && typeof raw.icv === 'object') return raw.icv;
+    if (raw.result && raw.result.icv && typeof raw.result.icv === 'object') return raw.result.icv;
+    if (raw.status && (Array.isArray(raw.findings) || typeof raw.finding_count === 'number')) return raw;
+    return null;
+}
+
+function resolveIcvFromRun(run) {
+    if (!run || typeof run !== 'object') {
+        return null;
+    }
+
+    const toolResults = Array.isArray(run.tool_results) ? run.tool_results : [];
+    const completedIcv = [...toolResults]
+        .reverse()
+        .find((item) => item && item.tool_name === 'icv' && item.status === 'completed');
+    if (completedIcv) {
+        const parsed = parseIcvPayload(completedIcv.structured_output || completedIcv.raw_ref || null);
+        if (parsed) {
+            return { ...parsed, __source: 'tool_results_completed' };
+        }
+    }
+
+    const reportIcv = parseIcvPayload(
+        (((run.result || {}).report_result || {}).report_payload || {}).icv || null
+    );
+    if (reportIcv) {
+        return { ...reportIcv, __source: 'run_result_report_payload' };
+    }
+
+    const failedIcv = [...toolResults]
+        .reverse()
+        .find((item) => item && item.tool_name === 'icv' && item.status === 'failed');
+    if (failedIcv) {
+        return {
+            status: 'unavailable',
+            findings: [],
+            finding_count: 0,
+            score: 0.0,
+            confidence_delta: 0.0,
+            error_code: failedIcv.error_code || '',
+            error_message: failedIcv.error_message || '',
+            suggested_action: failedIcv.suggested_action || '',
+            __source: 'tool_results_failed',
+        };
+    }
+
+    return null;
+}
+
+function getIcvFindingCount(icvObj) {
+    if (!icvObj || typeof icvObj !== 'object') return 0;
+    if (typeof icvObj.finding_count === 'number') return icvObj.finding_count;
+    if (Array.isArray(icvObj.findings)) return icvObj.findings.length;
+    if (Array.isArray(icvObj.findings_list)) return icvObj.findings_list.length;
+    return 0;
+}
+
 function getLatestRetryableFailedStep(run) {
     if (!run || !Array.isArray(run.steps)) {
         return null;
@@ -552,24 +614,9 @@ function updateAgentPanel(run, events) {
     if (els.eventCount) els.eventCount.textContent = String((events || []).length);
     if (els.reportStatus) els.reportStatus.textContent = getReportStatusText(run);
     if (els.lastError) els.lastError.textContent = getLastErrorText(run);
-    // populate ICV summary if available (from tool_results or final result.report_result.report_payload)
+    let icvObj = null;
     try {
-        let icvObj = null;
-        const tr = (run.tool_results || []).find((t) => t.tool_name === 'icv' && t.status === 'completed');
-        if (tr) {
-            // structured_output may be the icv object itself or a wrapper { icv: {...} } or { success: true, icv: {...} }
-            const so = tr.structured_output || tr.raw_ref || null;
-            if (so) {
-                if (so.icv) icvObj = so.icv;
-                else if (so.success && so.icv) icvObj = so.icv;
-                else if (so.status && (Array.isArray(so.findings) || so.findings)) icvObj = so;
-                else icvObj = so;
-            }
-        }
-        // fallback: check final result payload (report generation may have embedded icv)
-        if (!icvObj && run.result && run.result.report_result && run.result.report_result.report_payload) {
-            icvObj = run.result.report_result.report_payload.icv || null;
-        }
+        icvObj = resolveIcvFromRun(run);
 
         // 将 ICV 结果尽早落盘到 localStorage，供 Viewer 直接读取
         try {
@@ -594,20 +641,19 @@ function updateAgentPanel(run, events) {
 
         if (els.icvStatus) {
             if (icvObj && icvObj.status) {
-                els.icvStatus.textContent = icvObj.status;
+                const statusText = String(icvObj.status);
+                const unavailableReason = statusText.toLowerCase() === 'unavailable'
+                    ? (icvObj.error_message || icvObj.error_code || '')
+                    : '';
+                els.icvStatus.textContent = unavailableReason
+                    ? `${statusText} (${unavailableReason})`
+                    : statusText;
             } else {
                 els.icvStatus.textContent = '-';
             }
         }
         if (els.icvFindings) {
-            // findings may be under icv.findings or icv.findings_list; be tolerant
-            let count = 0;
-            if (icvObj) {
-                if (Array.isArray(icvObj.findings)) count = icvObj.findings.length;
-                else if (Array.isArray(icvObj.findings_list)) count = icvObj.findings_list.length;
-                else if (typeof icvObj.finding_count === 'number') count = icvObj.finding_count;
-            }
-            els.icvFindings.textContent = String(count);
+            els.icvFindings.textContent = String(getIcvFindingCount(icvObj));
         }
     } catch (e) {
         if (els.icvStatus) els.icvStatus.textContent = '-';
@@ -623,7 +669,12 @@ function updateAgentPanel(run, events) {
         return;
     }
     if (run.status === 'succeeded') {
-        els.message.textContent = 'Agent 后置汇总已完成。';
+        if (icvObj && String(icvObj.status || '').toLowerCase() === 'unavailable') {
+            const reason = icvObj.error_message || icvObj.error_code || 'unknown';
+            els.message.textContent = `Agent 后置汇总已完成（ICV unavailable: ${reason}）。`;
+        } else {
+            els.message.textContent = 'Agent 后置汇总已完成。';
+        }
         return;
     }
     if (run.status === 'failed') {
