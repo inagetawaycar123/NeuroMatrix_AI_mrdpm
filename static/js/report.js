@@ -2,7 +2,7 @@
 
 const PatientInfoModule = ({ data, isEditing, onUpdate }) => {
     if (!data) {
-        return React.createElement("div", { className: "module-empty" }, "鍔犺浇鎮ｈ€呬俊鎭腑...");
+        return React.createElement("div", { className: "module-empty" }, "加载患者信息中...");
     }
     const formatDateTime = (dateStr) => {
         if (!dateStr) {
@@ -11,50 +11,50 @@ const PatientInfoModule = ({ data, isEditing, onUpdate }) => {
         return new Date(dateStr).toLocaleString('zh-CN');
     };
     return React.createElement("div", { className: "report-module" },
-        React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "鎮ｈ€呭熀鏈俊鎭?),
+        React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "患者基本信息"),
         React.createElement("div", { className: "module-content" },
             React.createElement("div", { className: "report-field" },
                 React.createElement("span", { className: "field-label" }, "ID"),
                 React.createElement("span", { className: "field-value" }, data.id || '--')
             ),
             React.createElement("div", { className: "report-field" },
-                React.createElement("span", { className: "field-label" }, "濮撳悕"),
+                React.createElement("span", { className: "field-label" }, "姓名"),
                 isEditing
                     ? React.createElement("input", { type: "text", className: "field-edit", value: data.patient_name, onChange: (e) => onUpdate('patient_name', e.target.value) })
                     : React.createElement("span", { className: "field-value" }, data.patient_name || '--')
             ),
             React.createElement("div", { className: "report-field" },
-                React.createElement("span", { className: "field-label" }, "骞撮緞"),
+                React.createElement("span", { className: "field-label" }, "年龄"),
                 isEditings
                     ? React.createElement("input", { type: "number", className: "field-edit", value: data.patient_age, onChange: (e) => onUpdate('patient_age', parseInt(e.target.value)) })
-                    : React.createElement("span", { className: "field-value" }, data.patient_age, "宀?)
+                    : React.createElement("span", { className: "field-value" }, data.patient_age, " 岁")
             ),
             React.createElement("div", { className: "report-field" },
-                React.createElement("span", { className: "field-label" }, "鎬у埆"),
+                React.createElement("span", { className: "field-label" }, "性别"),
                 isEditing
                     ? React.createElement("input", { type: "text", className: "field-edit", value: data.patient_sex, onChange: (e) => onUpdate('patient_sex', e.target.value) })
                     : React.createElement("span", { className: "field-value" }, data.patient_sex || '--')
             ),
             React.createElement("div", { className: "report-field" },
-                React.createElement("span", { className: "field-label" }, "鍙戠梾鏃堕棿"),
+                React.createElement("span", { className: "field-label" }, "发病时间"),
                 isEditing
                     ? React.createElement("input", { type: "datetime-local", className: "field-edit", defaultValue: data.onset_exact_time?.slice(0, 16), onChange: (e) => onUpdate('onset_exact_time', e.target.value) })
                     : React.createElement("span", { className: "field-value" }, formatDateTime(data.onset_exact_time))
             ),
             React.createElement("div", { className: "report-field" },
-                React.createElement("span", { className: "field-label" }, "鍏ラ櫌鏃堕棿"),
+                React.createElement("span", { className: "field-label" }, "入院时间"),
                 isEditing
                     ? React.createElement("input", { type: "datetime-local", className: "field-edit", defaultValue: data.admission_time?.slice(0, 16), onChange: (e) => onUpdate('admission_time', e.target.value) })
                     : React.createElement("span", { className: "field-value" }, formatDateTime(data.admission_time))
             ),
             React.createElement("div", { className: "report-field" },
-                React.createElement("span", { className: "field-label" }, "鍏ラ櫌NIHSS璇勫垎"),
+                React.createElement("span", { className: "field-label" }, "入院 NIHSS 评分"),
                 isEditing
                     ? React.createElement("input", { type: "number", className: "field-edit", min: "0", max: "42", value: data.admission_nihss, onChange: (e) => onUpdate('admission_nihss', parseInt(e.target.value)) })
-                    : React.createElement("span", { className: "field-value" }, data.admission_nihss, " 鍒?)
+                    : React.createElement("span", { className: "field-value" }, data.admission_nihss, " 分")
             ),
             React.createElement("div", { className: "report-field" },
-                React.createElement("span", { className: "field-label" }, "鍙戠梾鑷冲叆闄?),
+                React.createElement("span", { className: "field-label" }, "发病至入院时间"),
                 isEditing
                     ? React.createElement("input", { type: "text", className: "field-edit", defaultValue: data.surgery_time, onChange: (e) => onUpdate('surgery_time', e.target.value) })
                     : React.createElement("span", { className: "field-value" }, data.surgery_time || '--')
@@ -65,52 +65,52 @@ const PatientInfoModule = ({ data, isEditing, onUpdate }) => {
 
 const ImageFindingsModule = ({ data, findings, isEditing, onUpdate }) => {
     if (!data) {
-        return React.createElement("div", { className: "module-empty" }, "鍔犺浇褰卞儚鍒嗘瀽鏁版嵁涓?..");
+        return React.createElement("div", { className: "module-empty" }, "加载影像分析数据中...");
     }
     return React.createElement("div", { className: "report-module" },
-        React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "褰卞儚鍙戠幇"),
+        React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "影像所见"),
         React.createElement("div", { className: "module-content" },
             React.createElement("div", { className: "report-field full-width" },
-                React.createElement("span", { className: "field-label" }, "鏍稿績姊楁鍖?),
+                React.createElement("span", { className: "field-label" }, "梗死核心区"),
                 isEditing
                     ? React.createElement("textarea", { className: "field-edit-area", rows: 2, value: findings.core, onChange: (e) => onUpdate('core', e.target.value) })
                     : React.createElement("div", { className: "field-value" }, findings.core || '--')
             ),
             React.createElement("div", { className: "report-field full-width" },
-                React.createElement("span", { className: "field-label" }, "鍗婃殫甯﹀尯鍩?),
+                React.createElement("span", { className: "field-label" }, "半暗带区域"),
                 isEditing
                     ? React.createElement("textarea", { className: "field-edit-area", rows: 2, value: findings.penumbra, onChange: (e) => onUpdate('penumbra', e.target.value) })
                     : React.createElement("div", { className: "field-value" }, findings.penumbra || '--')
             ),
             React.createElement("div", { className: "report-field full-width" },
-                React.createElement("span", { className: "field-label" }, "琛€绠¤瘎浼?),
+                React.createElement("span", { className: "field-label" }, "血管评估"),
                 isEditing
                     ? React.createElement("textarea", { className: "field-edit-area", rows: 2, value: findings.vessel, onChange: (e) => onUpdate('vessel', e.target.value) })
                     : React.createElement("div", { className: "field-value" }, findings.vessel || '--')
             ),
             React.createElement("div", { className: "report-field full-width" },
-                React.createElement("span", { className: "field-label" }, "鐏屾敞鍒嗘瀽"),
+                React.createElement("span", { className: "field-label" }, "灌注分析"),
                 isEditing
                     ? React.createElement("textarea", { className: "field-edit-area", rows: 3, value: findings.perfusion, onChange: (e) => onUpdate('perfusion', e.target.value) })
                     : React.createElement("div", { className: "field-value", style: { whiteSpace: 'pre-wrap' } }, findings.perfusion || '--')
             ),
             React.createElement("div", { className: "analysis-summary" },
-                React.createElement("h4", null, "AI鍒嗘瀽鎸囨爣"),
+                React.createElement("h4", null, "AI 分析指标"),
                 React.createElement("div", { className: "metric" },
-                    React.createElement("span", null, "鏍稿績姊楁浣撶Н锛?),
+                    React.createElement("span", null, "梗死核心体积："),
                     React.createElement("strong", null, data.core_volume?.toFixed(1) || '--', " ml")
                 ),
                 React.createElement("div", { className: "metric" },
-                    React.createElement("span", null, "鍗婃殫甯︿綋绉細"),
+                    React.createElement("span", null, "半暗带体积："),
                     React.createElement("strong", null, data.penumbra_volume?.toFixed(1) || '--', " ml")
                 ),
                 React.createElement("div", { className: "metric" },
-                    React.createElement("span", null, "涓嶅尮閰嶆瘮渚嬶細"),
+                    React.createElement("span", null, "不匹配比值："),
                     React.createElement("strong", null, data.mismatch_ratio?.toFixed(2) || '--')
                 ),
                 React.createElement("div", { className: "metric" },
-                    React.createElement("span", null, "涓嶅尮閰嶇姸鎬侊細"),
-                    React.createElement("strong", { style: { color: data.has_mismatch ? '#ff6b6b' : '#51cf66' } }, data.has_mismatch ? '瀛樺湪鏄捐憲涓嶅尮閰? : '鏃犳樉钁椾笉鍖归厤')
+                    React.createElement("span", null, "不匹配状态："),
+                    React.createElement("strong", { style: { color: data.has_mismatch ? '#ff6b6b' : '#51cf66' } }, data.has_mismatch ? '存在明显不匹配' : '无明显不匹配')
                 )
             )
         )
@@ -119,11 +119,11 @@ const ImageFindingsModule = ({ data, findings, isEditing, onUpdate }) => {
 
 const DoctorNotesModule = ({ notes, isEditing, onUpdate }) => {
     return React.createElement("div", { className: "report-module" },
-        React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "鍖荤敓澶囨敞"),
+        React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "医生备注"),
         React.createElement("div", { className: "module-content" },
             isEditing
-                ? React.createElement("textarea", { className: "field-edit-area", rows: 4, value: notes, onChange: (e) => onUpdate(e.target.value), placeholder: "璇疯緭鍏ヤ复搴婂娉ㄣ€佽瘖鏂剰瑙併€佸悗缁缓璁?.." })
-                : React.createElement("div", { className: "field-value", style: { whiteSpace: 'pre-wrap', minHeight: '60px' } }, notes || '鏃?)
+                ? React.createElement("textarea", { className: "field-edit-area", rows: 4, value: notes, onChange: (e) => onUpdate(e.target.value), placeholder: "请输入补充备注、诊疗意见或后续计划..." })
+                : React.createElement("div", { className: "field-value", style: { whiteSpace: 'pre-wrap', minHeight: '60px' } }, notes || '无')
         )
     );
 };
@@ -136,14 +136,14 @@ function renderMarkdownToHtml(markdown) {
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;');
-    // 澶勭悊鏍囬 - 绠€娲佹牱寮忥紙妫€鏌ユ柟娉曘€佸奖鍍忓琛ㄧ幇銆佽绠¤瘎浼般€佽瘖鏂剰瑙併€佹不鐤楀缓璁級
-    html = html.replace(/^## (妫€鏌ユ柟娉晐褰卞儚瀛﹁〃鐜皘琛€绠¤瘎浼皘璇婃柇鎰忚|娌荤枟寤鸿|褰卞儚璇婃柇鎶ュ憡)$/gm, 
+    // 处理标题 - 简洁样式（检查方法、影像学表现、血管评估、诊断意见、治疗建议等）
+    html = html.replace(/^## (检查方法|影像学表现|血管评估|诊断意见|治疗建议|影像诊断报告)$/gm, 
         '<div style="margin: 20px 0 12px 0; padding-bottom: 8px; border-bottom: 2px solid #3b82f6; color: #3b82f6; font-size: 18px; font-weight: 600;">$1</div>');
-    // 澶勭悊鏅€氫簩绾ф爣棰?
+    // 处理普通二级标题
     html = html.replace(/^## (.+)$/gm, '<h2 style="color: #3b82f6; border-bottom: 3px solid #60a5fa; padding-bottom: 10px; margin: 24px 0 16px 0; font-size: 20px; font-weight: 700;">$1</h2>');
-    // 澶勭悊鏅€氫笁绾ф爣棰?
+    // 处理普通三级标题
     html = html.replace(/^### (.+)$/gm, '<h3 style="color: #60a5fa; margin: 20px 0 12px 0; font-size: 17px; font-weight: 600; padding-left: 12px; border-left: 4px solid #93c5fd;">$1</h3>');
-    // 澶勭悊绮椾綋鏍囪 - 鐩存帴淇濈暀鏅€氭枃瀛?
+    // 处理粗体标记 - 直接保留普通文本
     html = html.replace(/\*\*(.+?)\*\*/g, '$1');
     html = html.replace(/^\d+\. (.+)$/gm, '<li style="margin-left: 24px; margin-bottom: 8px; color: #e5e7eb;">$1</li>');
     html = html.replace(/^- (.+)$/gm, '<li style="margin-left: 24px; margin-bottom: 8px; color: #e5e7eb;">$1</li>');
@@ -214,7 +214,7 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
     
     useEffect(() => {
         if (!patientId) {
-            setError('缂哄皯鎮ｈ€匢D');
+            setError('缺少患者 ID');
             setLoading(false);
             return;
         }
@@ -229,10 +229,10 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
                 setPatient(data.data);
                 generateImageFindings(data.data);
             } else {
-                setError(data.message || '鍔犺浇鎮ｈ€呬俊鎭け璐?);
+                setError(data.message || '加载患者信息失败');
             }
         } catch (err) {
-            setError('缃戠粶閿欒锛? + err.message);
+            setError('网络错误：' + err.message);
         } finally {
             setLoading(false);
         }
@@ -243,18 +243,18 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
             return;
         }
         const hemName = {
-            left: '宸︿晶',
-            right: '鍙充晶',
-            both: '鍙屼晶',
-        }[analysisData.hemisphere] || '鍙屼晶';
-        const coreText = `鏍稿績姊楁鍖轰綅浜?{hemName}澶ц剳鍗婄悆锛屼綋绉害 ${analysisData.core_volume?.toFixed(1) || '--'} ml銆傜梾鐏剁晫闄愭竻鏅帮紝鐏屾敞淇″彿鏄庢樉闄嶄綆銆俙;
-        const penumbraText = `鍗婃殫甯︼紙缂鸿鍗婂奖锛夎寖鍥村箍娉涳紝浣撶Н绾?${analysisData.penumbra_volume?.toFixed(1) || '--'} ml锛岃緝鏍稿績姊楁鍖烘槑鏄炬墿澶э紝鎻愮ず瀛樺湪澶ч噺鍙尳鏁戣剳缁勭粐銆俙;
-        const vesselText = '闇€鏍规嵁CTA搴忓垪杩涗竴姝ヨ瘎浼拌剳琛€绠￠€氱晠鎬э紝鍒ゆ柇鏄惁瀛樺湪澶ц绠￠棴濉烇紝涓鸿绠″唴娌荤枟鎻愪緵渚濇嵁銆?;
-        const perfusionText = `鐏屾敞鍙傛暟鍒嗘瀽锛?
-- CBF锛堣剳琛€娴侀噺锛夛細鏍稿績姊楁鍖烘樉钁楅檷浣庯紝鍗婃殫甯﹀尯鍩熺浉瀵逛繚鐣?
-- CBV锛堣剳琛€瀹归噺锛夛細涓庢姝荤伓鍒嗗竷鐩哥锛屽懆鍥寸浉瀵瑰崌楂?
-- Tmax锛堝钩鍧囬€氳繃鏃堕棿锛夛細寤惰繜鍖哄煙杩滃ぇ浜庢牳蹇冨尯锛屼笉鍖归厤姣斾緥 ${analysisData.mismatch_ratio?.toFixed(2) || '--'}
-- 涓嶅尮閰嶈瘎浼帮細${analysisData.has_mismatch ? '瀛樺湪鏄捐憲鏍稿績-鍗婃殫甯︿笉鍖归厤锛屾彁绀哄彲鑳藉瓨鍦ㄥ彲鎸芥晳鑴戠粍缁囷紝闇€璇勪及琛€绠″唴娌荤枟閫傚簲璇? : '鏃犳樉钁椾笉鍖归厤'}`;
+            left: '左侧',
+            right: '右侧',
+            both: '双侧',
+        }[analysisData.hemisphere] || '双侧';
+        const coreText = `梗死核心区位于${hemName}大脑半球，体积 ${analysisData.core_volume?.toFixed(1) || '--'} ml。病灶边界清晰，灌注参数提示明显下降。`;
+        const penumbraText = `半暗带（可逆缺血区）范围较大，体积 ${analysisData.penumbra_volume?.toFixed(1) || '--'} ml，与梗死核心区相比明显扩大，提示存在较大可挽救脑组织。`;
+        const vesselText = '需结合 CTA 序列进一步评估责任血管狭窄或闭塞情况，为血管内治疗决策提供依据。';
+        const perfusionText = `灌注参数分析：
+- CBF（脑血流量）：梗死核心区明显降低，半暗带区域相对保留。
+- CBV（脑血容量）：整体分布与正常脑实质相近，提示脑血容量部分代偿。
+- Tmax（到达时间）：延迟区域明显大于梗死核心区，不匹配比值 ${analysisData.mismatch_ratio?.toFixed(2) || '--'}。
+- 不匹配评估：${analysisData.has_mismatch ? '存在明显梗死核心-半暗带不匹配，提示可能存在可挽救脑组织，需要结合临床与血管评估综合判断。' : '未见明显梗死核心-半暗带不匹配。'}`;
         setFindings({
             core: coreText,
             penumbra: penumbraText,
@@ -292,29 +292,29 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
             const data = await res.json();
             if (data.status === 'success') {
                 setIsEditing(false);
-                alert('鎶ュ憡淇濆瓨鎴愬姛');
+                alert('报告保存成功');
             } else {
-                alert('淇濆瓨澶辫触锛? + data.message);
+                alert('保存失败：' + data.message);
             }
         } catch (err) {
-            alert('淇濆瓨澶辫触锛? + err.message);
+            alert('保存失败：' + err.message);
         } finally {
             setIsSaving(false);
         }
     };
     
     const exportPDF = async () => {
-        alert('PDF瀵煎嚭鍔熻兘寮€鍙戜腑...');
+        alert('PDF 导出功能开发中...');
     };
     
     if (loading) {
         return React.createElement("div", { className: "report-container" },
-            React.createElement("div", { className: "loading" }, "鍔犺浇涓?..")
+            React.createElement("div", { className: "loading" }, "加载中...")
         );
     }
     if (error) {
         return React.createElement("div", { className: "report-container" },
-            React.createElement("div", { className: "error" }, "閿欒: ", error)
+            React.createElement("div", { className: "error" }, "错误：", error)
         );
     }
     
@@ -329,23 +329,23 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
                 fontSize: '20px',
                 fontWeight: 600,
                 boxShadow: '0 4px 12px rgba(59, 130, 246, 0.4)'
-            } }, "鑴戝崚涓复搴婅瘖鏂姤鍛?),
+            } }, "脑卒中影像诊断报告"),
             React.createElement("div", { className: "report-actions" },
-                React.createElement("button", { className: `action-btn ${isEditing ? 'cancel' : 'primary'}`, onClick: () => setIsEditing(!isEditing) }, isEditing ? '鍙栨秷缂栬緫' : '缂栬緫鎶ュ憡'),
-                isEditing && React.createElement("button", { className: "action-btn primary", onClick: saveReport, disabled: isSaving }, isSaving ? '淇濆瓨涓?..' : '淇濆瓨鎶ュ憡'),
-                !isEditing && React.createElement("button", { className: "action-btn", onClick: exportPDF }, "瀵煎嚭PDF")
+                React.createElement("button", { className: `action-btn ${isEditing ? 'cancel' : 'primary'}`, onClick: () => setIsEditing(!isEditing) }, isEditing ? '取消编辑' : '编辑报告'),
+                isEditing && React.createElement("button", { className: "action-btn primary", onClick: saveReport, disabled: isSaving }, isSaving ? '保存中...' : '保存报告'),
+                !isEditing && React.createElement("button", { className: "action-btn", onClick: exportPDF }, "导出 PDF")
             )
         ),
         React.createElement("div", { className: "report-body" },
             React.createElement(PatientInfoModule, { data: patient, isEditing: isEditing, onUpdate: handlePatientUpdate }),
             React.createElement(ImageFindingsModule, { data: analysisData || null, findings: findings, isEditing: isEditing, onUpdate: handleFindingsUpdate }),
             
-            // 鐧惧窛 AI 璇婃柇鎰忚妯″潡 - 鍥涚鐘舵€佹樉绀?
+            // 远程 AI 诊断意见模块 - 四种状态展示
             !analysisData || analysisData.core_volume === 0 ?
                 React.createElement("div", { className: "report-module", style: { background: '#1a1a1a', borderRadius: '12px', padding: '40px', marginTop: '20px', border: '1px solid #333', textAlign: 'center' } },
-                    React.createElement("div", { style: { fontSize: '48px', marginBottom: '16px', color: '#60a5fa' } }, "鉁?),
-                    React.createElement("h3", { style: { color: '#fff', fontSize: '18px', marginBottom: '12px' } }, "璇峰厛瀹屾垚鑴戝崚涓垎鏋?),
-                    React.createElement("p", { style: { color: '#888', fontSize: '14px' } }, "璇疯繑鍥?viewer 椤甸潰瀹屾垚鍒嗘瀽鍚庯紝鍐嶇敓鎴?AI 鎶ュ憡")
+                    React.createElement("div", { style: { fontSize: '48px', marginBottom: '16px', color: '#60a5fa' } }, "ℹ️"),
+                    React.createElement("h3", { style: { color: '#fff', fontSize: '18px', marginBottom: '12px' } }, "请先完成脑卒中分析"),
+                    React.createElement("p", { style: { color: '#888', fontSize: '14px' } }, "请返回 viewer 页面完成影像自动分析后，再生成 AI 报告")
                 )
             : isGeneratingReport ?
                 React.createElement("div", { className: "report-module", style: { background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)', padding: '40px', borderRadius: '12px', marginTop: '20px', textAlign: 'center' } },
@@ -360,12 +360,12 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
                             margin: '0 auto 16px'
                         } 
                     }),
-                    React.createElement("h3", { style: { color: '#fff', fontSize: '18px', marginBottom: '8px' } }, "姝ｅ湪鐢熸垚 AI 鎶ュ憡..."),
-                    React.createElement("p", { style: { color: 'rgba(255,255,255,0.8)', fontSize: '14px' } }, "NeuroMatrix AI 姝ｅ湪鍒嗘瀽褰卞儚鏁版嵁")
+                    React.createElement("h3", { style: { color: '#fff', fontSize: '18px', marginBottom: '8px' } }, "正在生成 AI 报告..."),
+                    React.createElement("p", { style: { color: 'rgba(255,255,255,0.8)', fontSize: '14px' } }, "NeuroMatrix AI 正在分析影像数据，请稍候")
                 )
             : aiReport ?
                 React.createElement("div", { className: "report-module" },
-                    React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "NeuroMatrix AI 璇婃柇鎰忚"),
+                    React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "NeuroMatrix AI 诊断意见"),
                     React.createElement("div", {
                         className: "ai-report-content",
                         style: {
@@ -381,17 +381,17 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
                 )
             :
                 React.createElement("div", { className: "report-module", style: { background: '#1a1a1a', borderRadius: '12px', padding: '40px', marginTop: '20px', border: '1px solid #333', textAlign: 'center' } },
-                    React.createElement("div", { style: { fontSize: '48px', marginBottom: '16px', color: '#60a5fa' } }, "鉁?),
-                    React.createElement("h3", { style: { color: '#fff', fontSize: '18px', marginBottom: '12px' } }, "璇风敓鎴?AI 鎶ュ憡"),
-                    React.createElement("p", { style: { color: '#888', fontSize: '14px' } }, "璇峰湪鑴戝崚涓垎鏋愰〉闈㈢偣鍑汇€屾墜鍔ㄧ敓鎴?AI 鎶ュ憡銆嶆寜閽?)
+                    React.createElement("div", { style: { fontSize: '48px', marginBottom: '16px', color: '#60a5fa' } }, "ℹ️"),
+                    React.createElement("h3", { style: { color: '#fff', fontSize: '18px', marginBottom: '12px' } }, "请生成 AI 报告"),
+                    React.createElement("p", { style: { color: '#888', fontSize: '14px' } }, "请在脑卒中分析页面点击“手动生成 AI 报告”按钮")
                 ),
             
-            // 鍖荤敓澶囨敞妯″潡
+            // 医生备注模块
             React.createElement(DoctorNotesModule, { notes: notes, isEditing: isEditing, onUpdate: setNotes }),
             
             !isEditing && React.createElement("div", { className: "report-footer" },
-                React.createElement("p", null, "鎶ュ憡鐢熸垚鏃堕棿锛?, new Date().toLocaleString('zh-CN')),
-                React.createElement("p", null, "鍏嶈矗澹版槑锛氭鎶ュ憡涓殑AI鍒嗘瀽浠呬緵涓村簥鍙傝€冿紝鍖荤敓搴旂粨鍚堜复搴婃儏鍐电患鍚堝垽鏂€?)
+                React.createElement("p", null, "报告生成时间：", new Date().toLocaleString('zh-CN')),
+                React.createElement("p", null, "免责声明：本报告中的 AI 分析结果仅供参考，最终诊断与治疗决策须由临床医生结合病情综合判断。")
             )
         )
     );
