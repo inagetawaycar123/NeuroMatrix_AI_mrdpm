@@ -9,7 +9,7 @@ import glob
 import threading
 import shutil
 import os
-import requests  # 娣诲姞 requests 瀵煎叆锛岀敤浜庤皟鐢ㄧ櫨宸?M3 API
+import requests  # 添加 requests 导入，用于调用百川 M3 API
 from flask import (
     Flask,
     render_template,
@@ -24,7 +24,7 @@ try:
     from .ai_inference import get_ai_model
     from .extensions import NumpyJSONEncoder
 except ImportError:
-    # 鍏煎鐩存帴杩愯 backend/app.py 鐨勫満鏅?
+    # 兼容直接运行 backend/app.py 的场景
     from ai_inference import get_ai_model
     from extensions import NumpyJSONEncoder
 from datetime import datetime
@@ -38,13 +38,13 @@ try:
     SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBweWV4enFkYnNud3FmeXVnZnZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1Nzc3ODAsImV4cCI6MjA4MzE1Mzc4MH0.EjDH3eufPKBF8MJiHM6SVzPQlsWvGqhLQPKKhVG5Ffo"
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
     SUPABASE_AVAILABLE = True
-    print("鉁?Supabase 瀹㈡埛绔垵濮嬪寲鎴愬姛")
+    print("Supabase 客户端初始化成功")
 except ImportError as e:
-    print(f"鉁?Supabase 瀵煎叆澶辫触: {e}")
+    print(f"Supabase 导入失败: {e}")
     supabase = None
     SUPABASE_AVAILABLE = False
 except Exception as e:
-    print(f"鉁?Supabase 鍒濆鍖栧け璐? {e}")
+    print(f"Supabase 初始化失败: {e}")
     supabase = None
     SUPABASE_AVAILABLE = False
 
@@ -98,7 +98,7 @@ def update_analysis_result(patient_id: int, analysis_data: dict):
 
 def get_patient_by_id(patient_id: int):
     """
-    鏍规嵁 ID 鑾峰彇鎮ｈ€呬俊鎭?
+    根据 ID 获取患者信息。
     """
     if not SUPABASE_AVAILABLE:
         return None
@@ -110,13 +110,13 @@ def get_patient_by_id(patient_id: int):
             return response.data[0]
         return None
     except Exception as e:
-        print(f"鑾峰彇鎮ｈ€呬俊鎭け璐? {e}")
+        print(f"获取患者信息失败: {e}")
         return None
 
 
 def get_imaging_by_case(patient_id: int, case_id: str):
     """
-    忙聽鹿忙聧庐 case_id 氓鈥櫯?patient_id 忙鸥楼猫炉垄 patient_imaging 猫庐掳氓陆鈥?
+    根据 patient_id / case_id 从 patient_imaging 表获取最近一条记录。
     """
     if not SUPABASE_AVAILABLE:
         return None
@@ -132,7 +132,7 @@ def get_imaging_by_case(patient_id: int, case_id: str):
             return response.data[0]
         return None
     except Exception as e:
-        print(f"patient_imaging 忙鸥楼猫炉垄氓陇卤猫麓楼: {e}")
+        print(f"查询 patient_imaging 记录失败: {e}")
         return None
 
 
@@ -444,16 +444,12 @@ def save_report_notes(patient_id: int, file_id: str, payload: dict):
     result["success"] = True
     return result
 
+# ==================== 百川 M3 API 配置 ====================
 
-# ==================== 鐧惧窛 M3 API 閰嶇疆 ====================
-
-
-# ==================== 鐧惧窛 M3 API 閰嶇疆 ====================
-# 棣栧厛灏濊瘯浠?.env 鏂囦欢鍔犺浇鐜鍙橀噺
-        
+# 优先尝试从 .env 文件加载环境变量
 load_dotenv()
 
-# 鐒跺悗璇诲彇鐜鍙橀噺锛堝凡浠?env鍔犺浇鎴栫郴缁熺幆澧冨彉閲忥級
+# 然后读取环境变量（已由 .env 或系统环境提供）
 BAICHUAN_API_URL = os.environ.get(
     "BAICHUAN_API_URL", "https://api.baichuan-ai.com/v1/chat/completions"
 )
@@ -468,7 +464,7 @@ BAICHUAN_CHAT_MODEL = (
 )
 _kb_ids_raw = os.environ.get("BAICHUAN_KB_IDS", "kb-mMSWx8f9GMasTj0gR52k2rdr")
 BAICHUAN_KB_IDS = [kb_id.strip() for kb_id in _kb_ids_raw.split(",") if kb_id.strip()]
-# 淇璺緞锛歘_file__ 鍦?backend/ 涓嬶紝闇€瑕佸悜涓婁竴绾у埌椤圭洰鏍圭洰褰?
+# 校正路径：__file__ 在 backend/ 下，需要回到项目根目录
 KB_PDF_DIR = os.environ.get(
     "KB_PDF_DIR",
     os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "kb"),
@@ -485,122 +481,133 @@ def _get_baichuan_api_base() -> str:
     return "https://api.baichuan-ai.com/v1"
 
 
-print(f"鐧惧窛 API URL: {BAICHUAN_API_URL}")
+print(f"百川 API URL: {BAICHUAN_API_URL}")
 print(
-    f"百川 API Key: {'***' + BAICHUAN_API_KEY[-4:] if BAICHUAN_API_KEY else '未配置'}"
+        f"百川 API Key: {'***' + BAICHUAN_API_KEY[-4:] if BAICHUAN_API_KEY else '未配置'}"
 )
-print(f"鐧惧窛妯″瀷: {BAICHUAN_MODEL}")
-print(f"鐧惧窛闂瘖妯″瀷: {BAICHUAN_CHAT_MODEL}")
-print(f"鐭ヨ瘑搴揑D鏁伴噺: {len(BAICHUAN_KB_IDS)}")
-print(f"鐭ヨ瘑搴揚DF鐩綍: {KB_PDF_DIR}")
+print(f"百川模型: {BAICHUAN_MODEL}")
+print(f"百川对话模型: {BAICHUAN_CHAT_MODEL}")
+print(f"知识库 ID 数量: {len(BAICHUAN_KB_IDS)}")
+print(f"知识库 PDF 目录: {KB_PDF_DIR}")
 
-# 鍗掍腑褰卞儚鎶ュ憡 Prompt 妯℃澘 (Markdown 鏍煎紡)
+# 卒中影像报告 Prompt 模板 (Markdown 格式)
 REPORT_PROMPT_TEMPLATE = """
-浣犳槸涓€浣嶄笓涓氱殑绁炵粡鏀惧皠绉戝尰鐢熴€侫I 绯荤粺鍩轰簬鎮ｈ€?NCCT + 鍔ㄨ剦鏈?CTA + 闈欒剦鏈?CTA + 寤惰繜鏈?CTA锛? 閫氶亾 mCTA锛夊奖鍍忥紝閫氳繃 MRDPM 鎵╂暎妯″瀷鐢熸垚 CBF/CBV/Tmax 鐏屾敞鍙傛暟鍥撅紝璇风患鍚堝垎鏋愯繖 4 绫诲奖鍍忕殑鐏屾敞鐗瑰緛锛岀敓鎴愮鍚堝崚涓瘖鐤楄鑼冪殑褰卞儚璇婃柇鎶ュ憡銆?
+你是一名资深的卒中影像科放射科医师。基于本次患者的 NCCT + 动态 CTA (mCTA) 以及基于 MRDPM 模型生成的 CBF/CBV/Tmax 等灌注参数图像，请根据下列结构化信息撰写一份规范的影像学评估与治疗建议报告。
 
-銆愭偅鑰呬复搴婁笌褰卞儚鏁版嵁銆?
-- 鎮ｈ€匢D: {patient_id}
-- 濮撳悕: {patient_name}
-- 骞撮緞: {patient_age}
-- 鎬у埆: {patient_sex}
-- 鍏ラ櫌 NIHSS 璇勫垎: {nihss_score}
-- 鍙戠梾鑷冲叆闄㈡椂闂? {onset_to_admission}
-- 鍩轰簬 NCCT + 鍔ㄨ剦鏈?闈欒剦鏈?寤惰繜鏈?mCTA 鐢熸垚鐨勭亴娉ㄥ弬鏁帮細
-  鈥?鏍稿績姊楁浣撶Н (Core): {core_volume} ml
-  鈥?鍗婃殫甯︿綋绉?(Penumbra): {penumbra_volume} ml
-  鈥?涓嶅尮閰嶆瘮鍊?(Mismatch Ratio): {mismatch_ratio}
-  鈥?鍙戠梾渚? {hemisphere}
+【患者与临床信息】
+- 患者ID: {patient_id}
+- 姓名: {patient_name}
+- 年龄: {patient_age}
+- 性别: {patient_sex}
+- 入院 NIHSS 评分: {nihss_score}
+- 发病至入院时间: {onset_to_admission}
 
-銆愰噸瑕佹彁绀?- 蹇呴』涓ユ牸閬靛畧銆?
-鍦ㄨ瘖鏂剰瑙佷腑锛屼綘蹇呴』閫愪竴鍒嗘瀽浠ヤ笅涓変釜涓村簥鏁版嵁锛?
-1. NIHSS璇勫垎鍒嗘瀽锛氬叆闄?NIHSS 璇勫垎涓?{nihss_score}锛岃璇︾粏鍒嗘瀽璇ヨ瘎鍒嗗搴旂殑绁炵粡鍔熻兘缂烘崯涓ラ噸绋嬪害锛堝杞诲害銆佷腑搴︺€侀噸搴︼級
-2. 骞撮緞鍒嗘瀽锛氭偅鑰呭勾榫?{patient_age} 宀侊紝璇峰垎鏋愬勾榫勫娌荤枟鍐崇瓥鐨勫奖鍝?
-3. 鍙戠梾鏃堕棿鍒嗘瀽锛氬彂鐥呰嚦鍏ラ櫌鏃堕棿涓?{onset_to_admission}锛岃璇勪及鏄惁鍦ㄦ不鐤楁椂闂寸獥鍐?
+【影像量化摘要（基于 NCCT + mCTA + CTP）】
+- 核心梗死体积 (Core): {core_volume} ml
+- 半暗带体积 (Penumbra): {penumbra_volume} ml
+- 不匹配比值 (Mismatch Ratio): {mismatch_ratio}
+- 受累侧别: {hemisphere}
 
-銆愭姤鍛婅姹傘€?
-1. 绗﹀悎銆婁腑鍥芥€ユ€х己琛€鎬ц剳鍗掍腑璇婃不鎸囧崡銆嬭鑼?
-2. 鍚勭珷鑺傞渶璇﹀敖鎻忚堪
-3. 浣跨敤鍖诲涓撲笟鏈
-4. 杈撳嚭鏍煎紡涓?Markdown
-5. 灏忔爣棰樹娇鐢?"##" 鍓嶇紑鏍囪锛屽 "## 妫€鏌ユ柟娉?
-6. 涓嶈浣跨敤绮椾綋鏍囪锛?*鏂囧瓧**锛夛紝鐩存帴浣跨敤鏅€氭枃瀛楁弿杩?
+【写作要求】
+1. 严格按照《中国急性缺血性脑卒中影像学诊断与治疗规范》等指南撰写，使用专业医学术语。
+2. 输出格式使用 Markdown，不要使用花哨的加粗/斜体，只用正常文本和有层级的标题。
+3. 顶层大标题使用 `##` 标记，例如 `## 检查方法`、`## 影像所见`、`## 影像结论`、`## 治疗建议`。
+4. 报告中需要综合描述：
+     - 检查方法（包括 NCCT、mCTA、CTP 及关键参数）。
+     - 影像所见：核心梗死范围与部位、半暗带范围、左右侧脑血流不对称情况、不匹配区域特点等。
+     - 影像学结论：是否存在大血管闭塞、梗死核心大小是否符合溶栓 / 取栓条件等。
+     - 治疗建议：结合年龄、NIHSS、时间窗、core / penumbra / mismatch 三者关系，给出是否推荐静脉溶栓、机械取栓或保守治疗的建议。
+5. 可以引用上方的量化指标，但不要机械地逐行重复，要用连续自然的中文段落表达。
 
-銆愯緭鍑烘牸寮忋€?
+【输出结构示例（Markdown）】
 
-路 妫€鏌ユ柟娉?
-澶撮 CT 骞虫壂 (NCCT) + 涓夋湡 CT 琛€绠℃垚鍍?(mCTA锛氬姩鑴夋湡銆侀潤鑴夋湡銆佸欢杩熸湡)
+## 检查方法
+简要说明本次检查包含的模态（NCCT、mCTA、CTP）以及主要参数。
 
-路 褰卞儚瀛﹁〃鐜?
-鍩轰簬 NCCT + 鍔ㄨ剦鏈?闈欒剦鏈?寤惰繜鏈?mCTA 缁煎悎鍒嗘瀽锛?
-1. 鏍稿績姊楁鍖猴細[缁撳悎 CBF/CBV/Tmax 鍙傛暟锛屾牴鎹?DEFUSE 3 鏍囧噯锛坮CBF<30%銆乀max>6s锛夎缁嗘弿杩颁綅缃€佷綋绉€佺亴娉ㄥ紓甯告儏鍐礭
-2. 鍗婃殫甯﹀尯锛歔璇︾粏鎻忚堪鑼冨洿銆佷笌鏍稿績姊楁鍖虹殑绌洪棿鍏崇郴銆乀max 寤惰繜绋嬪害]
-3. 宸﹀彸鑴戜笉瀵圭О鍒嗘瀽锛歔姣旇緝鎮ｄ晶涓庡仴渚х殑 CBF/CBV 宸紓锛岄噺鍖栦笉瀵圭О鎸囨暟]
-4. 涓嶅尮閰嶈瘎浼帮細[涓嶅尮閰嶆瘮鍊煎強涓村簥鎰忎箟]
+## 影像所见
+1. 核心梗死灶：描述位置、体积（约 {core_volume} ml）及是否累及关键功能区。
+2. 半暗带：描述范围、体积（约 {penumbra_volume} ml）以及与核心灶的空间关系。
+3. 灌注不匹配：说明不匹配比约为 {mismatch_ratio}，判断是否存在明显可挽救半暗带。
+4. 侧别与侧支循环：描述病变侧（{hemisphere}）及侧支循环情况（如 mCTA 评价）。
 
-路 琛€绠¤瘎浼?
-[鏍规嵁涓夋湡 CTA 鐨勫姩鑴?闈欒剦鏄惧奖宸紓锛屾帹鏂矗浠昏绠″強渚ф敮寰幆鎯呭喌]
+## 影像学结论
+用 2–4 条要点归纳本次影像所支持的诊断结论，例如是否提示大血管闭塞、梗死核心大小与时间窗是否匹配等。
 
-路 璇婃柇鎰忚
-[蹇呴』鍖呭惈浠ヤ笅鍐呭锛岄€愭潯鍒嗘瀽锛?
-1. NIHSS璇勫垎鍒嗘瀽锛氬叆闄?NIHSS 璇勫垎涓?{nihss_score}锛岃璇︾粏鍒嗘瀽璇ヨ瘎鍒嗗搴旂殑绁炵粡鍔熻兘缂烘崯涓ラ噸绋嬪害
-2. 骞撮緞鍒嗘瀽锛氭偅鑰呭勾榫?{patient_age} 宀侊紝璇峰垎鏋愬勾榫勫娌荤枟鍐崇瓥鐨勫奖鍝?
-3. 鍙戠梾鏃堕棿鍒嗘瀽锛氬彂鐥呰嚦鍏ラ櫌鏃堕棿涓?{onset_to_admission}锛岃璇勪及鏄惁鍦ㄦ不鐤楁椂闂寸獥鍐?
-4. 鎬ユ€х己琛€鎬у崚涓瘖鏂?
-5. 鏍稿績姊楁浣撶Н鍙婁綅缃紙鍩轰簬 rCBF<30% 闃堝€硷級
-6. 鍗婃殫甯︿綋绉強鍙尳鏁戣剳缁勭粐璇勪及锛堝熀浜?Tmax>6s 闃堝€硷級
-7. 涓嶅尮閰嶆瘮鍊煎強 DEFUSE 3 鍏ラ€夋爣鍑嗗垽鏂?
-8. 寤鸿杩涗竴姝ヨ琛€绠″唴娌荤枟璇勪及]
-
-路 娌荤枟寤鸿
-鎺ㄨ崘瀹屽杽鏁板瓧鍑忓奖琛€绠￠€犲奖 (DSA) 浠ユ槑纭绠￠棴濉為儴浣嶅強渚ф敮寰幆鎯呭喌銆傜患鍚?NIHSS 璇勫垎銆佹偅鑰呭勾榫勫強鍙戠梾鑷冲叆闄㈡椂闂翠互鍙婃牳蹇冩姝?鍗婃殫甯︿綋绉瘮鍊硷紝鍒ゆ柇琛€绠″唴娌荤枟鎸囧緛銆傝嫢绗﹀悎 DEFUSE 3 鏍囧噯锛屽缓璁Н鏋佽琛€绠″唴娌荤枟銆?
-
-璇锋牴鎹互涓婃偅鑰呮暟鎹敓鎴愭姤鍛婏細
+## 治疗建议
+结合 NIHSS 评分 {nihss_score}、发病至入院时间 {onset_to_admission} 以及 core / penumbra / mismatch 情况，给出是否推荐静脉溶栓、机械取栓或其他治疗策略，并给出简要理由。
 """
 
-# JSON 缁撴瀯鍖栬緭鍑?Prompt
-REPORT_JSON_PROMPT = """
-浣犳槸涓€浣嶄笓涓氱殑绁炵粡鏀惧皠绉戝尰鐢熴€侫I 绯荤粺鍩轰簬鎮ｈ€?NCCT + 鍔ㄨ剦鏈?CTA + 闈欒剦鏈?CTA + 寤惰繜鏈?CTA锛? 閫氶亾 mCTA锛夊奖鍍忥紝閫氳繃 MRDPM 鎵╂暎妯″瀷鐢熸垚 CBF/CBV/Tmax 鐏屾敞鍙傛暟鍥撅紝璇风患鍚堝垎鏋愮敓鎴愯鑼冪殑鍗掍腑褰卞儚璇婃柇鎶ュ憡 JSON銆?
+REPORT_JSON_PROMPT = '''
+你是一名资深的卒中影像科医生。请根据提供的结构化量化信息，输出一段仅包含 JSON 对象的结果，不要包含任何多余文字或代码块标记。
 
-銆愭偅鑰呭奖鍍忔暟鎹€?
-- 鎮ｈ€匢D: {patient_id}
-- 鍩轰簬 NCCT + 鍔ㄨ剦鏈?闈欒剦鏈?寤惰繜鏈?mCTA 鐢熸垚鐨勭亴娉ㄥ弬鏁帮細
-  鈥?鏍稿績姊楁浣撶Н (Core): {core_volume} ml
-  鈥?鍗婃殫甯︿綋绉?(Penumbra): {penumbra_volume} ml
-  鈥?涓嶅尮閰嶆瘮鍊?(Mismatch Ratio): {mismatch_ratio}
-  鈥?鍙戠梾渚? {hemisphere}
+【输入提示】
+- 患者ID: {patient_id}
+- 核心梗死体积 (ml): {core_volume}
+- 半暗带体积 (ml): {penumbra_volume}
+- 不匹配比值: {mismatch_ratio}
+- 受累侧别: {hemisphere}
 
-銆愪复搴婅瘖鏂爣鍑嗐€?
-- 鏍稿績姊楁锛歳CBF < 30%锛堢浉瀵硅剳琛€娴侀噺锛?
-- 鍗婃殫甯︼細Tmax > 6 绉?
-- DEFUSE 3 鏍囧噯锛氫笉鍖归厤浣撶Н 鈮?15ml 涓斾笉鍖归厤姣斿€?鈮?1.8
+【输出要求】
+1. 只输出一个 JSON 对象。
+2. 使用 UTF-8 中文字段名，键名固定如下：
+     - "检查方法"
+     - "核心梗死"：对象，包含 "体积"、"灌注标准"、"CT表现" 三个字段。
+     - "半暗带"：对象，包含 "体积"、"灌注特征"、"与核心关系" 三个字段。
+     - "左右脑不对称分析"：对象，包含 "患侧"、"不对称指数"。
+     - "DEFUSE3评估"：对象，包含 "不匹配体积"、"不匹配比值"、"是否入组"。
+     - "诊断意见"：字符串。
+     - "治疗建议"：字符串数组或字符串。
+3. 数值字段可以使用字符串表示，例如 "25 ml" 或 "2.0"。
 
-銆愯緭鍑鸿姹傘€?
-璇蜂弗鏍兼寜鐓т互涓?JSON 鏍煎紡杈撳嚭锛?*涓嶈鍖呭惈浠讳綍鍏朵粬鏂囧瓧鎴栦唬鐮佸潡鏍囪**锛?
+【示例结构】（注意：示例内容仅示意，实际数值请根据输入推理）
 
-{{"妫€鏌ユ柟娉?: "澶撮CT骞虫壂(NCCT)+涓夋湡CTA(mCTA:鍔ㄨ剦鏈熴€侀潤鑴夋湡銆佸欢杩熸湡)", "鏍稿績姊楁": {{"浣撶Н": "鏍稿績姊楁浣撶Нml", "浣嶇疆": "鍏蜂綋鑴戝彾鍜岃绠′緵琛€鍖?, "CT琛ㄧ幇": "NCCT浣庡瘑搴︽敼鍙樻儏鍐?, "鐏屾敞鏍囧噯": "rCBF<30%"}}, "鍗婃殫甯?: {{"浣撶Н": "鍗婃殫甯︿綋绉痬l", "浣嶇疆": "缂鸿鍗婃殫甯﹀垎甯冨尯鍩?, "鐏屾敞鐗瑰緛": "Tmax>6s, CBF闄嶄綆浣咰BV鐩稿淇濈暀", "涓庢牳蹇冨叧绯?: "绌洪棿鍏崇郴鎻忚堪"}}, "宸﹀彸鑴戜笉瀵圭О鍒嗘瀽": {{"鎮ｄ晶": "鎮ｄ晶鐏屾敞鍙傛暟", "鍋ヤ晶": "鍋ヤ晶鐏屾敞鍙傛暟", "涓嶅绉版寚鏁?: "閲忓寲鍊?}}, "琛€绠¤瘎浼?: "鏍规嵁涓夋湡CTA鎺ㄦ柇璐ｄ换琛€绠″拰渚ф敮寰幆鎯呭喌", "DEFUSE3璇勪及": {{"涓嶅尮閰嶄綋绉?: "浣撶Нml", "涓嶅尮閰嶆瘮鍊?: "姣斿€?, "鏄惁鍏ラ€?: "鏄?鍚?}}, "璇婃柇鎰忚": "缁煎悎璇婃柇鎰忚", "娌荤枟寤鸿": ["寤鸿1", "寤鸿2", "寤鸿3"]}}
+{
+    "检查方法": "NCCT + mCTA + CTP",
+    "核心梗死": {
+        "体积": "20 ml",
+        "灌注标准": "rCBF<30%",
+        "CT表现": "对侧半球低密度影"
+    },
+    "半暗带": {
+        "体积": "40 ml",
+        "灌注特征": "Tmax>6s, CBF降低、CBV相对保留",
+        "与核心关系": "半暗带包绕核心区，未累及对侧"
+    },
+    "左右脑不对称分析": {
+        "患侧": "{hemisphere}",
+        "不对称指数": "示例值"
+    },
+    "DEFUSE3评估": {
+        "不匹配体积": "20 ml",
+        "不匹配比值": "2.0",
+        "是否入组": "是"
+    },
+    "诊断意见": "……",
+    "治疗建议": ["……"]
+}
 
-璇峰彧杈撳嚭 JSON 瀵硅薄锛岀‘淇濇墍鏈夊瓧绗︿覆浣跨敤鍙屽紩鍙峰寘瑁广€?
-"""
+请严格按照上述键名和结构返回 JSON，对象外不得包含任何多余文字。
+'''
 
 
 def generate_report_with_baichuan(
     structured_data: dict, output_format: str = "markdown"
 ) -> dict:
     """
-    璋冪敤鐧惧窛 M3 API 鐢熸垚鍗掍腑褰卞儚鎶ュ憡
+    调用百川 M3 API 生成卒中影像报告（Markdown 或 JSON）。
     """
     try:
-        # 鍑嗗 NIHSS 璇勫垎鏄剧ず
+        # 准备 NIHSS 评分展示
         nihss_score = structured_data.get("admission_nihss", None)
         nihss_display = (
             f"{nihss_score} 分" if nihss_score is not None else "未记录"
         )
 
-        # 鍑嗗鎮ｈ€呬俊鎭樉绀?
-        patient_id = structured_data.get("id", structured_data.get("ID", "鏈煡"))
-        patient_name = structured_data.get("patient_name", "鏈煡")
-        patient_age = structured_data.get("patient_age", "鏈煡")
-        patient_sex = structured_data.get("patient_sex", "鏈煡")
+        # 准备患者信息展示
+        patient_id = structured_data.get("id", structured_data.get("ID", "未知"))
+        patient_name = structured_data.get("patient_name", "未知")
+        patient_age = structured_data.get("patient_age", "未知")
+        patient_sex = structured_data.get("patient_sex", "未知")
         onset_to_admission = structured_data.get("onset_to_admission_hours", None)
         onset_display = (
             f"{onset_to_admission} 小时"
@@ -608,14 +615,14 @@ def generate_report_with_baichuan(
             else "未记录"
         )
 
-        # 鍑嗗 Prompt
+        # 准备 Prompt
         if output_format == "json":
             prompt = REPORT_JSON_PROMPT.format(
                 patient_id=patient_id,
                 core_volume=structured_data.get("core_infarct_volume", "N/A"),
                 penumbra_volume=structured_data.get("penumbra_volume", "N/A"),
                 mismatch_ratio=structured_data.get("mismatch_ratio", "N/A"),
-                hemisphere=structured_data.get("hemisphere", "鍙屼晶"),
+                hemisphere=structured_data.get("hemisphere", "未记录"),
             )
         else:
             from datetime import datetime
@@ -630,22 +637,22 @@ def generate_report_with_baichuan(
                 core_volume=structured_data.get("core_infarct_volume", "N/A"),
                 penumbra_volume=structured_data.get("penumbra_volume", "N/A"),
                 mismatch_ratio=structured_data.get("mismatch_ratio", "N/A"),
-                hemisphere=structured_data.get("hemisphere", "鍙屼晶"),
+                hemisphere=structured_data.get("hemisphere", "未记录"),
             )
 
-        # 妫€鏌?API Key
+        # 检查 API Key
         if not BAICHUAN_API_KEY:
-            print("鈿?鐧惧窛 API Key 鏈厤缃紝杩斿洖妯℃嫙鎶ュ憡")
+            print("百川 API Key 未配置，返回模拟报告")
             mock_report = generate_mock_report(structured_data, output_format)
             return {
                 "success": True,
                 "report": mock_report,
                 "format": output_format,
                 "is_mock": True,
-                "warning": "浣跨敤妯℃嫙鎶ュ憡锛岃閰嶇疆 BAICHUAN_API_KEY 鐜鍙橀噺",
+                "warning": "使用模拟报告，请配置 BAICHUAN_API_KEY 环境变量",
             }
 
-        # 璋冪敤鐧惧窛 M3 API
+        # 调用百川 M3 API
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {BAICHUAN_API_KEY}",
@@ -665,22 +672,22 @@ def generate_report_with_baichuan(
             "top_p": 0.9,
         }
 
-        print(f"璋冪敤鐧惧窛 M3 API... format={output_format}")
+        print(f"调用百川 M3 API... format={output_format}")
         print(f"Payload: {json.dumps(payload, ensure_ascii=False)[:500]}...")
         response = requests.post(
             BAICHUAN_API_URL, headers=headers, json=payload, timeout=60
         )
 
-        print(f"鍝嶅簲鐘舵€佺爜: {response.status_code}")
-        print(f"鍝嶅簲鍐呭: {response.text[:1000]}...")
+        print(f"响应状态码: {response.status_code}")
+        print(f"响应内容: {response.text[:1000]}...")
 
         if response.status_code == 200:
             result = response.json()
 
-            # 鐧惧窛 M3 API 鍙兘鏈夊绉嶅搷搴旀牸寮忥紝灏濊瘯澶氱瑙ｆ瀽鏂瑰紡
+            # 百川 M3 API 可能有多种响应格式，尽量兼容解析
             report_content = ""
 
-            # 鏂瑰紡1: OpenAI 鏍煎紡 (choices[0].message.content)
+            # 方式1: OpenAI 风格 (choices[0].message.content)
             if "choices" in result and len(result["choices"]) > 0:
                 choice = result["choices"][0]
                 if "message" in choice and "content" in choice["message"]:
@@ -688,17 +695,17 @@ def generate_report_with_baichuan(
                 elif "text" in choice:
                     report_content = choice["text"]
 
-            # 鏂瑰紡2: 鐩存帴 content 瀛楁
+            # 方式2: 顶层 content 字段
             if not report_content and "content" in result:
                 report_content = result["content"]
 
-            # 鏂瑰紡3: data 瀛楁
+            # 方式3: data 字段
             if not report_content and "data" in result:
                 data = result["data"]
                 if "content" in data:
                     report_content = data["content"]
 
-            print(f"鉁?鐧惧窛 M3 API 璋冪敤鎴愬姛锛屾姤鍛婇暱搴? {len(report_content)}")
+            print(f"百川 M3 API 调用成功，报告长度: {len(report_content)}")
             return {
                 "success": True,
                 "report": report_content,
@@ -706,17 +713,17 @@ def generate_report_with_baichuan(
                 "is_mock": False,
             }
         else:
-            error_msg = f"API 璋冪敤澶辫触: {response.status_code} - {response.text}"
-            print(f"鉁?{error_msg}")
+            error_msg = f"API 调用失败: {response.status_code} - {response.text}"
+            print(error_msg)
             return {"success": False, "error": error_msg, "format": output_format}
 
     except requests.exceptions.Timeout:
-        error_msg = "鐧惧窛 M3 API 璋冪敤瓒呮椂"
-        print(f"鉁?{error_msg}")
+        error_msg = "百川 M3 API 调用超时"
+        print(error_msg)
         return {"success": False, "error": error_msg, "format": output_format}
     except Exception as e:
-        error_msg = f"鐢熸垚鎶ュ憡澶辫触: {str(e)}"
-        print(f"鉁?{error_msg}")
+        error_msg = f"生成报告失败: {str(e)}"
+        print(error_msg)
         import traceback
 
         traceback.print_exc()
@@ -796,7 +803,7 @@ from matplotlib.colors import LinearSegmentedColormap
 import colorsys
 import matplotlib as mpl
 
-# 鍦╝pp.py鐨勫鍏ラ儴鍒嗘坊鍔?
+# 在 app.py 的导入部分添加业务相关模块
 try:
     from .stroke_analysis import analyze_stroke_case
     from .medgemma_report import generate_report_with_medgemma
@@ -804,14 +811,14 @@ except ImportError:
     from stroke_analysis import analyze_stroke_case
     from medgemma_report import generate_report_with_medgemma
 
-# 灏濊瘯瀵煎叆 nibabel
+# 尝试导入 nibabel（用于 NIfTI 等医学影像格式）
 try:
     import nibabel as nib
 
     NIBABEL_AVAILABLE = True
-    print("鉁?nibabel 瀵煎叆鎴愬姛")
+    print("nibabel 导入成功")
 except ImportError as e:
-    print(f"鉁?nibabel 瀵煎叆澶辫触: {e}")
+    print(f"nibabel 导入失败: {e}")
     NIBABEL_AVAILABLE = False
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -823,19 +830,19 @@ app.config["PROCESSED_FOLDER"] = os.path.join(
     PROJECT_ROOT, "static", "processed"
 )
 app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
-app.config["TEMPLATES_AUTO_RELOAD"] = True  # 绂佺敤HTML缂撳瓨锛屼慨鏀圭珛鍗崇敓鏁?
+app.config["TEMPLATES_AUTO_RELOAD"] = True  # 开启模板自动重载，修改后立即生效
 app.jinja_env.auto_reload = True
 
-# 鏍稿績锛氶厤缃甆umpyJSONEncoder鐢ㄤ簬JSON搴忓垪鍖?
+# 核心：配置 NumpyJSONEncoder 用于 JSON 序列化
 app.json_encoder = NumpyJSONEncoder
 
 
-# 鍒涘缓蹇呰鐨勭洰褰?
+# 创建必要的目录
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 os.makedirs(app.config["PROCESSED_FOLDER"], exist_ok=True)
 
-print(f"涓婁紶鐩綍: {app.config['UPLOAD_FOLDER']}")
-print(f"澶勭悊鐩綍: {app.config['PROCESSED_FOLDER']}")
+print(f"上传目录: {app.config['UPLOAD_FOLDER']}")
+print(f"处理目录: {app.config['PROCESSED_FOLDER']}")
 
 # ==================== Upload Job Center (for /processing) ====================
 UPLOAD_JOB_STEP_DEFS = [
@@ -1307,11 +1314,13 @@ AGENT_TOOL_SEQUENCE_MAP = {
     "ncct_only": [
         "detect_modalities",
         "load_patient_context",
+        "icv",
         "generate_medgemma_report",
     ],
     "ncct_single_phase_cta": [
         "detect_modalities",
         "load_patient_context",
+        "icv",
         "generate_medgemma_report",
     ],
     "ncct_mcta": [
@@ -1319,12 +1328,14 @@ AGENT_TOOL_SEQUENCE_MAP = {
         "load_patient_context",
         "generate_ctp_maps",
         "run_stroke_analysis",
+        "icv",
         "generate_medgemma_report",
     ],
     "ncct_mcta_ctp": [
         "detect_modalities",
         "load_patient_context",
         "run_stroke_analysis",
+        "icv",
         "generate_medgemma_report",
     ],
 }
@@ -1332,6 +1343,8 @@ AGENT_TOOL_SEQUENCE_MAP = {
 POST_UPLOAD_SUMMARY_TOOL_SEQUENCE = [
     "detect_modalities",
     "load_patient_context",
+    "run_stroke_analysis",
+    "icv",
     "generate_medgemma_report",
 ]
 
@@ -1339,6 +1352,11 @@ AGENT_TOOL_RETRY_LIMITS = {
     "generate_ctp_maps": 1,
     "run_stroke_analysis": 1,
     "generate_medgemma_report": 1,
+}
+
+AGENT_TOOL_STAGE_MAP = {
+    "icv": "icv",
+    "generate_medgemma_report": "summary",
 }
 
 TOOL_ERROR_SUGGESTIONS = {
@@ -1415,6 +1433,10 @@ def _tool_error_contract(error_code, error_message):
             code, "Inspect logs and retry when safe"
         ),
     }
+
+
+def _stage_for_tool(tool_name):
+    return AGENT_TOOL_STAGE_MAP.get(str(tool_name or "").strip(), "tooling")
 
 
 def _create_agent_run(
@@ -1962,6 +1984,73 @@ def _tool_run_stroke_analysis(run):
     )
 
 
+def _tool_icv(run):
+    try:
+        run_id = run.get("run_id") or run.get("id") or "unknown"
+        print(f"[ICV] Starting ICV evaluation for run_id={run_id}")
+        # build context from completed tools
+        context = _build_context_from_completed_tools(run)
+        planner_output = run.get("planner_output") or {}
+        tool_results = run.get("tool_results") or []
+
+        # lazy import to avoid circular references
+        try:
+            # Load the latest `icv.py` directly from file into an isolated module
+            import importlib.util, os
+            icv_path = os.path.join(PROJECT_ROOT, "backend", "icv.py")
+            spec = importlib.util.spec_from_file_location(f"icv_runtime_{run.get('run_id')}", icv_path)
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            evaluate_icv = getattr(m, "evaluate_icv")
+        except Exception as e:
+            return (
+                False,
+                None,
+                _tool_error_contract("TOOL_EXTERNAL_API_FAILED", f"Failed to import icv module: {e}"),
+            )
+
+        # Ensure analysis_result is populated from latest tool_results if missing
+        analysis_ctx = context.get("analysis_result") or {}
+        if not analysis_ctx:
+            # try to extract from tool_results list
+            for tr in (tool_results or []):
+                if tr.get("tool_name") == "run_stroke_analysis" and tr.get("status") == "completed":
+                    analysis_ctx = tr.get("structured_output") or {}
+                    break
+        icv_out = evaluate_icv(
+            planner_output=planner_output,
+            tool_results=tool_results,
+            patient_context=context.get("patient_context"),
+            analysis_result=analysis_ctx,
+        )
+        if not icv_out or not icv_out.get("success"):
+            print(f"[ICV] Evaluation failed for run_id={run_id}: success flag missing or False")
+            return (
+                False,
+                None,
+                _tool_error_contract("TOOL_EXECUTION_FAILED", "ICV evaluation failed"),
+            )
+        icv_payload = icv_out.get("icv") or {}
+        try:
+            status = (icv_payload.get("status") or "unknown").lower()
+            findings = icv_payload.get("findings") or []
+            total = len(findings)
+            pass_cnt = sum(1 for f in findings if str(f.get("status") or "").lower() == "pass")
+            warn_cnt = sum(1 for f in findings if str(f.get("status") or "").lower() == "warn")
+            fail_cnt = sum(1 for f in findings if str(f.get("status") or "").lower() == "fail")
+            print(
+                f"[ICV] Completed for run_id={run_id}: status={status}, "
+                f"findings_total={total}, pass={pass_cnt}, warn={warn_cnt}, fail={fail_cnt}"
+            )
+        except Exception as log_exc:
+            print(f"[ICV] Completed for run_id={run_id} but failed to summarize findings: {log_exc}")
+        return True, icv_payload, None
+    except Exception as exc:
+        run_id = run.get("run_id") or run.get("id") or "unknown"
+        print(f"[ICV] Exception during evaluation for run_id={run_id}: {exc}")
+        return False, None, _tool_error_contract("TOOL_EXECUTION_FAILED", str(exc))
+
+
 def _tool_generate_medgemma_report(run):
     planner_input = run.get("planner_input") or {}
     patient_id = planner_input.get("patient_id")
@@ -1980,11 +2069,48 @@ def _tool_generate_medgemma_report(run):
             None,
             _tool_error_contract("TOOL_EXTERNAL_API_FAILED", msg),
         )
+    # attach icv tool result (if present) into report_payload so frontend can render it
+    run = run or {}
+    icv_payload = None
+    icv_failed_result = None
+    try:
+        run_results = run.get("tool_results") or []
+        for r in run_results:
+            if r.get("tool_name") == "icv" and r.get("status") == "completed":
+                icv_payload = r.get("structured_output") or r.get("raw_ref")
+                break
+            if r.get("tool_name") == "icv" and r.get("status") == "failed":
+                icv_failed_result = r
+    except Exception:
+        icv_payload = None
+        icv_failed_result = None
+
+    report_payload = data.get("report_payload") or {}
+    if icv_payload is None and icv_failed_result is not None:
+        icv_payload = {
+            "status": "unavailable",
+            "finding_count": 0,
+            "score": 0.0,
+            "confidence_delta": 0.0,
+            "findings": [],
+            "error_code": icv_failed_result.get("error_code"),
+            "error_message": icv_failed_result.get("error_message"),
+            "suggested_action": icv_failed_result.get("suggested_action"),
+        }
+
+    if icv_payload is not None:
+        # embed under a top-level `icv` key
+        try:
+            report_payload = dict(report_payload)
+            report_payload["icv"] = icv_payload
+        except Exception:
+            pass
+
     return (
         True,
         {
             "report": data.get("report"),
-            "report_payload": data.get("report_payload"),
+            "report_payload": report_payload,
             "json_path": data.get("json_path"),
         },
         None,
@@ -2002,6 +2128,12 @@ def _execute_agent_tool(run_id, tool_name):
     started = time.time()
     input_ref = {"run_id": run_id, "tool_name": tool_name}
 
+    # --- Terminal progress logging ---
+    try:
+        print(f"[Agent] Tool '{tool_name}' starting for run_id={run_id}, attempt={attempt}")
+    except Exception:
+        pass
+
     try:
         if tool_name == "detect_modalities":
             ok, output, err = _tool_detect_modalities(run)
@@ -2015,6 +2147,9 @@ def _execute_agent_tool(run_id, tool_name):
         elif tool_name == "run_stroke_analysis":
             ok, output, err = _tool_run_stroke_analysis(run)
             agent_name = "Clinical Tool Agent"
+        elif tool_name == "icv":
+            ok, output, err = _tool_icv(run)
+            agent_name = "ICV Agent"
         elif tool_name == "generate_medgemma_report":
             ok, output, err = _tool_generate_medgemma_report(run)
             agent_name = "Clinical Summary Agent"
@@ -2032,6 +2167,18 @@ def _execute_agent_tool(run_id, tool_name):
         agent_name = "Clinical Tool Agent"
 
     latency_ms = int((time.time() - started) * 1000)
+    try:
+        if ok:
+            print(f"[Agent] Tool '{tool_name}' completed for run_id={run_id} in {latency_ms} ms")
+        else:
+            code = getattr(err, "get", lambda k, d=None: d)("error_code", None) if isinstance(err, dict) else None
+            msg = getattr(err, "get", lambda k, d=None: d)("error_message", str(err)) if isinstance(err, dict) else str(err)
+            print(
+                f"[Agent] Tool '{tool_name}' FAILED for run_id={run_id} in {latency_ms} ms: "
+                f"error_code={code}, message={msg}"
+            )
+    except Exception:
+        pass
     if ok:
         tool_result = {
             "tool_name": tool_name,
@@ -2122,7 +2269,7 @@ def _run_agent_pipeline(run_id, start_tool=None):
     def _start_mut(run):
         run["status"] = "running"
         if start_tool:
-            run["stage"] = "tooling"
+            run["stage"] = _stage_for_tool(start_tool)
         else:
             run["stage"] = "triage"
         run["error"] = None
@@ -2196,13 +2343,13 @@ def _run_agent_pipeline(run_id, start_tool=None):
 
             def _fail_retry_step(state):
                 state["status"] = "failed"
-                state["stage"] = "tooling"
+                state["stage"] = _stage_for_tool(start_tool)
                 state["error"] = err
 
             _update_agent_run(run_id, _fail_retry_step)
             _agent_log(
                 run_id=run_id,
-                stage="tooling",
+                stage=_stage_for_tool(start_tool),
                 tool=start_tool,
                 attempt=1,
                 status="run_failed",
@@ -2214,8 +2361,26 @@ def _run_agent_pipeline(run_id, start_tool=None):
         start_index = tool_sequence.index(start_tool)
 
     for tool_name in tool_sequence[start_index:]:
+        def _set_stage_for_tool(state):
+            state["stage"] = _stage_for_tool(tool_name)
+
+        _update_agent_run(run_id, _set_stage_for_tool)
         ok, tool_result = _execute_agent_tool(run_id, tool_name)
         if not ok:
+            if tool_name == "icv":
+                # Keep ICV as non-blocking for Week4.
+                _agent_log(
+                    run_id=run_id,
+                    stage="icv",
+                    tool=tool_name,
+                    attempt=tool_result.get("attempt"),
+                    status="run_continue",
+                    error_code=tool_result.get("error_code"),
+                    latency_ms=tool_result.get("latency_ms"),
+                    message="icv_soft_failure_non_blocking",
+                )
+                continue
+
             fail_contract = _tool_error_contract(
                 tool_result.get("error_code"),
                 tool_result.get("error_message") or "Tool execution failed",
@@ -2223,13 +2388,13 @@ def _run_agent_pipeline(run_id, start_tool=None):
 
             def _fail_tool(state):
                 state["status"] = "failed"
-                state["stage"] = "tooling"
+                state["stage"] = _stage_for_tool(tool_name)
                 state["error"] = fail_contract
 
             _update_agent_run(run_id, _fail_tool)
             _agent_log(
                 run_id=run_id,
-                stage="tooling",
+                stage=_stage_for_tool(tool_name),
                 tool=tool_name,
                 attempt=tool_result.get("attempt"),
                 status="run_failed",
@@ -2337,55 +2502,55 @@ def _queue_agent_retry(run_id, step_key, reason=""):
 AI_CONFIG_BASE = os.path.join(PROJECT_ROOT, "palette", "config")
 AI_WEIGHTS_BASE = os.path.join(PROJECT_ROOT, "palette", "weights")
 
-# 涓変釜妯″瀷鐨勯厤缃?
+# 三个模型的配置
 MODEL_CONFIGS = {
     "cbf": {
         "name": "CBF灌注图",
         "config_path": os.path.join(AI_CONFIG_BASE, "cbf.json"),
         "weight_dir": os.path.join(AI_WEIGHTS_BASE, "cbf"),
         "use_ema": True,
-        "color": "#e74c3c",  # 绾㈣壊
-        "description": "鑴戣娴侀噺 (Cerebral Blood Flow)",
+        "color": "#e74c3c",  # 红色
+        "description": "脑血流量 (Cerebral Blood Flow)",
     },
     "cbv": {
         "name": "CBV灌注图",
         "config_path": os.path.join(AI_CONFIG_BASE, "cbv.json"),
         "weight_dir": os.path.join(AI_WEIGHTS_BASE, "cbv"),
         "use_ema": True,
-        "color": "#3498db",  # 钃濊壊
-        "description": "鑴戣瀹归噺 (Cerebral Blood Volume)",
+        "color": "#3498db",  # 蓝色
+        "description": "脑血容量 (Cerebral Blood Volume)",
     },
     "tmax": {
         "name": "Tmax灌注图",
         "config_path": os.path.join(AI_CONFIG_BASE, "tmax.json"),
         "weight_dir": os.path.join(AI_WEIGHTS_BASE, "tmax"),
         "use_ema": True,
-        "color": "#27ae60",  # 缁胯壊
-        "description": "杈惧嘲鏃堕棿 (Time to Maximum)",
+        "color": "#27ae60",  # 绿色
+        "description": "达峰时间 (Time to Maximum)",
     },
 }
 
 
 def find_weight_file(weight_dir: str, pattern: str) -> str:
     """
-    鍦ㄦ潈閲嶇洰褰曚腑鏌ユ壘鍖归厤鐨勬枃浠?
+    在权重目录中查找匹配的权重文件。
 
     Args:
-        weight_dir: 鏉冮噸鐩綍璺緞
-        pattern: 鏂囦欢鍚嶆ā寮忥紙濡?"200_Network_ema.pth"锛?
+        weight_dir: 权重目录路径
+        pattern: 文件名模式（例如 "200_Network_ema.pth"）
 
     Returns:
-        鎵惧埌鐨勬枃浠惰矾寰勶紝鎴?None
+        匹配到的文件完整路径，找不到时返回 None
     """
     if not os.path.exists(weight_dir):
         return None
 
-    # 鐩存帴鍖归厤
+    # 先尝试直接匹配完整文件名
     direct_path = os.path.join(weight_dir, pattern)
     if os.path.exists(direct_path):
         return direct_path
 
-    # 鏌ユ壘鎵€鏈?.pth 鏂囦欢骞跺尮閰嶅墠缂€
+    # 再查找所有 .pth 文件并按前缀匹配
     for filename in os.listdir(weight_dir):
         if filename.endswith(".pth") and filename.startswith(pattern.split("_")[0]):
             return os.path.join(weight_dir, filename)
@@ -2395,57 +2560,58 @@ def find_weight_file(weight_dir: str, pattern: str) -> str:
 
 def get_weight_base_path(weight_dir: str) -> str:
     """
-    鑾峰彇鏉冮噸鏂囦欢鐨勫熀纭€璺緞锛堝幓鎺夋枃浠跺悕锛?
-    鏉冮噸鏂囦欢鍚嶆牸寮? XXX_Network.pth 鎴?XXX_Network_ema.pth
+    获取权重文件的基础路径（去掉文件名）。
+
+    权重文件命名格式：XXX_Network.pth 或 XXX_Network_ema.pth
     """
     if not os.path.exists(weight_dir):
         return None
 
-    # 鏌ユ壘鏉冮噸鏂囦欢
+    # 查找任意权重文件
     for filename in os.listdir(weight_dir):
         if filename.endswith("_Network.pth") or filename.endswith("_Network_ema.pth"):
-            # 鎻愬彇鏁板瓧閮ㄥ垎锛堝 200锛?
+            # 提取前缀部分（如 200）
             prefix = filename.split("_")[0]
             return os.path.join(weight_dir, prefix)
 
     return None
 
 
-# 鍏ㄥ眬妯″瀷瀛楀吀
+# 全局模型字典
 ai_models = {}
 
-# 缁熶竴鐨勪吉褰╁浘閰嶇疆 - 浣跨敤鍖诲鏍囧噯棰滆壊鏄犲皠
+# 统一的伪彩图配置 - 使用医学标准 colormap
 PSEUDOCOLOR_CONFIG = {
-    "colormap": "jet",  # 鍖诲鍥惧儚鏍囧噯棰滆壊鏄犲皠
-    "vmin": 0.1,  # 蹇界暐杩囦綆鐨勫€?
-    "vmax": 0.9,  # 閬垮厤杩囬ケ鍜?
+    "colormap": "jet",  # 医学图像常用伪彩色映射
+    "vmin": 0.1,  # 忽略过低的数值
+    "vmax": 0.9,  # 避免过高值挤占对比度
 }
 
 
 def init_ai_models():
-    """鍒濆鍖栨墍鏈堿I妯″瀷"""
+    """初始化所有已配置的 AI 模型。"""
     global ai_models
     ai_models = {}
 
     print("=" * 50)
-    print("寮€濮嬪垵濮嬪寲AI妯″瀷...")
+    print("开始初始化 AI 模型...")
     print("=" * 50)
 
     models_initialized = 0
 
-    # 鑷姩妫€娴嬭澶囷紝浼樺厛浣跨敤CUDA锛屽鏋滀笉鍙敤鍒欎娇鐢–PU
+    # 自动检测设备，优先使用 CUDA，不可用则退回 CPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"浣跨敤璁惧: {device}")
+    print(f"使用设备: {device}")
 
     for model_key, config in MODEL_CONFIGS.items():
-        print(f"\n鍒濆鍖?{config['name']} 妯″瀷:")
-        print(f"  閰嶇疆璺緞: {config['config_path']}")
-        print(f"  鏉冮噸鐩綍: {config['weight_dir']}")
+        print(f"\n初始化 {config['name']} 模型:")
+        print(f"  配置路径: {config['config_path']}")
+        print(f"  权重目录: {config['weight_dir']}")
 
-        # 浣跨敤鏂扮殑鏉冮噸妫€娴嬮€昏緫
+        # 使用新的权重检查逻辑
         weight_base = get_weight_base_path(config["weight_dir"])
 
-        # 妫€鏌ユ枃浠舵槸鍚﹀瓨鍦?
+        # 检查文件是否存在
         config_exists = os.path.exists(config["config_path"])
         ema_exists = (
             find_weight_file(config["weight_dir"], "_Network_ema.pth") is not None
@@ -2455,7 +2621,7 @@ def init_ai_models():
         )
 
         print(f"  配置文件: {'✓' if config_exists else '✗'}")
-        print(f"  鏉冮噸鍩虹璺緞: {weight_base}")
+        print(f"  权重基础路径: {weight_base}")
         print(f"  EMA权重: {'✓' if ema_exists else '✗'}")
         print(f"  普通权重: {'✓' if normal_exists else '✗'}")
 
@@ -2498,9 +2664,9 @@ def init_ai_models():
 
 
 def init_single_ai_model(config_path, weight_base, use_ema=True, device="cpu"):
-    """鍒濆鍖栧崟涓狝I妯″瀷"""
+    """初始化单个 AI 模型。"""
     try:
-        # 杩欓噷闇€瑕佹牴鎹偍鐨刟i_inference妯″潡璋冩暣鍒濆鍖栨柟寮?
+        # 这里需要根据当前项目的 ai_inference 模块进行适配
         try:
             from .ai_inference import MedicalAIModel
         except ImportError:
@@ -2509,12 +2675,12 @@ def init_single_ai_model(config_path, weight_base, use_ema=True, device="cpu"):
         model = MedicalAIModel(config_path, weight_base, use_ema=use_ema, device=device)
         return model
     except Exception as e:
-        print(f"鍒濆鍖栧崟涓ā鍨嬪け璐? {e}")
+        print(f"初始化单个模型失败: {e}")
         return None
 
 
 def get_ai_model(model_key="cbf"):
-    """鑾峰彇鎸囧畾鐨凙I妯″瀷"""
+    """获取指定 key 的 AI 模型实例。"""
     global ai_models
     if model_key in ai_models and ai_models[model_key]["available"]:
         return ai_models[model_key]["model"]
@@ -2522,7 +2688,7 @@ def get_ai_model(model_key="cbf"):
 
 
 def are_any_models_available():
-    """妫€鏌ユ槸鍚︽湁浠讳綍妯″瀷鍙敤"""
+    """检查是否有任意模型可用。"""
     global ai_models
     return any(model_info["available"] for model_info in ai_models.values())
 
@@ -2530,9 +2696,9 @@ def are_any_models_available():
 def get_available_models():
     """Return a list of available model keys."""
     global ai_models
-    # 浠巔alette妯″瀷閰嶇疆涓幏鍙栧彲鐢ㄦā鍨?
+    # 从 palette 模型配置中获取已加载成功的模型
     available = [key for key, info in ai_models.items() if info["available"]]
-    # 娣诲姞mrdpm妯″瀷锛堝鏋滄湁MRDPM鏉冮噸鏂囦欢锛?
+    # 追加 mrdpm 模型（如果 MRDPM 权重存在）
     mrdpm_available = check_mrdpm_models_available()
     for model_key in mrdpm_available:
         if model_key not in available:
@@ -2541,18 +2707,18 @@ def get_available_models():
 
 
 def check_mrdpm_models_available():
-    """妫€鏌RDPM妯″瀷鏄惁鍙敤"""
+    """检查 MRDPM 模型是否可用。"""
     available = []
     mrdpm_weights_dir = os.path.join(PROJECT_ROOT, "mrdpm", "weights")
 
     if not os.path.exists(mrdpm_weights_dir):
         return available
 
-    # 妫€鏌rdpm涓荤洰褰曟槸鍚﹀瓨鍦紙浣跨敤mrdpm浣滀负鐗规畩model_key锛?
+    # 检查 mrdpm 子目录是否存在（使用 mrdpm 作为特殊 model_key）
     bran_path = os.path.join(mrdpm_weights_dir, "bran_pretrained_3channel.pth")
     residual_path = os.path.join(mrdpm_weights_dir, "200_Network_ema.pth")
 
-    # mrdpm浣滀负鐗规畩鏍囪瘑锛屽彧瑕佹湁涓€涓瓙妯″瀷鍙敤锛宮rdpm灏卞彲鐢?
+    # mrdpm 作为特殊标识，只要有一个子模型可用，就认为 mrdpm 可用
     subdirs = [
         d
         for d in os.listdir(mrdpm_weights_dir)
@@ -2570,7 +2736,7 @@ def check_mrdpm_models_available():
     return available
 
 
-# ==================== 鏀硅繘鐨勪吉褰╁浘鐢熸垚鍑芥暟 ====================
+# ==================== 进阶伪彩图生成函数 ====================
 
 
 def create_medical_pseudocolor(grayscale_data, mask_data):
@@ -2673,72 +2839,72 @@ def generate_pseudocolor_for_slice(
     涓哄崟涓垏鐗囩殑鐏板害鍥剧敓鎴愪吉褰╁浘 - 鏀硅繘鐗堟湰
     """
     try:
-        print(f"涓哄垏鐗?{slice_idx} 鐨?{model_key.upper()} 鐢熸垚鍖诲鏍囧噯浼僵鍥?..")
+        print(f"为切片 {slice_idx} 的 {model_key.upper()} 生成医学标准伪彩图...")
 
-        # 妫€鏌ユ枃浠舵槸鍚﹀瓨鍦?
+        # 检查源灰度图是否存在
         if not os.path.exists(grayscale_path):
-            return {"success": False, "error": "鐏板害鍥句笉瀛樺湪"}
+            return {"success": False, "error": "灰度图像不存在"}
 
-        # 鍔犺浇鍥惧儚鏁版嵁
+        # 加载图像数据
         grayscale_img = Image.open(grayscale_path).convert("L")
         grayscale_data = np.array(grayscale_img) / 255.0
 
-        # 灏濊瘯鍔犺浇鎺╃爜鏂囦欢锛屽鏋滀笉瀛樺湪鍒欏垱寤洪粯璁ゆ帺鐮?
-        # 棣栧厛灏濊瘯鏍囧噯鎺╃爜鏂囦欢鏍煎紡锛坰lice_000_mask.png锛?
+        # 尝试加载掩码文件，如不存在则创建默认掩码
+        # 优先使用标准掩码文件格式：slice_000_mask.png
         standard_mask_path = os.path.join(output_dir, f"slice_{slice_idx:03d}_mask.png")
         if os.path.exists(standard_mask_path):
             mask_img = Image.open(standard_mask_path).convert("L")
             mask_data = np.array(mask_img) / 255.0
-            print(f"浣跨敤鏍囧噯鎺╃爜鏂囦欢: {standard_mask_path}")
+            print(f"使用标准掩码文件: {standard_mask_path}")
         elif os.path.exists(mask_path):
-            # 鐒跺悗灏濊瘯浼犲叆鐨刴ask_path
+            # 否则尝试使用传入的 mask_path
             mask_img = Image.open(mask_path).convert("L")
             mask_data = np.array(mask_img) / 255.0
-            print(f"浣跨敤鎺╃爜鏂囦欢: {mask_path}")
+            print(f"使用掩码文件: {mask_path}")
         else:
-            # 鍒涘缓榛樿鎺╃爜锛堜娇鐢ㄦ洿鍚堢悊鐨勯槇鍊硷紝鑰屼笉鏄叏鐧斤級
-            print(f"鎺╃爜鏂囦欢涓嶅瓨鍦紝鍒涘缓榛樿鎺╃爜: {standard_mask_path}")
-            # 浣跨敤Otsu闃堝€煎垱寤烘帺鐮侊紝鑰屼笉鏄叏鐧?
+            # 创建默认掩码（使用更合理的阈值，而不是全白）
+            print(f"掩码文件不存在，创建默认掩码: {standard_mask_path}")
+            # 使用 Otsu 阈值创建掩码，而不是全白
             from skimage import filters
 
             try:
                 otsu_threshold = filters.threshold_otsu(grayscale_data)
                 mask_data = grayscale_data > otsu_threshold
             except:
-                # 濡傛灉Otsu澶辫触锛屼娇鐢ㄥ熀浜庣櫨鍒嗘瘮鐨勯槇鍊?
+                # 如果 Otsu 失败，则使用基于分位数的阈值
                 low_thresh = np.percentile(grayscale_data, 10)
                 high_thresh = np.percentile(grayscale_data, 90)
                 mask_data = np.logical_and(
                     grayscale_data > low_thresh, grayscale_data < high_thresh
                 )
-            # 淇濆瓨榛樿鎺╃爜鍒版枃浠剁郴缁燂紙浣跨敤鏍囧噯鍛藉悕鏍煎紡锛?
+            # 将默认掩码保存到文件系统（使用标准命名格式）
             mask_8bit = (mask_data * 255).astype(np.uint8)
             os.makedirs(os.path.dirname(standard_mask_path), exist_ok=True)
             Image.fromarray(mask_8bit).save(standard_mask_path)
-            print(f"榛樿鎺╃爜宸蹭繚瀛? {standard_mask_path}")
+            print(f"默认掩码已保存: {standard_mask_path}")
 
-        # 鐢熸垚鍖诲鏍囧噯浼僵鍥?
+        # 生成医学标准伪彩图
         pseudocolor_data, lut_stats = create_medical_pseudocolor(
             grayscale_data, mask_data
         )
 
-        # 淇濆瓨浼僵鍥?
+        # 保存伪彩图
         slice_prefix = f"slice_{slice_idx:03d}"
         pseudocolor_path = os.path.join(
             output_dir, f"{slice_prefix}_{model_key}_pseudocolor.png"
         )
 
-        # 纭繚鐩綍瀛樺湪
+        # 确保目录存在
         os.makedirs(os.path.dirname(pseudocolor_path), exist_ok=True)
         Image.fromarray(pseudocolor_data).save(pseudocolor_path)
 
-        # 鏋勫缓URL
+        # 构建 URL
         file_id = os.path.basename(output_dir)
         pseudocolor_url = (
             f"/get_image/{file_id}/{slice_prefix}_{model_key}_pseudocolor.png"
         )
 
-        print(f"鉁?{model_key.upper()} 鍖诲鏍囧噯浼僵鍥剧敓鎴愭垚鍔? {pseudocolor_path}")
+        print(f"[OK] {model_key.upper()} 医学标准伪彩图生成成功: {pseudocolor_path}")
 
         return {
             "success": True,
@@ -2749,39 +2915,37 @@ def generate_pseudocolor_for_slice(
         }
 
     except Exception as e:
-        print(f"鉁?鐢熸垚浼僵鍥惧け璐? {e}")
+        print(f"[ERROR] 生成伪彩图失败: {e}")
         traceback.print_exc()
         return {"success": False, "error": str(e)}
 
 
 def generate_all_pseudocolors(output_dir, file_id, slice_idx):
-    """
-    涓哄崟涓垏鐗囩殑鎵€鏈夋ā鍨嬬敓鎴愪吉褰╁浘 - 鏀硅繘鐗堟湰
-    """
+    """为单个切片生成所有模型的伪彩图 - 加强版。"""
     try:
         pseudocolor_results = {}
         success_count = 0
 
         for model_key in MODEL_CONFIGS.keys():
-            # 鏋勫缓鏂囦欢璺緞
+            # 构建灰度图路径
             slice_prefix = f"slice_{slice_idx:03d}"
-            # 棣栧厛灏濊瘯鏌ユ壘AI鐢熸垚鐨勮緭鍑烘枃浠?
+            # 优先尝试查找 AI 生成的输出文件
             grayscale_path = os.path.join(
                 output_dir, f"{slice_prefix}_{model_key}_output.png"
             )
-            # 濡傛灉AI杈撳嚭鏂囦欢涓嶅瓨鍦紝灏濊瘯鏌ユ壘鍘熷CTP鍥惧儚鏂囦欢
+            # 如果 AI 输出文件不存在，则回退到原始 CTP 图像
             if not os.path.exists(grayscale_path):
                 grayscale_path = os.path.join(
                     output_dir, f"{slice_prefix}_{model_key}.png"
                 )
             mask_path = os.path.join(output_dir, f"{slice_prefix}_mask.png")
-            # 濡傛灉鏍囧噯鎺╃爜鏂囦欢涓嶅瓨鍦紝灏濊瘯鏌ユ壘鍏朵粬鍙兘鐨勬帺鐮佹枃浠?
+            # 如果标准掩码文件不存在，则尝试其他可能的掩码文件
             if not os.path.exists(mask_path):
                 mask_path = os.path.join(output_dir, f"{slice_prefix}_ncct_mask.png")
 
-            # 妫€鏌ョ伆搴﹀浘鏂囦欢鏄惁瀛樺湪
+            # 检查灰度图文件是否存在
             if os.path.exists(grayscale_path):
-                print(f"\n--- 涓?{model_key.upper()} 鐢熸垚鍖诲鏍囧噯浼僵鍥?---")
+                print(f"\n--- 为 {model_key.upper()} 生成医学标准伪彩图 ---")
                 result = generate_pseudocolor_for_slice(
                     grayscale_path, mask_path, output_dir, slice_idx, model_key
                 )
@@ -2789,15 +2953,15 @@ def generate_all_pseudocolors(output_dir, file_id, slice_idx):
                 if result["success"]:
                     success_count += 1
             else:
-                error_msg = f"鏂囦欢涓嶅瓨鍦? {grayscale_path}"
-                print(f"鉁?{error_msg}")
+                error_msg = f"文件不存在: {grayscale_path}"
+                print(f"[WARN] {error_msg}")
                 pseudocolor_results[model_key] = {"success": False, "error": error_msg}
 
         print(f"\n伪彩图生成统计: {success_count}/{len(MODEL_CONFIGS)} 个模型成功")
         return pseudocolor_results
 
     except Exception as e:
-        print(f"鐢熸垚鎵€鏈変吉褰╁浘澶辫触: {e}")
+        print(f"生成所有伪彩图失败: {e}")
         traceback.print_exc()
         return {}
 
@@ -2814,9 +2978,9 @@ def generate_pseudocolor(file_id, slice_index):
         if not os.path.exists(output_dir):
             return jsonify({"success": False, "error": "文件目录不存在"})
 
-        print(f"寮€濮嬩负鍒囩墖 {slice_index} 鐢熸垚鍖诲鏍囧噯浼僵鍥?..")
+        print(f"开始为切片 {slice_index} 生成医学标准伪彩图...")
 
-        # 鐢熸垚鎵€鏈夋ā鍨嬬殑浼僵鍥?
+        # 为所有模型生成伪彩图
         pseudocolor_results = generate_all_pseudocolors(
             output_dir, file_id, slice_index
         )
@@ -2838,21 +3002,21 @@ def generate_pseudocolor(file_id, slice_index):
         )
 
     except Exception as e:
-        print(f"鐢熸垚浼僵鍥捐矾鐢遍敊璇? {e}")
+        print(f"生成伪彩图路由出错: {e}")
         return jsonify({"success": False, "error": str(e)})
 
 
 @app.route("/generate_all_pseudocolors/<file_id>")
 def generate_all_pseudocolors_route(file_id):
-    """涓烘墍鏈夊垏鐗囩敓鎴愪吉褰╁浘 - 鍖诲鏍囧噯鐗堟湰"""
+    """为所有切片生成伪彩图 - 医学标准版本"""
     try:
         output_dir = os.path.join(app.config["PROCESSED_FOLDER"], file_id)
 
         if not os.path.exists(output_dir):
             return jsonify({"success": False, "error": "文件目录不存在"})
 
-        # 鏌ユ壘鎵€鏈夊垏鐗?
-        # 鍚屾椂鏌ユ壘AI鐢熸垚鐨勬枃浠跺拰鍘熷CTP鏂囦欢
+        # 查找所有切片文件
+        # 同时查找 AI 生成的文件和原始 CTP 文件
         slice_files = []
         for f in os.listdir(output_dir):
             if f.startswith("slice_") and any(
@@ -2865,7 +3029,7 @@ def generate_all_pseudocolors_route(file_id):
 
         for file in slice_files:
             try:
-                # 鎻愬彇鍒囩墖绱㈠紩锛歴lice_001_cbf_output.png 鎴?slice_001_cbf.png -> 1
+                # 提取切片索引，例如 slice_001_cbf_output.png 或 slice_001_cbf.png -> 1
                 index_str = file.split("_")[1]
                 slice_index = int(index_str)
                 slice_indices.append(slice_index)
@@ -2877,20 +3041,20 @@ def generate_all_pseudocolors_route(file_id):
         if not slice_indices:
             return jsonify({"success": False, "error": "未找到切片文件"})
 
-        print(f"寮€濮嬩负 {len(slice_indices)} 涓垏鐗囩敓鎴愬尰瀛︽爣鍑嗕吉褰╁浘...")
+        print(f"开始为 {len(slice_indices)} 个切片生成医学标准伪彩图...")
 
         all_results = {}
         total_success = 0
 
         for slice_idx in slice_indices:
-            print(f"\n=== 澶勭悊鍒囩墖 {slice_idx} ===")
+            print(f"\n=== 处理切片 {slice_idx} ===")
             results = generate_all_pseudocolors(output_dir, file_id, slice_idx)
             all_results[slice_idx] = results
 
-            # 缁熻璇ュ垏鐗囩殑鎴愬姛鏁伴噺
+            # 统计当前切片的成功数量
             slice_success = sum(1 for result in results.values() if result["success"])
             total_success += slice_success
-            print(f"鍒囩墖 {slice_idx} 瀹屾垚: {slice_success}/{len(MODEL_CONFIGS)}")
+            print(f"切片 {slice_idx} 完成: {slice_success}/{len(MODEL_CONFIGS)}")
 
         total_attempts = len(slice_indices) * len(MODEL_CONFIGS)
 
@@ -2903,12 +3067,12 @@ def generate_all_pseudocolors_route(file_id):
                 "total_attempts": total_attempts,
                 "success_rate": f"{(total_success / total_attempts * 100):.1f}%",
                 "results": all_results,
-                "message": f"鎴愬姛涓?{total_success}/{total_attempts} 涓粍鍚堢敓鎴愬尰瀛︽爣鍑嗕吉褰╁浘",
+                "message": f"成功在 {total_success}/{total_attempts} 个组合上生成医学标准伪彩图",
             }
         )
 
     except Exception as e:
-        print(f"鐢熸垚鎵€鏈変吉褰╁浘璺敱閿欒: {e}")
+        print(f"生成所有伪彩图路由出错: {e}")
         return jsonify({"success": False, "error": str(e)})
 
 
@@ -2916,12 +3080,12 @@ def generate_all_pseudocolors_route(file_id):
 def analyze_stroke(file_id):
     """执行脑卒中病灶分析。"""
     try:
-        # 鑾峰彇鍋忎晶鍙傛暟锛堥粯璁や负鍙屼晶锛?
+        # 获取侧别参数（默认双侧）
         hemisphere = request.args.get("hemisphere", "both")
 
-        print(f"寮€濮嬭剳鍗掍腑鍒嗘瀽 - 鐥呬緥: {file_id}, 鍋忎晶: {hemisphere}")
+        print(f"开始脑卒中病灶分析 - 病例: {file_id}, 侧别: {hemisphere}")
 
-        # 璋冪敤鍒嗘瀽鍑芥暟
+        # 调用分析函数
         analysis_results = analyze_stroke_case(file_id, hemisphere)
 
         # 灏唍umpy绫诲瀷杞崲涓篜ython鍘熺敓绫诲瀷浠ョ‘淇滼SON搴忓垪鍖?
@@ -2971,32 +3135,32 @@ def get_stroke_analysis_image(file_id, filename):
         image_path = os.path.join(
             app.config["PROCESSED_FOLDER"], file_id, "stroke_analysis", filename
         )
-        print(f"鑾峰彇鑴戝崚涓垎鏋愬浘鍍? {image_path}")  # 璋冭瘯淇℃伅
+        print(f"获取脑卒中分析图像: {image_path}")  # 调试信息
         if os.path.exists(image_path):
             return send_file(image_path, mimetype="image/png")
         else:
-            print(f"鍒嗘瀽鍥惧儚涓嶅瓨鍦? {image_path}")  # 璋冭瘯淇℃伅
+            print(f"分析图像不存在: {image_path}")  # 调试信息
             return jsonify({"error": "分析图像不存在"}), 404
     except Exception as e:
-        print(f"鑾峰彇鑴戝崚涓垎鏋愬浘鍍忛敊璇? {e}")  # 璋冭瘯淇℃伅
+        print(f"获取脑卒中分析图像出错: {e}")  # 调试信息
         return jsonify({"error": str(e)}), 404
 
 
 @app.route("/api/insert_patient", methods=["POST"])
 def api_insert_patient():
-    # 1. 鎺ユ敹鍓嶇浼犺繃鏉ョ殑JSON鏁版嵁
+    # 1. 接收前端传来的 JSON 数据
     data = request.get_json()
-    print("鏀跺埌鏁版嵁:", data)
+    print("收到数据:", data)
 
-    # 2. 鏍稿績琛ュ叏锛氳皟鐢ㄤ綘core鐩綍閲岀殑鍏ュ簱鍑芥暟锛屾墽琛孲upabase鍐欏叆鎿嶄綔
+    # 2. 写入主表：调用 core 目录中的封装函数，执行 Supabase 写入
     success, result = insert_patient_info(data)
 
-    # 3. 鏍规嵁鍏ュ簱缁撴灉锛岃繑鍥炵湡瀹炵殑鍝嶅簲缁欏墠绔?
+    # 3. 根据数据库结果，返回实际响应给前端
     if success:
-        # 鍐欏叆鎴愬姛锛氳繑鍥炵湡瀹炵殑鍏ュ簱鏁版嵁锛堝惈Supabase鑷姩鐢熸垚鐨処D锛?
-        return jsonify({"status": "success", "message": "鏁版嵁鍐欏叆鎴愬姛", "data": result})
+        # 写入成功：返回实际的数据库记录（含 Supabase 自动生成的 ID）
+        return jsonify({"status": "success", "message": "数据写入成功", "data": result})
     else:
-        # 鍐欏叆澶辫触锛氳繑鍥為敊璇俊鎭紝鍓嶇浼氬脊鍑虹孩鑹查敊璇彁绀?
+        # 写入失败：返回错误信息，前端会弹出错误提示
         return jsonify({"status": "error", "message": result}), 200
 
 
@@ -3412,7 +3576,7 @@ def api_save_report():
         return jsonify({"status": "error", "message": str(e)}), 500
 
 
-# 绠€鍗曠殑娴嬭瘯璺敱
+# 简单的测试路由
 @app.route("/test")
 def test_page():
     """娴嬭瘯璺敱"""
@@ -3432,7 +3596,7 @@ def _sse_format(payload: dict) -> str:
 def _truncate_text(text: str, max_chars: int = 6000) -> str:
     if len(text) <= max_chars:
         return text
-    return text[:max_chars] + "\n\n[鍐呭杩囬暱锛屽凡鎴柇]"
+    return text[:max_chars] + "\n\n[内容过长，已截断]"
 
 
 _CHAT_CONTEXT_LOCK = threading.Lock()
@@ -3487,8 +3651,10 @@ def _extract_patient_id_command(text: str):
             return None
 
     patterns = [
-        r"^(?:璇??(?:鍔犺浇|璇诲彇|鏌ヨ|鏌ョ湅|鍒囨崲鍒??\s*(?:鎮ｈ€厊鐥呬汉|patient)\s*(?:id)?\s*[:锛?]?\s*(\d{1,10})\s*$",
-        r"^(?:鎮ｈ€厊鐥呬汉|patient)\s*(?:id)?\s*[:锛?]?\s*(\d{1,10})\s*$",
+        # 例如：“请加载患者 id: 123”、“请切换到病人 ID 456” 等
+        r"^(?:请?(?:加载|读取|查询|查看|切换到)\s*(?:患者|病人|patient)\s*(?:id)?\s*[:：]?\s*(\d{1,10})\s*$",
+        # 例如：“患者 123”、“patient id 456” 等
+        r"^(?:患者|病人|patient)\s*(?:id)?\s*[:：]?\s*(\d{1,10})\s*$",
     ]
     for pattern in patterns:
         match = re.match(pattern, content, flags=re.IGNORECASE)
@@ -3931,7 +4097,7 @@ def _collect_pdf_parsed_text(images) -> str:
         if not parsed_content:
             continue
 
-        parsed_blocks.append(f"[PDF鏂囦欢: {filename}]\n{_truncate_text(parsed_content)}")
+        parsed_blocks.append(f"[PDF文件: {filename}]\n{_truncate_text(parsed_content)}")
 
     if not parsed_blocks:
         return ""
@@ -3985,7 +4151,7 @@ def _post_baichuan_chat_with_kb_fallback(headers, payload, timeout=60, stream=Fa
 
 @app.route("/api/chat/clinical/stream", methods=["POST"])
 def api_chat_clinical_stream():
-    """鍖荤枟AI涓村簥鑱婂ぉ鎺ュ彛 - 娴佸紡鍝嶅簲 (SSE)"""
+    """临床问答对话接口（流式 SSE 响应）"""
     data = request.get_json() or {}
     session_id = data.get("sessionId")
     question = data.get("question")
@@ -4062,14 +4228,14 @@ def api_chat_clinical_stream():
             yield _sse_format(
                 {
                     "type": "delta",
-                    "content": "鎻愮ず锛氬綋鍓嶉棶璇婃ā鍨嬩笉鏀寔鐭ヨ瘑搴撳寮猴紝鏈宸茶嚜鍔ㄥ垏鎹负涓嶅甫鐭ヨ瘑搴撶殑鍥炵瓟妯″紡銆俓n\n",
+                    "content": "提示：当前提问模式不支持知识库增强，本次已自动切换为不带知识库的回答模式。\n\n",
                 }
             )
 
         if response.status_code != 200:
             error_text = response.text[:2000]
             yield _sse_format(
-                {"type": "error", "error": f"API璋冪敤澶辫触: {response.status_code}"}
+                {"type": "error", "error": f"API 调用失败: {response.status_code}"}
             )
             if error_text:
                 yield _sse_format({"type": "delta", "content": error_text})
@@ -4241,9 +4407,9 @@ def api_kb_docs():
 
 @app.route("/kb-pdfs/<path:filename>")
 def serve_kb_pdf(filename):
-    """鎻愪緵鐭ヨ瘑搴揚DF鏂囦欢"""
+    """提供知识库 PDF 文件下载"""
     if not filename.lower().endswith(".pdf"):
-        return jsonify({"error": "鍙厑璁窹DF鏂囦欢"}), 400
+        return jsonify({"error": "只允许访问 PDF 文件"}), 400
     if not os.path.isdir(KB_PDF_DIR):
         return jsonify({"error": "PDF目录不存在"}), 404
     return send_from_directory(KB_PDF_DIR, filename, mimetype="application/pdf")
@@ -4251,18 +4417,18 @@ def serve_kb_pdf(filename):
 
 @app.route("/report/<int:patient_id>")
 def report_page(patient_id):
-    """娓叉煋鎶ュ憡椤甸潰
-    
-    鐢熶骇鐜锛氱洿鎺ヨ繑鍥?Vite 鏋勫缓鐨?index.html锛堝凡鍖呭惈姝ｇ‘鐨?/static/dist/ 鍓嶇紑锛?
-    寮€鍙戠幆澧冿細鎻愮ず寮€鍚?Vite 寮€鍙戞湇鍔″櫒鎴栧厛鏋勫缓鍓嶇
+    """渲染报告页面。
+
+    生产环境：直接返回 Vite 构建好的 index.html（已包含正确的 /static/dist/ 前缀）。
+    开发环境：提示先启动 Vite 开发服务器或完成前端构建。
     """
     dist_index = os.path.join(app.static_folder, "dist", "index.html")
     
     if os.path.exists(dist_index):
-        # 鉁?鐩存帴杩斿洖鏋勫缓濂界殑鏂囦欢锛屾棤闇€姝ｅ垯鏇挎崲锛圴ite 宸查厤缃?base 璺緞锛?
+        # ✓ 直接返回构建好的文件，无需再做路径替换（Vite 已配置 base 路径）
         return send_from_directory(os.path.join(app.static_folder, "dist"), "index.html")
     else:
-        # 鈿狅笍 寮€鍙戠幆澧冩彁绀?
+        # ⚠ 开发环境提示
         return jsonify({
             "error": "前端应用未构建",
             "solution": [
@@ -4274,28 +4440,28 @@ def report_page(patient_id):
 
 @app.route("/assets/<path:filename>")
 def serve_vite_assets(filename):
-    """涓?Vite 鏋勫缓鐨勫墠绔簲鐢ㄦ彁渚涢潤鎬佽祫婧愶紙JS/CSS 绛夛級"""
+    """为 Vite 构建的前端应用提供静态资源（JS/CSS 等）。"""
     dist_assets = os.path.join(app.static_folder, "dist", "assets")
     return send_from_directory(dist_assets, filename)
 
 
-# ==================== 鍥惧儚瀵规瘮搴﹁皟鑺侫PI ====================
+# ==================== 图像对比度调整 API ====================
 
 
 @app.route("/adjust_contrast/<file_id>/<int:slice_index>/<image_type>")
 def adjust_contrast(file_id, slice_index, image_type):
     """
-    璋冭妭鍥惧儚瀵规瘮搴︼紙绐楀绐椾綅锛?
+    调整图像对比度（窗宽/窗位）。
 
-    鍙傛暟:
-    - file_id: 鏂囦欢ID
-    - slice_index: 鍒囩墖绱㈠紩
-    - image_type: 鍥惧儚绫诲瀷 (mcta, ncct)
-    - window_width: 绐楀 (鏌ヨ鍙傛暟)
-    - window_level: 绐椾綅 (鏌ヨ鍙傛暟)
+    参数:
+    - file_id: 文件 ID
+    - slice_index: 切片索引
+    - image_type: 图像类型 (mcta, ncct)
+    - window_width: 窗宽 (查询参数 ww)
+    - window_level: 窗位 (查询参数 wl)
     """
     try:
-        # 鑾峰彇绐楀绐椾綅鍙傛暟
+        # 获取窗宽/窗位参数
         window_width = float(request.args.get("ww", 80))
         window_level = float(request.args.get("wl", 40))
 
@@ -4341,15 +4507,15 @@ def apply_window_level(img_array, window_width, window_level):
     """
     搴旂敤绐楀绐椾綅璋冭妭
 
-    鍙傛暟:
-    - img_array: 杈撳叆鍥惧儚鏁扮粍 (0-255)
-    - window_width: 绐楀
-    - window_level: 绐椾綅锛堢獥涓績锛?
+    参数:
+    - img_array: 输入图像数组 (0-255)
+    - window_width: 窗宽
+    - window_level: 窗位（窗中心）
 
-    杩斿洖:
-    - 璋冭妭鍚庣殑鍥惧儚鏁扮粍 (0-255)
+    返回:
+    - 调整后的图像数组 (0-255)
     """
-    # 璁＄畻绐楀彛鑼冨洿
+    # 计算窗宽范围
     window_min = window_level - window_width / 2
     window_max = window_level + window_width / 2
 
@@ -4369,12 +4535,12 @@ def apply_window_level(img_array, window_width, window_level):
 @app.route("/get_image_histogram/<file_id>/<int:slice_index>/<image_type>")
 def get_image_histogram(file_id, slice_index, image_type):
     """
-    鑾峰彇鍥惧儚鐩存柟鍥炬暟鎹?
+    获取图像直方图数据。
 
-    鍙傛暟:
-    - file_id: 鏂囦欢ID
-    - slice_index: 鍒囩墖绱㈠紩
-    - image_type: 鍥惧儚绫诲瀷 (mcta, ncct)
+    参数:
+    - file_id: 文件 ID
+    - slice_index: 切片索引
+    - image_type: 图像类型 (mcta, ncct)
     """
     try:
         # 楠岃瘉鍥惧儚绫诲瀷
@@ -4514,16 +4680,16 @@ def create_brain_mask(image, low_thresh=0.05, high_thresh=0.95):
     try:
         from skimage import morphology, measure, filters
 
-        # 鎻愬彇鎵€鏈夐€氶亾涓己搴︽渶楂樼殑閫氶亾
+        # 提取所有通道中强度范围最大的通道
         max_channel = np.argmax(np.max(image, axis=(0, 1)))
         channel_img = image[:, :, max_channel]
 
         print(
-            f"閫氶亾 {max_channel} 鏁版嵁鑼冨洿: [{channel_img.min():.3f}, {channel_img.max():.3f}]"
+            f"通道 {max_channel} 数据范围: [{channel_img.min():.3f}, {channel_img.max():.3f}]"
         )
 
-        # 1. 浣跨敤鏇村鏉剧殑闃堝€艰寖鍥?
-        # 鍏堣繘琛岄珮鏂护娉㈠噺灏戝櫔澹帮紝浣嗕繚鐣欐洿澶氱粏鑺?
+        # 1. 使用较宽的强度范围
+        # 先进行高斯滤波平滑，保留更多细节
         smoothed = filters.gaussian(channel_img, sigma=0.5)
 
         # 璁＄畻鑷€傚簲闃堝€?
@@ -4531,20 +4697,20 @@ def create_brain_mask(image, low_thresh=0.05, high_thresh=0.95):
         data_max = smoothed.max()
         data_range = data_max - data_min
 
-        # 鑷€傚簲闃堝€艰绠?
+        # 计算自适应阈值范围
         adaptive_low = data_min + data_range * low_thresh
         adaptive_high = data_min + data_range * high_thresh
 
-        print(f"鑷€傚簲闃堝€? [{adaptive_low:.3f}, {adaptive_high:.3f}]")
+        print(f"自适应阈值范围: [{adaptive_low:.3f}, {adaptive_high:.3f}]")
 
-        # 鍒濆闃堝€煎垎鍓?- 浣跨敤鏇村鏉剧殑鑼冨洿
+        # 初始阈值分割 - 使用较宽的范围
         initial_mask = np.logical_and(
             smoothed > adaptive_low, smoothed < adaptive_high
         ).astype(np.uint8)
 
-        print(f"鍒濆鎺╃爜涓€间负1鐨勫儚绱犳暟閲? {np.sum(initial_mask)}")
+        print(f"初始掩码中值为 1 的像素数: {np.sum(initial_mask)}")
 
-        # 2. 鏀硅繘鐨勮繛閫氬尯鍩熷垎鏋?
+        # 2. 连通区域分析
         labeled_mask = measure.label(initial_mask)
         regions = measure.regionprops(labeled_mask)
 
@@ -4552,13 +4718,13 @@ def create_brain_mask(image, low_thresh=0.05, high_thresh=0.95):
             print("未找到任何区域")
             return np.zeros_like(channel_img)
 
-        # 鎸夐潰绉帓搴忥紝淇濈暀鏇村鍖哄煙
+        # 按面积排序，保留多个较大区域
         regions_sorted = sorted(regions, key=lambda r: r.area, reverse=True)
 
         print(f"找到 {len(regions_sorted)} 个连通区域")
         print("前5个区域面积:", [r.area for r in regions_sorted[:5]])
 
-        # 鍒涘缓鍖呭惈澶氫釜澶у尯鍩熺殑鎺╃爜
+        # 创建包含多个大区域的掩码
         brain_mask = np.zeros_like(channel_img, dtype=np.uint8)
         total_area = 0
         area_threshold = max(50, channel_img.shape[0] * channel_img.shape[1] * 0.001)
@@ -4573,9 +4739,9 @@ def create_brain_mask(image, low_thresh=0.05, high_thresh=0.95):
                 if i >= 5:
                     break
 
-        print(f"鏈€缁堟帺鐮佷腑鍊间负1鐨勫儚绱犳暟閲? {np.sum(brain_mask)}")
+        print(f"最终掩码中值为 1 的像素数: {np.sum(brain_mask)}")
 
-        # 3. 鏇存俯鍜岀殑褰㈡€佸鎿嶄綔
+        # 3. 平滑与形态学操作
         small_disk = morphology.disk(1)
 
         # 鍏堥棴杩愮畻濉厖灏忓瓟娲?
@@ -4590,10 +4756,10 @@ def create_brain_mask(image, low_thresh=0.05, high_thresh=0.95):
         # 鍘婚櫎澶皬鐨勫绔嬪尯鍩?
         final_mask = morphology.remove_small_objects(filled_mask, min_size=50)
 
-        # 杞诲井鑶ㄨ儉浠ヨ繛鎺ラ偦杩戝尯鍩?
+        # 膨胀操作连接相邻区域
         dilated_mask = morphology.binary_dilation(final_mask, small_disk)
 
-        # 鏈€缁堝钩婊?
+        # 最终闭运算平滑边界
         smoothed_mask = morphology.binary_closing(dilated_mask, small_disk)
 
         final_pixel_count = np.sum(smoothed_mask)
@@ -4611,19 +4777,19 @@ def create_brain_mask(image, low_thresh=0.05, high_thresh=0.95):
 
 def create_brain_mask_numpy(image, low_thresh=0.05, high_thresh=0.95):
     """
-    浣跨敤绾?NumPy 瀹炵幇鐨勬敼杩涜剳閮ㄦ帺鐮佺敓鎴?
+    使用纯 NumPy 实现的备用脑区掩码生成方法。
     """
     try:
         from scipy import ndimage
 
-        # 鎻愬彇鎵€鏈夐€氶亾涓己搴︽渶楂樼殑閫氶亾
+        # 提取所有通道中强度范围最大的通道
         max_channel = np.argmax(np.max(image, axis=(0, 1)))
         channel_img = image[:, :, max_channel]
 
         # 楂樻柉婊ゆ尝
         smoothed = ndimage.gaussian_filter(channel_img, sigma=0.5)
 
-        # 鑷€傚簲闃堝€?
+        # 计算自适应阈值
         data_min = smoothed.min()
         data_max = smoothed.max()
         data_range = data_max - data_min
@@ -4631,21 +4797,21 @@ def create_brain_mask_numpy(image, low_thresh=0.05, high_thresh=0.95):
         adaptive_low = data_min + data_range * low_thresh
         adaptive_high = data_min + data_range * high_thresh
 
-        # 闃堝€煎垎鍓?
+        # 阈值分割
         initial_mask = np.logical_and(
             smoothed > adaptive_low, smoothed < adaptive_high
         ).astype(np.uint8)
 
-        # 杩為€氱粍浠跺垎鏋?
+        # 连通组件分析
         labeled_mask, num_features = ndimage.label(initial_mask)
 
         if num_features == 0:
             return np.zeros_like(channel_img)
 
-        # 璁＄畻姣忎釜缁勪欢鐨勯潰绉?
+        # 计算每个组件的面积
         sizes = ndimage.sum(initial_mask, labeled_mask, range(1, num_features + 1))
 
-        # 鍒涘缓鎺╃爜锛屼繚鐣欓潰绉冻澶熷ぇ鐨勭粍浠?
+        # 创建掩码，保留面积足够大的组件
         brain_mask = np.zeros_like(channel_img)
         min_size = max(50, channel_img.shape[0] * channel_img.shape[1] * 0.001)
 
@@ -4653,25 +4819,25 @@ def create_brain_mask_numpy(image, low_thresh=0.05, high_thresh=0.95):
             if sizes[i] >= min_size:
                 brain_mask[labeled_mask == i + 1] = 1
 
-        # 褰㈡€佸鎿嶄綔
+        # 形态学操作
         structure = np.ones((2, 2))
 
-        # 闂繍绠楀～鍏呭瓟娲?
+        # 闭运算填补空洞
         closed_mask = ndimage.binary_closing(brain_mask, structure=structure)
 
-        # 寮€杩愮畻鍘婚櫎鍣０
+        # 开运算去除噪点
         opened_mask = ndimage.binary_opening(closed_mask, structure=structure)
 
-        # 濉厖鍓╀綑瀛旀礊
+        # 填补孤立空洞
         filled_mask = ndimage.binary_fill_holes(opened_mask)
 
-        # 鏈€缁堥棴杩愮畻骞虫粦杈圭晫
+        # 最终闭运算并平滑边界
         final_mask = ndimage.binary_closing(filled_mask, structure=structure)
 
         return final_mask.astype(np.float32)
 
     except ImportError:
-        # 鏈€绠€鐗堟湰 - 鐩存帴闃堝€?
+        # 最简版本 - 直接按强度范围阈值分割
         max_channel = np.argmax(np.max(image, axis=(0, 1)))
         channel_img = image[:, :, max_channel]
 
@@ -4690,7 +4856,7 @@ def create_brain_mask_numpy(image, low_thresh=0.05, high_thresh=0.95):
 
 def create_adaptive_brain_mask(image):
     """
-    浣跨敤鑷€傚簲闃堝€兼柟娉曠殑鑴戦儴鎺╃爜鐢熸垚
+    使用自适应阈值方法生成脑区掩码。
     """
     try:
         from skimage import filters, morphology, measure
@@ -4698,24 +4864,24 @@ def create_adaptive_brain_mask(image):
         max_channel = np.argmax(np.max(image, axis=(0, 1)))
         channel_img = image[:, :, max_channel]
 
-        # 浣跨敤Otsu鏂规硶鑷姩璁＄畻闃堝€?
+        # 使用 Otsu 方法自动计算阈值
         try:
             otsu_threshold = filters.threshold_otsu(channel_img)
-            # 鍩轰簬Otsu闃堝€艰缃寖鍥?
+            # 基于 Otsu 阈值设置上下范围
             low_thresh = otsu_threshold * 0.3
             high_thresh = otsu_threshold * 2.0
         except:
-            # 濡傛灉Otsu澶辫触锛屼娇鐢ㄧ櫨鍒嗘瘮
+            # 如果 Otsu 失败，退化为分位数阈值
             low_thresh = np.percentile(channel_img, 10)
             high_thresh = np.percentile(channel_img, 90)
 
-        print(f"鑷€傚簲闃堝€? [{low_thresh:.3f}, {high_thresh:.3f}]")
+        print(f"自适应阈值范围: [{low_thresh:.3f}, {high_thresh:.3f}]")
 
         initial_mask = np.logical_and(
             channel_img > low_thresh, channel_img < high_thresh
         ).astype(np.uint8)
 
-        # 鍚庣画澶勭悊
+        # 后续形态学处理
         labeled_mask = measure.label(initial_mask)
         regions = measure.regionprops(labeled_mask)
 
@@ -4729,7 +4895,7 @@ def create_adaptive_brain_mask(image):
             if region.area > 100:
                 brain_mask[labeled_mask == region.label] = 1
 
-        # 娓╁拰鐨勫舰鎬佸鎿嶄綔
+        # 平滑与形态学操作
         small_disk = morphology.disk(1)
         cleaned_mask = morphology.binary_opening(brain_mask, small_disk)
         filled_mask = morphology.remove_small_holes(cleaned_mask, area_threshold=50)
@@ -4738,13 +4904,13 @@ def create_adaptive_brain_mask(image):
         return final_mask.astype(np.float32)
 
     except Exception as e:
-        print(f"鑷€傚簲鏂规硶澶辫触: {e}")
+        print(f"自适应方法失败: {e}")
         return create_brain_mask(image)
 
 
 def create_otsu_brain_mask(image):
     """
-    浣跨敤Otsu闃堝€兼柟娉曠殑鑴戦儴鎺╃爜鐢熸垚
+    使用 Otsu 阈值方法生成脑区掩码。
     """
     try:
         from skimage import filters, morphology, measure
@@ -4752,11 +4918,11 @@ def create_otsu_brain_mask(image):
         max_channel = np.argmax(np.max(image, axis=(0, 1)))
         channel_img = image[:, :, max_channel]
 
-        # Otsu鑷姩闃堝€?
+        # Otsu 自动阈值
         otsu_threshold = filters.threshold_otsu(channel_img)
         initial_mask = channel_img > otsu_threshold
 
-        # 褰㈡€佸鎿嶄綔
+        # 形态学操作
         small_disk = morphology.disk(1)
         cleaned_mask = morphology.binary_opening(initial_mask, small_disk)
         filled_mask = morphology.remove_small_holes(cleaned_mask, area_threshold=100)
@@ -4765,53 +4931,53 @@ def create_otsu_brain_mask(image):
         return final_mask.astype(np.float32)
 
     except Exception as e:
-        print(f"Otsu鏂规硶澶辫触: {e}")
+        print(f"Otsu 方法失败: {e}")
         return create_brain_mask(image)
 
 
 def create_overlay_image(rgb_data, mask, output_dir, slice_idx):
     """
-    鍒涘缓鍘熷鍥惧儚涓庢帺鐮佺殑鍙犲姞鍥惧儚
+    创建原始图像与掩码叠加的 RGB 图像。
     """
     try:
-        # 鎻愬彇寮哄害鏈€楂樼殑閫氶亾浣滀负鐏板害鑳屾櫙
+        # 提取强度最高的通道作为灰度背景
         max_channel = np.argmax(np.max(rgb_data, axis=(0, 1)))
         background = rgb_data[:, :, max_channel]
 
-        # 褰掍竴鍖栬儗鏅?
+        # 归一化背景
         background_normalized = (background - background.min()) / (
             background.max() - background.min()
         )
         background_8bit = (background_normalized * 255).astype(np.uint8)
 
-        # 鍒涘缓RGB鍙犲姞鍥惧儚
+        # 创建 RGB 叠加图
         overlay = np.stack([background_8bit] * 3, axis=2)
 
-        # 鍦ㄦ帺鐮佸尯鍩熸坊鍔犵孩鑹插彔鍔?
+        # 在掩码区域添加红色高亮
         mask_indices = mask > 0.5
         overlay[mask_indices, 0] = 255
         overlay[mask_indices, 1] = np.minimum(overlay[mask_indices, 1], 150)
         overlay[mask_indices, 2] = np.minimum(overlay[mask_indices, 2], 150)
 
-        # 淇濆瓨鍙犲姞鍥惧儚
+        # 保存叠加图
         overlay_path = os.path.join(output_dir, f"slice_{slice_idx:03d}_overlay.png")
         Image.fromarray(overlay).save(overlay_path)
 
         return f"/get_image/{os.path.basename(output_dir)}/slice_{slice_idx:03d}_overlay.png"
 
     except Exception as e:
-        print(f"鍒涘缓鍙犲姞鍥惧儚澶辫触: {e}")
+        print(f"创建叠加图像失败: {e}")
         return ""
 
 
 def generate_mask_for_slice(rgb_data, output_dir, slice_idx):
     """
-    涓哄崟涓垏鐗囩敓鎴愭帺鐮侊紝灏濊瘯澶氱鏂规硶 - 淇鐗堟湰
+    为单个切片生成掩码，尝试多种方法 - 修正版。
     """
     try:
-        print(f"涓哄垏鐗?{slice_idx} 鐢熸垚鎺╃爜...")
+        print(f"为切片 {slice_idx} 生成掩码...")
 
-        # 灏濊瘯澶氱鏂规硶锛岄€夋嫨鏈€濂界殑涓€涓?
+        # 尝试多种方法，选择效果最好的一个
         methods = ["adaptive", "standard", "otsu"]
         best_mask = None
         best_coverage = 0
@@ -4829,7 +4995,7 @@ def generate_mask_for_slice(rgb_data, output_dir, slice_idx):
                     )
 
                 coverage = np.sum(mask) / (mask.shape[0] * mask.shape[1])
-                print(f"鏂规硶 {method} 瑕嗙洊鐜? {coverage:.3f}")
+                print(f"方法 {method} 覆盖率 {coverage:.3f}")
 
                 if coverage > best_coverage and coverage > 0.02 and coverage < 0.98:
                     best_mask = mask
@@ -4837,7 +5003,7 @@ def generate_mask_for_slice(rgb_data, output_dir, slice_idx):
                     best_method = method
 
             except Exception as e:
-                print(f"鏂规硶 {method} 澶辫触: {e}")
+                print(f"方法 {method} 失败: {e}")
                 continue
 
         if best_mask is None:
@@ -4848,18 +5014,18 @@ def generate_mask_for_slice(rgb_data, output_dir, slice_idx):
                 best_mask.shape[0] * best_mask.shape[1]
             )
 
-        print(f"閫夋嫨鏂规硶: {best_method}, 鏈€缁堣鐩栫巼: {best_coverage:.3f}")
+        print(f"选择方法: {best_method}, 最终覆盖率: {best_coverage:.3f}")
 
-        # 淇濆瓨鎺╃爜涓篜NG鍥惧儚
+        # 保存掩码为 PNG 图像
         mask_8bit = (best_mask * 255).astype(np.uint8)
         mask_path = os.path.join(output_dir, f"slice_{slice_idx:03d}_mask.png")
         Image.fromarray(mask_8bit).save(mask_path)
 
-        # 淇濆瓨鎺╃爜涓篘PY鏂囦欢
+        # 保存掩码为 NPY 文件
         mask_npy_path = os.path.join(output_dir, f"slice_{slice_idx:03d}_mask.npy")
         np.save(mask_npy_path, best_mask)
 
-        # 鐢熸垚鍙犲姞鍥惧儚
+        # 生成叠加图像
         overlay_url = create_overlay_image(rgb_data, best_mask, output_dir, slice_idx)
 
         return {
@@ -4869,12 +5035,12 @@ def generate_mask_for_slice(rgb_data, output_dir, slice_idx):
             "overlay_url": overlay_url,
             "coverage": float(best_coverage),
             "method": best_method,
-            "mask_data": best_mask,  # 鍏抽敭锛氱‘淇濊繑鍥炴帺鐮佹暟鎹?
+            "mask_data": best_mask,  # 关键：确保返回掩码数据
         }
 
     except Exception as e:
-        print(f"鐢熸垚鎺╃爜澶辫触: {e}")
-        # 杩斿洖涓€涓┖鐨勬帺鐮侊紝浣嗙‘淇濆寘鍚玬ask_data
+        print(f"生成掩码失败: {e}")
+        # 返回一个空掩码，但仍然包含 mask_data
         empty_mask = np.zeros((rgb_data.shape[0], rgb_data.shape[1]))
         mask_path = os.path.join(output_dir, f"slice_{slice_idx:03d}_mask.png")
         Image.fromarray(empty_mask.astype(np.uint8)).save(mask_path)
@@ -4891,7 +5057,7 @@ def generate_mask_for_slice(rgb_data, output_dir, slice_idx):
             "overlay_url": overlay_url,
             "coverage": 0.0,
             "method": "error",
-            "mask_data": empty_mask,  # 鍏抽敭锛氬嵆浣垮け璐ヤ篃杩斿洖鎺╃爜鏁版嵁
+            "mask_data": empty_mask,  # 关键：即使失败也返回掩码数据
         }
 
 
@@ -5002,7 +5168,7 @@ def process_rgb_synthesis(
         if not NIBABEL_AVAILABLE:
             return {
                 "success": False,
-                "error": 'nibabel 搴撲笉鍙敤锛岃瀹夎: pip install "numpy<2.0" nibabel',
+                "error": 'nibabel 库不可用，请安装依赖: pip install "numpy<2.0" nibabel',
             }
 
         # NCCT 蹇呴€?
@@ -5019,15 +5185,15 @@ def process_rgb_synthesis(
             print(f"{label} 缁村害: {data.shape}")
             return img, data
 
-        mcta_img, mcta_data = load_optional_nifti(mcta_path, "鍔ㄨ剦鏈烠TA")
-        vcta_img, vcta_data = load_optional_nifti(vcta_path, "闈欒剦鏈烠TA")
-        dcta_img, dcta_data = load_optional_nifti(dcta_path, "寤惰繜鏈烠TA")
+        mcta_img, mcta_data = load_optional_nifti(mcta_path, "动脉期 CTA")
+        vcta_img, vcta_data = load_optional_nifti(vcta_path, "静脉期 CTA")
+        dcta_img, dcta_data = load_optional_nifti(dcta_path, "延迟期 CTA")
 
-        # 妫€鏌ュ凡鎻愪緵鏂囦欢缁村害鏄惁涓€鑷达紙浠?NCCT 涓哄熀鍑嗭級
+        # 检查已提供文件维度是否与 NCCT 一致（以 NCCT 为基准）
         for label, data in [
-            ("鍔ㄨ剦鏈烠TA", mcta_data),
-            ("闈欒剦鏈烠TA", vcta_data),
-            ("寤惰繜鏈烠TA", dcta_data),
+            ("动脉期 CTA", mcta_data),
+            ("静脉期 CTA", vcta_data),
+            ("延迟期 CTA", dcta_data),
         ]:
             if data is not None and data.shape != ncct_data.shape:
                 return {
@@ -5035,7 +5201,7 @@ def process_rgb_synthesis(
                     "error": f"{label} 维度 {data.shape} 与 NCCT 维度 {ncct_data.shape} 不匹配",
                 }
 
-        # 瀵圭己澶辩殑鏈熺浉浣跨敤闆剁煩闃靛崰浣嶏紝纭繚娴佺▼涓€鑷?
+        # 对缺失的相位使用全零占位，保证流程一致
         mcta_data = mcta_data if mcta_data is not None else np.zeros_like(ncct_data)
         vcta_data = vcta_data if vcta_data is not None else np.zeros_like(ncct_data)
         dcta_data = dcta_data if dcta_data is not None else np.zeros_like(ncct_data)
@@ -5200,7 +5366,7 @@ def process_rgb_synthesis(
                         has_any_model_success = True
                     else:
                         error_msg = (
-                            ai_result.get("error", "鏈煡閿欒")
+                            ai_result.get("error", "未知错误")
                             if ai_result
                             else "无结果"
                         )
@@ -5210,18 +5376,18 @@ def process_rgb_synthesis(
                 except Exception as e:
                     print(f"鉁?{model_key.upper()}妯″瀷鎺ㄧ悊寮傚父鍒囩墖 {slice_idx}: {e}")
 
-            # 娣诲姞鎬讳綋AI鐘舵€?
+            # 为当前切片标记是否有任一 AI 结果
             slice_result["has_ai"] = slice_has_any_ai
             rgb_files.append(slice_result)
 
-        # 缁熻淇℃伅
-        print(f"\n=== AI妯″瀷澶勭悊缁熻 ===")
-        print(f"鎬诲垏鐗囨暟: {len(rgb_files)}")
+        # 统计信息
+        print(f"\n=== AI 模型处理统计 ===")
+        print(f"总切片数: {len(rgb_files)}")
         for model_key, count in model_success_counts.items():
             status = "可用" if model_key in available_models else "不可用"
             print(f"{model_key.upper()} 模型: {count} 个切片成功 ({status})")
 
-        # 鍦ㄥ厓鏁版嵁涓坊鍔犳ā鍨嬬姸鎬佷俊鎭?
+        # 在元数据中添加模型状态信息
         metadata.update(
             {
                 "models_available": available_models,
@@ -5233,7 +5399,7 @@ def process_rgb_synthesis(
             }
         )
 
-        # 娣诲姞姣忎釜妯″瀷鐨勮缁嗕俊鎭?
+        # 为每个模型添加详细信息
         for model_key, config in MODEL_CONFIGS.items():
             metadata.update(
                 {
@@ -5245,7 +5411,7 @@ def process_rgb_synthesis(
                 }
             )
 
-        # 鏋勫缓鏈€缁堣繑鍥炵粨鏋?
+        # 构建最终返回结果
         result = {
             "success": True,
             "file_id": os.path.basename(output_dir),
@@ -5257,43 +5423,42 @@ def process_rgb_synthesis(
             "model_configs": MODEL_CONFIGS,
         }
 
-        print(f"\n=== 杩斿洖缁欏墠绔殑鏁版嵁缁撴瀯 ===")
-        print(f"椤跺眰has_ai: {result['has_ai']}")
-        print(f"鍙敤妯″瀷: {result['available_models']}")
-        print(f"妯″瀷閰嶇疆: {list(result['model_configs'].keys())}")
+        print(f"\n=== 返回给前端的数据结构 ===")
+        print(f"顶层 has_ai: {result['has_ai']}")
+        print(f"可用模型: {result['available_models']}")
+        print(f"模型配置: {list(result['model_configs'].keys())}")
         print("============================\n")
 
         return result
 
     except Exception as e:
-        print(f"澶勭悊RGB鍚堟垚澶辫触: {e}")
+        print(f"处理 RGB 合成失败: {e}")
         traceback.print_exc()
         return {"success": False, "error": str(e)}
 
-
-# 鍦ㄥ簲鐢ㄥ惎鍔ㄦ椂鍒濆鍖?
+# 在应用启动时初始化
 def initialize_app():
     """应用初始化函数 - 多模型版本。"""
     print("=" * 50)
     print("医学图像处理Web系统初始化 - 医学标准伪彩图版本")
     print("=" * 50)
 
-    # 鍒涘缓蹇呰鐨勭洰褰?
+    # 创建必要目录
     os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
     os.makedirs(app.config["PROCESSED_FOLDER"], exist_ok=True)
 
-    print(f"涓婁紶鐩綍: {app.config['UPLOAD_FOLDER']}")
-    print(f"澶勭悊鐩綍: {app.config['PROCESSED_FOLDER']}")
+    print(f"上传目录: {app.config['UPLOAD_FOLDER']}")
+    print(f"处理目录: {app.config['PROCESSED_FOLDER']}")
 
-    # 鍒濆鍖朅I妯″瀷
+    # 初始化 AI 模型
     ai_initialized = init_ai_models()
 
-    # 璁剧疆鍏ㄥ眬鏍囧織
+    # 设置全局标记
     app.config["AI_AVAILABLE"] = ai_initialized
     app.config["AI_MODELS"] = ai_models
     app.config["MODEL_CONFIGS"] = MODEL_CONFIGS
 
-    print(f"AI鍔熻兘鍙敤: {ai_initialized}")
+    print(f"AI 功能可用: {ai_initialized}")
     print("✓ 应用初始化完成")
     print("=" * 50)
 
@@ -5306,22 +5471,22 @@ def ensure_app_initialized():
     app.has_initialized = True
 
 
-# 浣跨敤搴旂敤涓婁笅鏂囪繘琛屽垵濮嬪寲
+# 使用应用上下文进行初始化
 with app.app_context():
     ensure_app_initialized()
 
 
-# 娣诲姞鍚姩鏃跺垵濮嬪寲
+# 添加启动时的初始化钩子
 @app.before_request
 def before_first_request():
     """替代 before_first_request 的初始化方案。"""
     ensure_app_initialized()
 
 
-# 淇敼涓嬭浇璺敱浠ユ敮鎸佸妯″瀷
+# 修改下载路由以支持多模型
 @app.route("/download_ai/<model_key>/<file_id>/<int:slice_index>")
 def download_ai(model_key, file_id, slice_index):
-    """涓嬭浇鐗瑰畾妯″瀷鐨凙I鎺ㄧ悊缁撴灉NPY鏂囦欢"""
+    """下载指定模型的 AI 推理结果 NPY 文件。"""
     try:
         if model_key not in MODEL_CONFIGS:
             return jsonify({"error": f"无效的模型类型: {model_key}"}), 400
@@ -5337,7 +5502,7 @@ def download_ai(model_key, file_id, slice_index):
         return jsonify({"error": str(e)}), 404
 
 
-# 鍏朵綑鍑芥暟淇濇寔涓嶅彉...
+# 其余图像处理函数保持不变...
 def generate_rgb_slices(
     mcta_slice,
     vcta_slice,
@@ -5349,36 +5514,34 @@ def generate_rgb_slices(
     vcta_present=True,
     dcta_present=True,
 ):
-    """
-    鐢熸垚RGB鍚堟垚鍥惧儚鍜屽崟鐙€氶亾鍥惧儚
-    """
+    """生成 RGB 合成图像和单通道图像。"""
     try:
-        # 1. 褰掍竴鍖栧鐞?
+        # 1. 归一化处理
         mcta_normalized = normalize_slice(mcta_slice)
         vcta_normalized = normalize_slice(vcta_slice)
         dcta_normalized = normalize_slice(dcta_slice)
         ncct_normalized = normalize_slice(ncct_slice)
 
-        # 2. 鍒涘缓RGB鍥惧儚 [R, G, B] = [mCTA1, NCCT, 绌篯
+        # 2. 创建 RGB 图像 [R, G, B] = [mCTA, NCCT, 空]
         rgb_data = np.stack(
             [mcta_normalized, ncct_normalized, np.zeros_like(mcta_normalized)], axis=2
         )
         rgb_8bit = (rgb_data * 255).astype(np.uint8)
 
-        # 3. 鍒涘缓鍗曠嫭閫氶亾鐨勫浘鍍忥紙鐢ㄤ簬鏄剧ず锛?
+        # 3. 创建单通道图像（用于展示）
         mcta_8bit = (mcta_normalized * 255).astype(np.uint8)
         vcta_8bit = (vcta_normalized * 255).astype(np.uint8)
         dcta_8bit = (dcta_normalized * 255).astype(np.uint8)
         ncct_8bit = (ncct_normalized * 255).astype(np.uint8)
 
-        # 鍒涘缓杈撳嚭璺緞
+        # 创建输出路径
         slice_prefix = f"slice_{slice_idx:03d}"
 
-        # 淇濆瓨RGB鍚堟垚鍥惧儚
+        # 保存 RGB 合成图像
         rgb_path = os.path.join(output_dir, f"{slice_prefix}_rgb.png")
         Image.fromarray(rgb_8bit).save(rgb_path)
 
-        # 淇濆瓨鍗曠嫭閫氶亾鍥惧儚锛屼粎褰撳搴旀ā鎬佷负鐪熷疄涓婁紶锛堥潪闆剁煩闃靛崰浣嶏級鏃舵墠淇濆瓨璇ラ€氶亾鏂囦欢
+        # 保存单通道图像，仅当对应模态为真实上传（非占位）时才保存该通道文件
         mcta_path = os.path.join(output_dir, f"{slice_prefix}_mcta.png")
         vcta_path = os.path.join(output_dir, f"{slice_prefix}_vcta.png")
         dcta_path = os.path.join(output_dir, f"{slice_prefix}_dcta.png")
@@ -5399,14 +5562,14 @@ def generate_rgb_slices(
         else:
             dcta_path = ""
 
-        # NCCT 鎬绘槸淇濆瓨
+        # NCCT 始终保存
         Image.fromarray(ncct_8bit).save(ncct_path)
 
-        # 淇濆瓨NPY鏁版嵁 - 鐩存帴淇濆瓨RGB鏁扮粍锛岃€屼笉鏄瓧鍏?
+        # 保存 NPY 数据 - 直接保存 RGB 数组，而不是图像编码
         npy_path = os.path.join(output_dir, f"{slice_prefix}_data.npy")
         np.save(npy_path, rgb_data.astype(np.float32))  # 鐩存帴淇濆瓨鏁扮粍
 
-        # 鑾峰彇杈撳嚭鐩綍鐨刡asename浣滀负file_id
+        # 获取输出目录的 basename 作为 file_id
         file_id = os.path.basename(output_dir)
 
         return {
@@ -5427,18 +5590,18 @@ def generate_rgb_slices(
         }
 
     except Exception as e:
-        print(f"鐢熸垚RGB鍒囩墖澶辫触: {e}")
+        print(f"生成 RGB 切片失败: {e}")
         traceback.print_exc()
         return {"success": False}
 
 
 def normalize_slice(slice_data):
     """
-    褰掍竴鍖栧垏鐗囨暟鎹埌 [0, 1] 鑼冨洿
+    归一化切片数据到 [0, 1] 范围。
     """
     slice_data = np.nan_to_num(slice_data)
 
-    # 浣跨敤2%鍜?8%鐧惧垎浣嶈繘琛岀ǔ鍋ュ綊涓€鍖?
+    # 使用 2% 和 98% 分位数进行鲁棒归一化
     lower_bound = np.percentile(slice_data, 2)
     upper_bound = np.percentile(slice_data, 98)
 
@@ -5448,7 +5611,7 @@ def normalize_slice(slice_data):
         if upper_bound - lower_bound < 1e-6:
             return np.zeros_like(slice_data)
 
-    # 瑁佸壀寮傚父鍊煎苟缂╂斁鍒?0-1
+    # 裁剪异常值并缩放到 0-1
     data_clipped = np.clip(slice_data, lower_bound, upper_bound)
     data_normalized = (data_clipped - lower_bound) / (upper_bound - lower_bound)
 
@@ -5457,12 +5620,12 @@ def normalize_slice(slice_data):
 
 def generate_modality_slices(nifti_path, output_dir, suffix):
     """
-    灏嗗崟涓€妯℃€丯IfTI鐢熸垚PNG鍒囩墖骞惰繑鍥濽RL鍒楄〃
+    将单一模态 NIfTI 生成 PNG 切片并返回 URL 列表。
     """
     if not nifti_path:
         return [], [], 0
     try:
-        # 璇诲彇 NIfTI 骞剁粺涓€鍒?3D 浣撴暟鎹?
+        # 读取 NIfTI 并统一为 3D 体数据
         img = nib.load(nifti_path)
         data = img.get_fdata()
         if data.ndim == 4:
@@ -5470,30 +5633,30 @@ def generate_modality_slices(nifti_path, output_dir, suffix):
         elif data.ndim == 2:
             data = data[:, :, np.newaxis]
 
-        # 璁＄畻鍒囩墖鏁伴噺涓庢枃浠禝D
+        # 计算切片数量和文件 ID
         num_slices = data.shape[2] if data.ndim == 3 else 1
         file_id = os.path.basename(output_dir)
         urls = []
         npy_urls = []
         for slice_idx in range(num_slices):
-            # 鎻愬彇鍗曞紶鍒囩墖骞惰繘琛屽綊涓€鍖?
+            # 提取单个切片并进行归一化
             slice_data = data[:, :, slice_idx] if data.ndim == 3 else data
             normalized = normalize_slice(slice_data)
-            # 鐢熸垚 PNG 棰勮鍥?
+            # 生成 PNG 预览图
             img_8bit = (normalized * 255).astype(np.uint8)
             slice_prefix = f"slice_{slice_idx:03d}"
             filename = f"{slice_prefix}_{suffix}.png"
             save_path = os.path.join(output_dir, filename)
             Image.fromarray(img_8bit).save(save_path)
             urls.append(f"/get_image/{file_id}/{filename}")
-            # 淇濆瓨褰掍竴鍖栧悗鐨?NPY 鏂囦欢锛堝甫 _output 鍚庣紑锛?
+            # 保存归一化后的 NPY 文件（带 _output 后缀）
             npy_filename = f"{slice_prefix}_{suffix}_output.npy"
             npy_path = os.path.join(output_dir, npy_filename)
             np.save(npy_path, normalized.astype(np.float32))
             npy_urls.append(f"/get_file/{file_id}/{npy_filename}")
         return urls, npy_urls, num_slices
     except Exception as e:
-        print(f"鐢熸垚{suffix}鍒囩墖澶辫触: {e}")
+        print(f"生成 {suffix} 切片失败: {e}")
         traceback.print_exc()
         return [], [], 0
 
@@ -5524,11 +5687,11 @@ def api_upload_start():
     try:
         if not NIBABEL_AVAILABLE:
             return jsonify(
-                {"success": False, "error": "nibabel 库不可用，请先安装依赖"}
+                {"success": False, "error": "nibabel 库不可用，请先安装依赖: pip install 'numpy<2.0' nibabel"}
             ), 400
 
         if "ncct_file" not in request.files:
-            return jsonify({"success": False, "error": "璇疯嚦灏戜笂浼?NCCT 鏂囦欢"}), 400
+            return jsonify({"success": False, "error": "请至少上传 NCCT 文件"}), 400
 
         patient_id_str = request.form.get("patient_id")
         if not patient_id_str:
@@ -5672,7 +5835,7 @@ def api_upload_start():
             }
         )
     except Exception as e:
-        return jsonify({"success": False, "error": f"鍚姩澶勭悊浠诲姟澶辫触: {str(e)}"}), 500
+        return jsonify({"success": False, "error": f"启动处理任务失败: {str(e)}"}), 500
 
 
 @app.route("/api/upload/progress/<job_id>", methods=["GET"])
@@ -5818,19 +5981,19 @@ def api_retry_agent_run(run_id):
 def upload_files():
     """处理上传文件请求。"""
     try:
-        print("鏀跺埌涓婁紶璇锋眰...")
+        print("收到上传请求...")
 
         if not NIBABEL_AVAILABLE:
             return jsonify(
                 {
                     "success": False,
-                    "error": 'nibabel 搴撲笉鍙敤銆傝杩愯: pip install "numpy<2.0" nibabel',
+                    "error": "nibabel 库不可用，请先安装依赖: pip install 'numpy<2.0' nibabel",
                 }
             )
 
-        # NCCT 蹇呴€夛紝鍏朵綑鏈熺浉鍙€?
+        # NCCT 必选，其余序列为可选
         if "ncct_file" not in request.files:
-            return jsonify({"success": False, "error": "璇疯嚦灏戦€夋嫨NCCT鏂囦欢"})
+            return jsonify({"success": False, "error": "请至少选择 NCCT 文件"})
 
         def get_optional_file(key):
             file_obj = request.files.get(key)
@@ -5847,9 +6010,9 @@ def upload_files():
         tmax_file = get_optional_file("tmax_file")
 
         if ncct_file.filename == "":
-            return jsonify({"success": False, "error": "璇疯嚦灏戦€夋嫨NCCT鏂囦欢"})
+            return jsonify({"success": False, "error": "请至少选择 NCCT 文件"})
 
-        # 妫€鏌ユ枃浠舵牸寮?
+        # 校验文件格式
         valid_extensions = [".nii", ".nii.gz"]
 
         def is_valid_nifti(file_obj):
@@ -5859,7 +6022,7 @@ def upload_files():
 
         if not is_valid_nifti(ncct_file):
             return jsonify(
-                {"success": False, "error": "璇蜂笂浼燦IfTI鏂囦欢 (.nii 鎴?.nii.gz)"}
+                {"success": False, "error": "请上传 NIfTI 文件 (.nii 或 .nii.gz)"}
             )
         for optional_file in [
             mcta_file,
@@ -5871,19 +6034,19 @@ def upload_files():
         ]:
             if optional_file and not is_valid_nifti(optional_file):
                 return jsonify(
-                    {"success": False, "error": "璇蜂笂浼燦IfTI鏂囦欢 (.nii 鎴?.nii.gz)"}
+                    {"success": False, "error": "请上传 NIfTI 文件 (.nii 或 .nii.gz)"}
                 )
 
-        print("鏂囦欢楠岃瘉閫氳繃:")
+        print("文件校验通过:")
         print(f"NCCT: {ncct_file.filename}")
         if mcta_file:
-            print(f"鍔ㄨ剦鏈烠TA: {mcta_file.filename}")
+            print(f"动脉期 CTA: {mcta_file.filename}")
         if vcta_file:
-            print(f"闈欒剦鏈烠TA: {vcta_file.filename}")
+            print(f"静脉期 CTA: {vcta_file.filename}")
         if dcta_file:
-            print(f"寤惰繜鏈烠TA: {dcta_file.filename}")
+            print(f"延迟期 CTA: {dcta_file.filename}")
 
-        # 鐢熸垚锛堟垨澶嶇敤锛夊敮涓€ID
+        # 生成（或复用）统一 ID
         requested_file_id = (request.form.get("file_id") or "").strip()
         if requested_file_id:
             safe_file_id = re.sub(r"[^a-zA-Z0-9_-]", "", requested_file_id)[:32]
@@ -5891,7 +6054,7 @@ def upload_files():
         else:
             file_id = str(uuid.uuid4())[:8]
 
-        # 淇濆瓨涓婁紶鐨勬枃浠?
+        # 保存上传的文件
         ncct_extension = (
             ".nii.gz" if ncct_file.filename.lower().endswith(".nii.gz") else ".nii"
         )
@@ -5919,21 +6082,21 @@ def upload_files():
         )
         ncct_file.save(ncct_path)
 
-        print(f"鏂囦欢淇濆瓨鎴愬姛: NCCT={ncct_path}")
+        print(f"文件保存成功: NCCT={ncct_path}")
         if mcta_path:
-            print(f"鍔ㄨ剦鏈烠TA: {mcta_path}")
+            print(f"动脉期 CTA: {mcta_path}")
         if vcta_path:
-            print(f"闈欒剦鏈烠TA: {vcta_path}")
+            print(f"静脉期 CTA: {vcta_path}")
         if dcta_path:
-            print(f"寤惰繜鏈烠TA: {dcta_path}")
+            print(f"延迟期 CTA: {dcta_path}")
         if cbf_path:
-            print(f"CBF鍔熻兘鍥? {cbf_path}")
+            print(f"CBF 功能图: {cbf_path}")
         if cbv_path:
-            print(f"CBV鍔熻兘鍥? {cbv_path}")
+            print(f"CBV 功能图: {cbv_path}")
         if tmax_path:
-            print(f"TMAX鍔熻兘鍥? {tmax_path}")
+            print(f"TMAX 功能图: {tmax_path}")
 
-        # 鏍规嵁鍓嶇涓婁紶鐨勫垏鐗囨洿鏂?available_modalities锛堜粎鍘熷涓婁紶锛屼笉鍚獳I鐢熸垚锛?
+        # 根据前端上传的切片更新 available_modalities（仅原始上传，不含 AI 生成）
         patient_id_str = request.form.get("patient_id")
         patient_id = None
         if patient_id_str:
@@ -5942,12 +6105,12 @@ def upload_files():
             except ValueError:
                 patient_id = None
 
-        # 灏嗗亸渚т俊鎭啓鍏?patient_imaging 琛紙鏍规嵁 patient_id + case_id锛?
+        # 将侧别信息写入 patient_imaging 表（基于 patient_id + case_id）
         hemisphere = request.form.get("hemisphere", "both")
         try:
             if SUPABASE_AVAILABLE and patient_id:
                 try:
-                    # 鍏堝皾璇曟洿鏂板凡瀛樺湪璁板綍
+                    # 先尝试更新已有记录
                     update_resp = (
                         supabase.table("patient_imaging")
                         .update({"hemisphere": hemisphere})
@@ -5957,10 +6120,10 @@ def upload_files():
                     )
                     if update_resp.data and len(update_resp.data) > 0:
                         print(
-                            f"patient_imaging 宸叉洿鏂板亸渚? patient_id={patient_id}, case_id={file_id}, hemisphere={hemisphere}"
+                            f"patient_imaging 已更新侧别信息: patient_id={patient_id}, case_id={file_id}, hemisphere={hemisphere}"
                         )
                     else:
-                        # 鑻ユ湭鏇存柊鍒颁换浣曡锛屽垯鎻掑叆鏂拌褰?
+                        # 若未更新到任何行，则插入新记录
                         insert_payload = {
                             "patient_id": patient_id,
                             "case_id": file_id,
@@ -5973,16 +6136,16 @@ def upload_files():
                         )
                         if insert_resp.data and len(insert_resp.data) > 0:
                             print(
-                                f"patient_imaging 宸叉彃鍏ユ柊璁板綍: {insert_resp.data[0]}"
+                                f"patient_imaging 已插入新记录: {insert_resp.data[0]}"
                             )
                         else:
                             print(
-                                f"璀﹀憡: 鍚?patient_imaging 鎻掑叆璁板綍鏈繑鍥炴暟鎹? {getattr(insert_resp, 'error', None)}"
+                                f"警告: 向 patient_imaging 插入记录未返回数据: {getattr(insert_resp, 'error', None)}"
                             )
                 except Exception as e:
-                    print(f"鍐欏叆 patient_imaging 澶辫触: {e}")
+                    print(f"写入 patient_imaging 失败: {e}")
         except Exception as e:
-            print(f"澶勭悊 hemisphere 鏃跺嚭閿? {e}")
+            print(f"处理 hemisphere 时出错: {e}")
 
         if patient_id:
             # Batch-write uploaded modalities in one DB update to avoid occasional missing items.
@@ -6019,16 +6182,16 @@ def upload_files():
                         f"patient_imaging available_modalities batch updated: {result}"
                     )
 
-        # ??????
+        # 准备处理输出目录
         output_dir = os.path.join(app.config["PROCESSED_FOLDER"], file_id)
         os.makedirs(output_dir, exist_ok=True)
 
-        # 寮傛宸ヤ綔娴佸彲瑕佹眰寤惰繜鎵ц鑴戝崚涓嚜鍔ㄥ垎鏋?
+        # 在异步工作流中，可选择延后执行脑卒中自动分析
         defer_stroke_analysis = (
             request.form.get("defer_stroke_analysis", "false") == "true"
         )
 
-        # 妫€鏌ユ槸鍚︿笂浼犱簡鍏ㄩ儴CTA鍔熻兘鍥惧儚
+        # 检查是否仅上传了完整 CTA 功能图像
         skip_ai = True
         if request.form.get("skip_ai") == "false" or (
             (mcta_path and vcta_path and dcta_path)
@@ -6037,14 +6200,14 @@ def upload_files():
             skip_ai = False
         print(f"skip_ai: {skip_ai}")
 
-        # 鑾峰彇妯″瀷绫诲瀷鍙傛暟锛岄粯璁や娇鐢╩rdpm
+        # 获取模型类型参数，默认使用 mrdpm
         selected_model = request.form.get("model_type", "mrdpm")
         model_type = selected_model
-        print(f"鐢ㄦ埛閫夋嫨鐨勬ā鍨? {selected_model}, 瀹為檯浣跨敤鐨勬ā鍨? {model_type}")
+        print(f"用户选择的模型: {selected_model}, 实际使用的模型: {model_type}")
 
-        # 濡傛灉skip_ai涓篢rue锛屽垯鐩存帴鐢熸垚涓婁紶鍥惧儚鐨凱NG鍒囩墖锛屼笉鍋欰I鎺ㄧ悊
+        # 如果 skip_ai 为 True，则直接生成上传图像的 PNG 切片，不做 AI 推理
         if skip_ai:
-            print("璺宠繃AI鍒嗘瀽锛岀敓鎴愪笂浼犲浘鍍忓垏鐗嘝NG")
+            print("跳过 AI 分析，仅生成上传图像切片 PNG")
 
             modality_paths = {
                 "ncct": ncct_path,
@@ -6069,8 +6232,8 @@ def upload_files():
 
             rgb_files = []
             for slice_idx in range(total_slices):
-                # 涓哄綋鍓嶅垏鐗囩敓鎴愭帺鐮?
-                # 灏濊瘯鍔犺浇NCCT鍥惧儚鏁版嵁鐢ㄤ簬鎺╃爜鐢熸垚
+                # 为当前切片生成掩码
+                # 尝试加载 NCCT 图像数据用于掩码生成
                 ncct_slice_path = os.path.join(
                     output_dir, f"slice_{slice_idx:03d}_ncct.png"
                 )
@@ -6079,7 +6242,7 @@ def upload_files():
 
                     ncct_img = Image.open(ncct_slice_path).convert("RGB")
                     rgb_data = np.array(ncct_img) / 255.0
-                    # 鐢熸垚鎺╃爜
+                    # 生成掩码
                     mask_result = generate_mask_for_slice(
                         rgb_data, output_dir, slice_idx
                     )
@@ -6157,9 +6320,9 @@ def upload_files():
                 slice_result["has_ai"] = False
                 rgb_files.append(slice_result)
 
-            # 鑷姩瑙﹀彂鑴戝崚涓垎鏋愶紙濡傛灉婊¤冻鏉′欢锛?
+            # 自动触发脑卒中分析（如果满足条件）
             if patient_id and not defer_stroke_analysis:
-                print("灏濊瘯鑷姩瑙﹀彂鑴戝崚涓垎鏋?..")
+                print("尝试自动触发脑卒中分析...")
                 try:
                     try:
                         from .stroke_analysis import auto_analyze_stroke
@@ -6168,12 +6331,12 @@ def upload_files():
 
                     analysis_result = auto_analyze_stroke(file_id, patient_id)
                     print(
-                        f"鑷姩鑴戝崚涓垎鏋愮粨鏋? {'鎴愬姛' if analysis_result.get('success') else '澶辫触'}"
+                        f"自动脑卒中分析结果: {'成功' if analysis_result.get('success') else '失败'}"
                     )
                     if not analysis_result.get("success"):
-                        print(f"鑷姩鍒嗘瀽澶辫触鍘熷洜: {analysis_result.get('error')}")
+                        print(f"自动分析失败原因: {analysis_result.get('error')}")
                 except Exception as e:
-                    print(f"鑷姩瑙﹀彂鑴戝崚涓垎鏋愬け璐? {e}")
+                    print(f"自动触发脑卒中分析异常: {e}")
             elif patient_id and defer_stroke_analysis:
                 print("已启用 defer_stroke_analysis，上传接口跳过自动脑卒中分析。")
 
@@ -6195,18 +6358,18 @@ def upload_files():
                 }
             )
         else:
-            # 澶勭悊RGB鍚堟垚锛堢幇鍦ㄥ寘鍚妯″瀷AI鎺ㄧ悊锛?
-            print("寮€濮嬪鐞哛GB鍚堟垚鍜屽妯″瀷AI鎺ㄧ悊...")
+            # 处理 RGB 合成并执行多模型 AI 推理
+            print("开始处理 RGB 合成和多模型 AI 推理...")
             result = process_rgb_synthesis(
                 mcta_path, vcta_path, dcta_path, ncct_path, output_dir, model_type
             )
 
             if result["success"]:
-                print("RGB鍚堟垚鍜屽妯″瀷AI鎺ㄧ悊澶勭悊鎴愬姛")
+                print("RGB 合成和多模型 AI 推理处理成功")
 
-                # 鑷姩瑙﹀彂鑴戝崚涓垎鏋愶紙濡傛灉婊¤冻鏉′欢锛?
+                # 自动触发脑卒中分析（如果满足条件）
                 if patient_id and not defer_stroke_analysis:
-                    print("灏濊瘯鑷姩瑙﹀彂鑴戝崚涓垎鏋?..")
+                    print("尝试自动触发脑卒中分析...")
                     try:
                         try:
                             from .stroke_analysis import auto_analyze_stroke
@@ -6215,12 +6378,12 @@ def upload_files():
 
                         analysis_result = auto_analyze_stroke(file_id, patient_id)
                         print(
-                            f"鑷姩鑴戝崚涓垎鏋愮粨鏋? {'鎴愬姛' if analysis_result.get('success') else '澶辫触'}"
+                            f"自动脑卒中分析结果: {'成功' if analysis_result.get('success') else '失败'}"
                         )
                         if not analysis_result.get("success"):
-                            print(f"鑷姩鍒嗘瀽澶辫触鍘熷洜: {analysis_result.get('error')}")
+                            print(f"自动分析失败原因: {analysis_result.get('error')}")
                     except Exception as e:
-                        print(f"鑷姩瑙﹀彂鑴戝崚涓垎鏋愬け璐? {e}")
+                        print(f"自动触发脑卒中分析异常: {e}")
                 elif patient_id and defer_stroke_analysis:
                     print("已启用 defer_stroke_analysis，上传接口跳过自动脑卒中分析。")
 
@@ -6258,19 +6421,19 @@ def upload_files():
                     }
                 )
             else:
-                print(f"RGB鍚堟垚澶勭悊澶辫触: {result['error']}")
+                print(f"RGB 合成处理失败: {result['error']}")
                 return jsonify({"success": False, "error": result["error"]})
 
     except Exception as e:
-        print(f"涓婁紶澶勭悊寮傚父: {e}")
+        print(f"上传处理异常: {e}")
         traceback.print_exc()
-        return jsonify({"success": False, "error": f"澶勭悊澶辫触: {str(e)}"})
+        return jsonify({"success": False, "error": f"处理失败: {str(e)}"})
 
-
-# 鍏朵綑璺敱淇濇寔涓嶅彉...
+ 
+# 其余路由保持不变...
 @app.route("/download_mask/<file_id>/<int:slice_index>")
 def download_mask(file_id, slice_index):
-    """涓嬭浇鐗瑰畾鍒囩墖鐨勬帺鐮丯PY鏂囦欢"""
+    """下载指定切片的掩码 NPY 文件。"""
     try:
         filename = f"slice_{slice_index:03d}_mask.npy"
         file_path = os.path.join(app.config["PROCESSED_FOLDER"], file_id, filename)
@@ -6281,7 +6444,7 @@ def download_mask(file_id, slice_index):
 
 @app.route("/get_image/<file_id>/<filename>")
 def get_image(file_id, filename):
-    """鑾峰彇鐢熸垚鐨凱NG鍥惧儚"""
+    """获取处理生成的 PNG 图像。"""
     try:
         image_path = os.path.join(app.config["PROCESSED_FOLDER"], file_id, filename)
         if os.path.exists(image_path):
@@ -6320,36 +6483,36 @@ def get_slice(file_id, slice_index, image_type):
 
 
 if __name__ == "__main__":
-    print("馃殌 鍚姩Flask寮€鍙戞湇鍔″櫒...")
+    print("启动 Flask 开发服务器...")
 
-    # 鑾峰彇鏈満IP鍦板潃
+    # 获取本机 IP 地址
     import socket
 
     try:
         hostname = socket.gethostname()
         local_ip = socket.gethostbyname(hostname)
-        print(f"馃寪 鏈満IP鍦板潃: {local_ip}")
-        print(f"馃敆 灞€鍩熺綉璁块棶鍦板潃: http://{local_ip}:8765")
+        print(f"本机 IP 地址: {local_ip}")
+        print(f"局域网访问地址: http://{local_ip}:8765")
     except:
         local_ip = "0.0.0.0"
         print("无法获取本机 IP，使用默认配置")
 
-    print("馃摫 鏈湴璁块棶鍦板潃: http://127.0.0.1:8765")
-    print("馃實 鏈嶅姟鍣ㄧ洃鍚? 鎵€鏈夌綉缁滄帴鍙?(0.0.0.0:8765)")
+    print("本地访问地址: http://127.0.0.1:8765")
+    print("服务器监听: 所有网卡 (0.0.0.0:8765)")
     print("按 Ctrl+C 停止服务器")
     print("=" * 60)
 
     try:
-        # 鍏抽敭淇敼锛氫娇鐢ㄦ槑纭殑鍙傛暟鍚姩
+        # 关键配置：使用明确参数启动
         app.run(
-            host="0.0.0.0",  # 鐩戝惉鎵€鏈夌綉缁滄帴鍙?
-            port=8765,  # 鏄庣‘鎸囧畾绔彛
-            debug=True,  # 璋冭瘯妯″紡
-            threaded=True,  # 澶氱嚎绋?
-            use_reloader=False,  # 鍏抽棴鑷姩閲嶈浇锛岄伩鍏嶉噸澶嶅垵濮嬪寲
+            host="0.0.0.0",  # 监听所有网络接口
+            port=8765,  # 明确指定端口
+            debug=True,  # 调试模式
+            threaded=True,  # 多线程
+            use_reloader=False,  # 关闭自动重载，避免重复初始化
         )
     except Exception as e:
-        print(f"鉂?鏈嶅姟鍣ㄥ惎鍔ㄥけ璐? {e}")
+        print(f"服务器启动失败: {e}")
         import traceback
 
         traceback.print_exc()

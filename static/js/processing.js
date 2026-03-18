@@ -44,6 +44,8 @@ function getAgentPanelElements() {
         eventCount: document.getElementById('agentEventCount'),
         reportStatus: document.getElementById('agentReportStatus'),
         lastError: document.getElementById('agentLastError'),
+        icvStatus: document.getElementById('agentIcvStatus'),
+        icvFindings: document.getElementById('agentIcvFindings'),
         message: document.getElementById('agentRunMessage'),
         retryStep: document.getElementById('agentRetryStep'),
         retryHint: document.getElementById('agentRetryHint'),
@@ -440,6 +442,68 @@ function getLastErrorText(run) {
     return '-';
 }
 
+function parseIcvPayload(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    if (raw.icv && typeof raw.icv === 'object') return raw.icv;
+    if (raw.success && raw.icv && typeof raw.icv === 'object') return raw.icv;
+    if (raw.result && raw.result.icv && typeof raw.result.icv === 'object') return raw.result.icv;
+    if (raw.status && (Array.isArray(raw.findings) || typeof raw.finding_count === 'number')) return raw;
+    return null;
+}
+
+function resolveIcvFromRun(run) {
+    if (!run || typeof run !== 'object') {
+        return null;
+    }
+
+    const toolResults = Array.isArray(run.tool_results) ? run.tool_results : [];
+    const completedIcv = [...toolResults]
+        .reverse()
+        .find((item) => item && item.tool_name === 'icv' && item.status === 'completed');
+    if (completedIcv) {
+        const parsed = parseIcvPayload(completedIcv.structured_output || completedIcv.raw_ref || null);
+        if (parsed) {
+            return { ...parsed, __source: 'tool_results_completed' };
+        }
+    }
+
+    const reportIcv = parseIcvPayload(
+        (((run.result || {}).report_result || {}).report_payload || {}).icv || null
+    );
+    if (reportIcv) {
+        return { ...reportIcv, __source: 'run_result_report_payload' };
+    }
+
+    const failedIcv = [...toolResults]
+        .reverse()
+        .find((item) => item && item.tool_name === 'icv' && item.status === 'failed');
+    if (failedIcv) {
+        return {
+            status: 'unavailable',
+            findings: [],
+            finding_count: 0,
+            score: 0.0,
+            confidence_delta: 0.0,
+            error_code: failedIcv.error_code || '',
+            error_message: failedIcv.error_message || '',
+            suggested_action: failedIcv.suggested_action || '',
+            __source: 'tool_results_failed',
+        };
+    }
+
+    return null;
+}
+
+function getIcvFindingCount(icvObj) {
+    if (!icvObj || typeof icvObj !== 'object') return 0;
+    if (typeof icvObj.finding_count === 'number') return icvObj.finding_count;
+    if (Array.isArray(icvObj.findings)) return icvObj.findings.length;
+    if (Array.isArray(icvObj.findings_list)) return icvObj.findings_list.length;
+    return 0;
+}
+
 function getLatestRetryableFailedStep(run) {
     if (!run || !Array.isArray(run.steps)) {
         return null;
@@ -550,6 +614,51 @@ function updateAgentPanel(run, events) {
     if (els.eventCount) els.eventCount.textContent = String((events || []).length);
     if (els.reportStatus) els.reportStatus.textContent = getReportStatusText(run);
     if (els.lastError) els.lastError.textContent = getLastErrorText(run);
+    let icvObj = null;
+    try {
+        icvObj = resolveIcvFromRun(run);
+
+        // 将 ICV 结果尽早落盘到 localStorage，供 Viewer 直接读取
+        try {
+            if (icvObj && processingFileId) {
+                const key = `ai_report_payload_${processingFileId}`;
+                let existing = null;
+                try {
+                    existing = JSON.parse(localStorage.getItem(key) || 'null');
+                } catch (e) {
+                    existing = null;
+                }
+                // 仅在当前 payload 还没有 icv 字段时写入，避免覆盖完整的 report_payload
+                if (!existing || typeof existing !== 'object' || (!existing.icv && !existing.result)) {
+                    const payloadToStore = existing && typeof existing === 'object' ? existing : {};
+                    payloadToStore.icv = icvObj;
+                    localStorage.setItem(key, JSON.stringify(payloadToStore));
+                }
+            }
+        } catch (e) {
+            // localStorage 失败时忽略，不影响页面其它逻辑
+        }
+
+        if (els.icvStatus) {
+            if (icvObj && icvObj.status) {
+                const statusText = String(icvObj.status);
+                const unavailableReason = statusText.toLowerCase() === 'unavailable'
+                    ? (icvObj.error_message || icvObj.error_code || '')
+                    : '';
+                els.icvStatus.textContent = unavailableReason
+                    ? `${statusText} (${unavailableReason})`
+                    : statusText;
+            } else {
+                els.icvStatus.textContent = '-';
+            }
+        }
+        if (els.icvFindings) {
+            els.icvFindings.textContent = String(getIcvFindingCount(icvObj));
+        }
+    } catch (e) {
+        if (els.icvStatus) els.icvStatus.textContent = '-';
+        if (els.icvFindings) els.icvFindings.textContent = '0';
+    }
     updateRetryControls(run);
 
     if (!els.message) {
@@ -560,7 +669,12 @@ function updateAgentPanel(run, events) {
         return;
     }
     if (run.status === 'succeeded') {
-        els.message.textContent = 'Agent 后置汇总已完成。';
+        if (icvObj && String(icvObj.status || '').toLowerCase() === 'unavailable') {
+            const reason = icvObj.error_message || icvObj.error_code || 'unknown';
+            els.message.textContent = `Agent 后置汇总已完成（ICV unavailable: ${reason}）。`;
+        } else {
+            els.message.textContent = 'Agent 后置汇总已完成。';
+        }
         return;
     }
     if (run.status === 'failed') {
@@ -614,8 +728,19 @@ async function pollAgentStatus() {
             if (resultResp.ok) {
                 const resultData = await resultResp.json();
                 const reportResult = (((resultData || {}).result || {}).report_result || {});
-                if (resultData.success && reportResult.report && processingFileId) {
-                    localStorage.setItem(`ai_report_${processingFileId}`, reportResult.report);
+                if (resultData.success && processingFileId && (reportResult.report || reportResult.report_payload)) {
+                    // 保存结构化报告文本，供 Viewer 显示
+                    if (reportResult.report) {
+                        localStorage.setItem(`ai_report_${processingFileId}`, reportResult.report);
+                        localStorage.setItem('ai_report', reportResult.report);
+                    }
+                    // 关键：保存 report_payload（包含 icv 字段），供 Viewer 读取 ICV 具体问题
+                    if (reportResult.report_payload) {
+                        localStorage.setItem(
+                            `ai_report_payload_${processingFileId}`,
+                            JSON.stringify(reportResult.report_payload)
+                        );
+                    }
                 }
             }
             agentResultFetched = true;

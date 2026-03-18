@@ -36,3 +36,6 @@ MedGemma_Model/results/
 
 # example文件（已经在群里发过）
 MedGemma_Model/example/
+
+#vscode配置文件
+.vscode/

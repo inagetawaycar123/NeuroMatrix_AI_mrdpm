@@ -159,6 +159,39 @@
 6. `query_guideline_kb`
 7. `save_notes`
 
+### 6.1 ICV Tool（内部一致性检查）
+
+角色定位：
+
+- 归属于 `Logic Reviewer Agent`，用于对同一次 Agent Run 内部的“路径/量化/报告文本”做一致性检查。
+
+输入契约（由 `_tool_icv` 组装）：
+
+- `planner_output`: 包含 `path_decision.imaging_path`、`path_decision.canonical_modalities`、`tool_sequence`。
+- `tool_results`: 当次运行中已完成的 Tool 结果列表，重点消费：
+   - `generate_ctp_maps`（是否生成 CTP、生成的模态和切片数等）
+   - `run_stroke_analysis`（核心/半暗带体积、不匹配比例等）
+   - `generate_medgemma_report`（结构化报告 payload）
+- `patient_context`: 患者基础信息及 `available_modalities/hemisphere`（来自 Supabase）。
+- `analysis_result`: 影像分析结果与（可选）报告 payload 快照。
+
+输出契约（`evaluate_icv`）：
+
+- 顶层：
+   - `success: bool` — 仅表示规则引擎自身是否跑通。
+   - `icv: { status: "pass|warn|fail", findings: Finding[] }`。
+- `findings[i]` 结构：
+   - `id: str` — 规则编号（如 `R2_mismatch_consistency`）。
+   - `status: "pass|warn|fail|not_applicable"`。
+   - `message: str` — 中文可读解释（已与前端字段对齐）。
+   - `details: dict`（可选）— 数值细节，如预期/实际不匹配比等。
+   - `suggested_action: str`（可选）— 建议动作，供前端展示。
+
+落地方式：
+
+- Tool 层：`tool_name = "icv"`，由 `_tool_icv` 负责装配输入并调用 `evaluate_icv`。
+- 报告层：`_tool_generate_medgemma_report` 在生成结构化报告后，将 ICV 结果挂载到 `report_payload.icv`，供前端 viewer 直接消费。
+
 关键触发规则：
 1. `NCCT + mCTA`：先 `generate_ctp_maps`，后 `run_stroke_analysis`
 2. `NCCT + mCTA + CTP`：直接 `run_stroke_analysis`
@@ -178,10 +211,23 @@
 4. 不破坏旧功能：viewer/report/chat。
 
 ### 7.2 M2（可信化）
+
 1. 关键结论具备证据映射。
 2. ICV/EKV 均有可见校验标记。
 3. 冲突场景可触发 Consensus Lite。
 4. 审计日志可按 `run_id` 回放。
+
+### 7.3 ICV 非阻断策略（Week4 要求）
+
+1. ICV 作为“内部一致性增强模块”，不阻断主链（上传 -> 分析 -> 报告）正常完成：
+   - 规则评估失败（如输入缺失、异常）仅在 `tool_results` 中标记 `status=failed` 并写入 error，不中断既有报告链路。
+   - 单条规则 `status=fail/warn` 仅作为质控信号，由前端以高亮/告警形式展示，不自动否决整份报告。
+2. 前端可见化要求：
+   - Processing 页：在 Agent 面板中展示 ICV 总状态与 findings 数量。
+   - Viewer 页：在报告侧边栏固定位置展示：
+     - ICV 总状态（PASS/WARN/FAIL）。
+     - 具体问题列表：规则 ID + 中文 message + 建议动作。
+3. 验收前禁止将 ICV 结果接入“硬门禁”（例如直接拒绝返回报告），所有拦截必须经过临床验收并在文档中写明。
 
 ## 8. README 与代码一致性校验清单（执行前必须完成）
 1. 启动入口与端口是否一致。
