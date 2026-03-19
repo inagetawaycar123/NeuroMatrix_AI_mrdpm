@@ -1315,12 +1315,16 @@ AGENT_TOOL_SEQUENCE_MAP = {
         "detect_modalities",
         "load_patient_context",
         "icv",
+        "ekv",
+        "consensus_lite",
         "generate_medgemma_report",
     ],
     "ncct_single_phase_cta": [
         "detect_modalities",
         "load_patient_context",
         "icv",
+        "ekv",
+        "consensus_lite",
         "generate_medgemma_report",
     ],
     "ncct_mcta": [
@@ -1329,6 +1333,8 @@ AGENT_TOOL_SEQUENCE_MAP = {
         "generate_ctp_maps",
         "run_stroke_analysis",
         "icv",
+        "ekv",
+        "consensus_lite",
         "generate_medgemma_report",
     ],
     "ncct_mcta_ctp": [
@@ -1336,6 +1342,8 @@ AGENT_TOOL_SEQUENCE_MAP = {
         "load_patient_context",
         "run_stroke_analysis",
         "icv",
+        "ekv",
+        "consensus_lite",
         "generate_medgemma_report",
     ],
 }
@@ -1345,17 +1353,23 @@ POST_UPLOAD_SUMMARY_TOOL_SEQUENCE = [
     "load_patient_context",
     "run_stroke_analysis",
     "icv",
+    "ekv",
+    "consensus_lite",
     "generate_medgemma_report",
 ]
 
 AGENT_TOOL_RETRY_LIMITS = {
     "generate_ctp_maps": 1,
     "run_stroke_analysis": 1,
+    "ekv": 1,
+    "consensus_lite": 1,
     "generate_medgemma_report": 1,
 }
 
 AGENT_TOOL_STAGE_MAP = {
     "icv": "icv",
+    "ekv": "ekv",
+    "consensus_lite": "consensus",
     "generate_medgemma_report": "summary",
 }
 
@@ -2051,6 +2065,154 @@ def _tool_icv(run):
         return False, None, _tool_error_contract("TOOL_EXECUTION_FAILED", str(exc))
 
 
+def _tool_ekv(run):
+    try:
+        run_id = run.get("run_id") or run.get("id") or "unknown"
+        print(f"[EKV] Starting EKV evaluation for run_id={run_id}")
+
+        context = _build_context_from_completed_tools(run)
+        planner_output = run.get("planner_output") or {}
+        tool_results = run.get("tool_results") or []
+
+        try:
+            import importlib.util
+
+            ekv_path = os.path.join(PROJECT_ROOT, "backend", "ekv.py")
+            spec = importlib.util.spec_from_file_location(
+                f"ekv_runtime_{run.get('run_id')}", ekv_path
+            )
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            evaluate_ekv = getattr(m, "evaluate_ekv")
+        except Exception as e:
+            return (
+                False,
+                None,
+                _tool_error_contract(
+                    "TOOL_EXTERNAL_API_FAILED", f"Failed to import ekv module: {e}"
+                ),
+            )
+
+        ekv_out = evaluate_ekv(
+            planner_output=planner_output,
+            tool_results=tool_results,
+            patient_context=context.get("patient_context"),
+            analysis_result=context.get("analysis_result"),
+            report_result=context.get("report_result"),
+        )
+        if not ekv_out or not ekv_out.get("success"):
+            return (
+                False,
+                None,
+                _tool_error_contract("TOOL_EXECUTION_FAILED", "EKV evaluation failed"),
+            )
+
+        ekv_payload = ekv_out.get("ekv") or {}
+        print(
+            f"[EKV] Completed for run_id={run_id}: "
+            f"status={ekv_payload.get('status')}, findings={ekv_payload.get('finding_count', 0)}"
+        )
+        return True, ekv_payload, None
+    except Exception as exc:
+        run_id = run.get("run_id") or run.get("id") or "unknown"
+        print(f"[EKV] Exception during evaluation for run_id={run_id}: {exc}")
+        return False, None, _tool_error_contract("TOOL_EXECUTION_FAILED", str(exc))
+
+
+def _tool_consensus_lite(run):
+    try:
+        run_id = run.get("run_id") or run.get("id") or "unknown"
+        print(f"[CONSENSUS] Starting consensus lite for run_id={run_id}")
+
+        tool_results = run.get("tool_results") or []
+        icv_payload = None
+        ekv_payload = None
+
+        for item in reversed(tool_results):
+            if item.get("tool_name") == "icv" and item.get("status") == "completed":
+                icv_payload = item.get("structured_output") or {}
+                break
+        for item in reversed(tool_results):
+            if item.get("tool_name") == "ekv" and item.get("status") == "completed":
+                ekv_payload = item.get("structured_output") or {}
+                break
+
+        if not icv_payload:
+            icv_failed = next(
+                (
+                    x
+                    for x in reversed(tool_results)
+                    if x.get("tool_name") == "icv" and x.get("status") == "failed"
+                ),
+                None,
+            )
+            if icv_failed:
+                icv_payload = {
+                    "status": "unavailable",
+                    "findings": [],
+                    "error_code": icv_failed.get("error_code"),
+                    "error_message": icv_failed.get("error_message"),
+                }
+
+        if not ekv_payload:
+            ekv_failed = next(
+                (
+                    x
+                    for x in reversed(tool_results)
+                    if x.get("tool_name") == "ekv" and x.get("status") == "failed"
+                ),
+                None,
+            )
+            if ekv_failed:
+                ekv_payload = {
+                    "status": "unavailable",
+                    "claims": [],
+                    "error_code": ekv_failed.get("error_code"),
+                    "error_message": ekv_failed.get("error_message"),
+                }
+
+        try:
+            import importlib.util
+
+            consensus_path = os.path.join(PROJECT_ROOT, "backend", "consensus.py")
+            spec = importlib.util.spec_from_file_location(
+                f"consensus_runtime_{run.get('run_id')}", consensus_path
+            )
+            m = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(m)
+            evaluate_consensus = getattr(m, "evaluate_consensus")
+        except Exception as e:
+            return (
+                False,
+                None,
+                _tool_error_contract(
+                    "TOOL_EXTERNAL_API_FAILED",
+                    f"Failed to import consensus module: {e}",
+                ),
+            )
+
+        out = evaluate_consensus(icv_payload=icv_payload, ekv_payload=ekv_payload)
+        if not out or not out.get("success"):
+            return (
+                False,
+                None,
+                _tool_error_contract(
+                    "TOOL_EXECUTION_FAILED", "Consensus Lite evaluation failed"
+                ),
+            )
+
+        payload = out.get("consensus") or {}
+        print(
+            f"[CONSENSUS] Completed for run_id={run_id}: "
+            f"decision={payload.get('decision')}, conflict_count={payload.get('conflict_count', 0)}"
+        )
+        return True, payload, None
+    except Exception as exc:
+        run_id = run.get("run_id") or run.get("id") or "unknown"
+        print(f"[CONSENSUS] Exception during evaluation for run_id={run_id}: {exc}")
+        return False, None, _tool_error_contract("TOOL_EXECUTION_FAILED", str(exc))
+
+
 def _tool_generate_medgemma_report(run):
     planner_input = run.get("planner_input") or {}
     patient_id = planner_input.get("patient_id")
@@ -2073,6 +2235,10 @@ def _tool_generate_medgemma_report(run):
     run = run or {}
     icv_payload = None
     icv_failed_result = None
+    ekv_payload = None
+    ekv_failed_result = None
+    consensus_payload = None
+    consensus_failed_result = None
     try:
         run_results = run.get("tool_results") or []
         for r in run_results:
@@ -2081,9 +2247,33 @@ def _tool_generate_medgemma_report(run):
                 break
             if r.get("tool_name") == "icv" and r.get("status") == "failed":
                 icv_failed_result = r
+
+        for r in run_results:
+            if r.get("tool_name") == "ekv" and r.get("status") == "completed":
+                ekv_payload = r.get("structured_output") or r.get("raw_ref")
+                break
+            if r.get("tool_name") == "ekv" and r.get("status") == "failed":
+                ekv_failed_result = r
+
+        for r in run_results:
+            if (
+                r.get("tool_name") == "consensus_lite"
+                and r.get("status") == "completed"
+            ):
+                consensus_payload = r.get("structured_output") or r.get("raw_ref")
+                break
+            if (
+                r.get("tool_name") == "consensus_lite"
+                and r.get("status") == "failed"
+            ):
+                consensus_failed_result = r
     except Exception:
         icv_payload = None
         icv_failed_result = None
+        ekv_payload = None
+        ekv_failed_result = None
+        consensus_payload = None
+        consensus_failed_result = None
 
     report_payload = data.get("report_payload") or {}
     if icv_payload is None and icv_failed_result is not None:
@@ -2103,6 +2293,43 @@ def _tool_generate_medgemma_report(run):
         try:
             report_payload = dict(report_payload)
             report_payload["icv"] = icv_payload
+        except Exception:
+            pass
+
+    if ekv_payload is None and ekv_failed_result is not None:
+        ekv_payload = {
+            "status": "unavailable",
+            "finding_count": 0,
+            "score": 0.0,
+            "confidence_delta": 0.0,
+            "claims": [],
+            "findings": [],
+            "error_code": ekv_failed_result.get("error_code"),
+            "error_message": ekv_failed_result.get("error_message"),
+            "suggested_action": ekv_failed_result.get("suggested_action"),
+        }
+    if ekv_payload is not None:
+        try:
+            report_payload = dict(report_payload)
+            report_payload["ekv"] = ekv_payload
+        except Exception:
+            pass
+
+    if consensus_payload is None and consensus_failed_result is not None:
+        consensus_payload = {
+            "status": "unavailable",
+            "decision": "review_required",
+            "conflict_count": 0,
+            "summary": "Consensus unavailable due to upstream failure",
+            "error_code": consensus_failed_result.get("error_code"),
+            "error_message": consensus_failed_result.get("error_message"),
+            "suggested_action": consensus_failed_result.get("suggested_action"),
+            "next_actions": ["Manual review is recommended."],
+        }
+    if consensus_payload is not None:
+        try:
+            report_payload = dict(report_payload)
+            report_payload["consensus"] = consensus_payload
         except Exception:
             pass
 
@@ -2150,6 +2377,12 @@ def _execute_agent_tool(run_id, tool_name):
         elif tool_name == "icv":
             ok, output, err = _tool_icv(run)
             agent_name = "ICV Agent"
+        elif tool_name == "ekv":
+            ok, output, err = _tool_ekv(run)
+            agent_name = "Guideline/Evidence Verifier Agent"
+        elif tool_name == "consensus_lite":
+            ok, output, err = _tool_consensus_lite(run)
+            agent_name = "Consensus Lite Agent"
         elif tool_name == "generate_medgemma_report":
             ok, output, err = _tool_generate_medgemma_report(run)
             agent_name = "Clinical Summary Agent"
@@ -2250,6 +2483,8 @@ def _build_context_from_completed_tools(run):
         "patient_context": None,
         "analysis_result": None,
         "report_result": None,
+        "ekv_result": None,
+        "consensus_result": None,
     }
     for result in run.get("tool_results", []):
         if result.get("status") != "completed":
@@ -2262,6 +2497,10 @@ def _build_context_from_completed_tools(run):
             context["analysis_result"] = output
         elif tool_name == "generate_medgemma_report":
             context["report_result"] = output
+        elif tool_name == "ekv":
+            context["ekv_result"] = output
+        elif tool_name == "consensus_lite":
+            context["consensus_result"] = output
     return context
 
 
@@ -2367,17 +2606,17 @@ def _run_agent_pipeline(run_id, start_tool=None):
         _update_agent_run(run_id, _set_stage_for_tool)
         ok, tool_result = _execute_agent_tool(run_id, tool_name)
         if not ok:
-            if tool_name == "icv":
-                # Keep ICV as non-blocking for Week4.
+            if tool_name in {"icv", "ekv", "consensus_lite"}:
+                # Keep quality-gate tools as non-blocking in Week5.
                 _agent_log(
                     run_id=run_id,
-                    stage="icv",
+                    stage=_stage_for_tool(tool_name),
                     tool=tool_name,
                     attempt=tool_result.get("attempt"),
                     status="run_continue",
                     error_code=tool_result.get("error_code"),
                     latency_ms=tool_result.get("latency_ms"),
-                    message="icv_soft_failure_non_blocking",
+                    message=f"{tool_name}_soft_failure_non_blocking",
                 )
                 continue
 
@@ -2407,13 +2646,15 @@ def _run_agent_pipeline(run_id, start_tool=None):
     run = _get_agent_run(run_id)
     context = _build_context_from_completed_tools(run)
     final_result = {
-        "summary": "Week3 main chain completed",
+        "summary": "Week5 main chain completed",
         "path_decision": (planner_output.get("path_decision") or {}),
         "tool_sequence": tool_sequence,
         "tool_results": run.get("tool_results", []),
         "patient_context": context.get("patient_context"),
         "analysis_result": context.get("analysis_result"),
         "report_result": context.get("report_result"),
+        "ekv_result": context.get("ekv_result"),
+        "consensus_result": context.get("consensus_result"),
         "uncertainties": [],
         "next_actions": [],
     }

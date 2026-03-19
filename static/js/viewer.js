@@ -247,6 +247,22 @@ function extractIcvPayload(payload) {
     return null;
 }
 
+function extractEkvPayload(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    if (payload.ekv && typeof payload.ekv === 'object') return payload.ekv;
+    if (payload.result && payload.result.ekv && typeof payload.result.ekv === 'object') return payload.result.ekv;
+    if (payload.status && (Array.isArray(payload.claims) || Array.isArray(payload.findings))) return payload;
+    return null;
+}
+
+function extractConsensusPayload(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    if (payload.consensus && typeof payload.consensus === 'object') return payload.consensus;
+    if (payload.result && payload.result.consensus && typeof payload.result.consensus === 'object') return payload.result.consensus;
+    if (payload.decision || payload.conflict_count !== undefined) return payload;
+    return null;
+}
+
 function buildIcvSummaryHtml(icv) {
     if (!icv || typeof icv !== 'object') return '';
     const status = (icv.status || '').toLowerCase();
@@ -305,6 +321,45 @@ function buildIcvSummaryHtml(icv) {
     `;
 }
 
+function buildEkvSummaryHtml(ekv) {
+    if (!ekv || typeof ekv !== 'object') return '';
+    const status = String(ekv.status || '').toLowerCase();
+    const color = status === 'available' ? '#2563eb' : '#b45309';
+    const findings = Array.isArray(ekv.findings) ? ekv.findings : [];
+    const claimList = Array.isArray(ekv.claims) ? ekv.claims : [];
+    const topClaims = claimList.slice(0, 4).map((item) => {
+        const verdict = String(item.verdict || 'unavailable');
+        return `<div style="display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid #f3f4f6;"><span>${item.claim_text || item.claim_id || '-'}</span><span style="font-weight:700;color:${verdict === 'supported' ? '#10b981' : verdict === 'partially_supported' ? '#f59e0b' : verdict === 'not_supported' ? '#ef4444' : '#6b7280'};">${verdict}</span></div>`;
+    }).join('');
+    return `
+        <div style="background:#eff6ff;border:1px solid rgba(37,99,235,0.12);padding:12px;border-radius:8px;margin-bottom:10px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <div style="font-weight:700;color:${color};">EKV 校验：${status.toUpperCase() || 'UNKNOWN'}</div>
+                <div style="font-size:12px;color:#666">发现 ${Number(ekv.finding_count || findings.length || 0)}</div>
+            </div>
+            <div style="font-size:12px;color:#555;margin-bottom:8px;">支持度评分：${Number(ekv.score || 0).toFixed(3)}</div>
+            <div style="font-size:13px;color:#333;">${topClaims || '<div style="color:#666">暂无关键结论</div>'}</div>
+        </div>
+    `;
+}
+
+function buildConsensusSummaryHtml(consensus) {
+    if (!consensus || typeof consensus !== 'object') return '';
+    const decision = String(consensus.decision || '-');
+    const color = decision === 'accept' ? '#10b981' : decision === 'skipped' ? '#6b7280' : decision === 'review_required' ? '#f59e0b' : '#ef4444';
+    const summary = consensus.summary || '';
+    const conflictCount = Number(consensus.conflict_count || 0);
+    return `
+        <div style="background:#f8fafc;border:1px solid rgba(15,23,42,0.08);padding:12px;border-radius:8px;margin-bottom:10px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                <div style="font-weight:700;color:${color};">Consensus：${decision}</div>
+                <div style="font-size:12px;color:#666">冲突 ${conflictCount}</div>
+            </div>
+            <div style="font-size:13px;color:#333;">${summary || 'No consensus summary provided.'}</div>
+        </div>
+    `;
+}
+
 // 如果存在 `ai_report_payload_<fileId>`，且没有完整报告文本，直接渲染 ICV 区块
 function tryRenderIcvFromStoredPayload() {
     try {
@@ -316,10 +371,14 @@ function tryRenderIcvFromStoredPayload() {
 
         const payload = JSON.parse(payloadRaw || '{}');
         const icv = extractIcvPayload(payload);
-        if (!icv) return;
+        const ekv = extractEkvPayload(payload);
+        const consensus = extractConsensusPayload(payload);
+        if (!icv && !ekv && !consensus) return;
 
         // 无论是否已有全文报告，先更新静态 ICV 状态/问题面板
-        renderIcvStaticFields(icv);
+        if (icv) {
+            renderIcvStaticFields(icv);
+        }
 
         // 如果已经有全文报告，避免覆盖由 displayAIReport 渲染的报告正文
         if (reportText) return;
@@ -329,9 +388,11 @@ function tryRenderIcvFromStoredPayload() {
         if (!aiReportSection || !aiReportContent) return;
         aiReportSection.style.display = 'block';
 
-        const icvHtml = buildIcvSummaryHtml(icv);
+        const icvHtml = icv ? buildIcvSummaryHtml(icv) : '';
+        const ekvHtml = ekv ? buildEkvSummaryHtml(ekv) : '';
+        const consensusHtml = consensus ? buildConsensusSummaryHtml(consensus) : '';
 
-        aiReportContent.innerHTML = icvHtml + `<div style="color:#666;margin-top:8px">报告文本尚未生成。</div>`;
+        aiReportContent.innerHTML = icvHtml + ekvHtml + consensusHtml + `<div style="color:#666;margin-top:8px">报告文本尚未生成。</div>`;
     } catch (e) {
         console.warn('tryRenderIcvFromStoredPayload failed', e);
     }
@@ -1227,21 +1288,33 @@ function displayAIReport(report, isMock) {
 
     // build ICV summary (if present in stored report payload)
     let icvHtml = '';
+    let ekvHtml = '';
+    let consensusHtml = '';
     try {
         const keys = getReportStorageKeys(currentFileId);
         const payloadRaw = localStorage.getItem(keys.payload) || null;
         if (payloadRaw) {
                 const payload = JSON.parse(payloadRaw || '{}');
                 const icv = extractIcvPayload(payload);
+                const ekv = extractEkvPayload(payload);
+                const consensus = extractConsensusPayload(payload);
             if (icv) {
                 // 同步固定 HTML 字段（状态 + 具体问题）
                 renderIcvStaticFields(icv);
                 icvHtml = buildIcvSummaryHtml(icv);
             }
+            if (ekv) {
+                ekvHtml = buildEkvSummaryHtml(ekv);
+            }
+            if (consensus) {
+                consensusHtml = buildConsensusSummaryHtml(consensus);
+            }
         }
     } catch (e) {
         console.warn('Failed to render ICV summary', e);
         icvHtml = '';
+        ekvHtml = '';
+        consensusHtml = '';
     }
 
     aiReportContent.innerHTML = `
@@ -1250,6 +1323,8 @@ function displayAIReport(report, isMock) {
                 NeuroMatrix AI 报告 ${isMock ? '<span style="background: #ffd700; padding: 1px 6px; border-radius: 8px; font-size: 10px;">模拟</span>' : ''}
             </div>
             ${icvHtml}
+            ${ekvHtml}
+            ${consensusHtml}
             <div style="font-size: 12px; line-height: 1.8; color: #333;">${parseMarkdown(report)}</div>
         </div>
     `;
