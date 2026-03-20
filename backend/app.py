@@ -2241,21 +2241,21 @@ def _tool_generate_medgemma_report(run):
     consensus_failed_result = None
     try:
         run_results = run.get("tool_results") or []
-        for r in run_results:
+        for r in reversed(run_results):
             if r.get("tool_name") == "icv" and r.get("status") == "completed":
                 icv_payload = r.get("structured_output") or r.get("raw_ref")
                 break
             if r.get("tool_name") == "icv" and r.get("status") == "failed":
                 icv_failed_result = r
 
-        for r in run_results:
+        for r in reversed(run_results):
             if r.get("tool_name") == "ekv" and r.get("status") == "completed":
                 ekv_payload = r.get("structured_output") or r.get("raw_ref")
                 break
             if r.get("tool_name") == "ekv" and r.get("status") == "failed":
                 ekv_failed_result = r
 
-        for r in run_results:
+        for r in reversed(run_results):
             if (
                 r.get("tool_name") == "consensus_lite"
                 and r.get("status") == "completed"
