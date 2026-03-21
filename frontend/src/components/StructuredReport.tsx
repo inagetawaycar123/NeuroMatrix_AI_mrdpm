@@ -37,6 +37,33 @@ type ReportPayload = {
   summary_findings?: string[]
   ctp_enhanced?: string[] | null
   risk_notice?: string[]
+  icv?: {
+    status?: string
+    finding_count?: number
+  } | null
+  ekv?: {
+    status?: string
+    finding_count?: number
+    support_rate?: number
+    claims?: Array<{
+      claim_id?: string
+      claim_text?: string
+      verdict?: string
+      message?: string
+      evidence_refs?: string[]
+    }>
+    citations?: Array<{
+      source_ref?: string
+      snippet?: string
+    }>
+  } | null
+  consensus?: {
+    status?: string
+    decision?: string
+    conflict_count?: number
+    summary?: string
+    next_actions?: string[]
+  } | null
 }
 
 interface PatientData {
@@ -300,6 +327,9 @@ const parsePayloadFromStorage = (raw: string | null): ReportPayload | null => {
       summary_findings: Array.isArray(parsed?.summary_findings) ? parsed.summary_findings : [],
       ctp_enhanced: Array.isArray(parsed?.ctp_enhanced) ? parsed.ctp_enhanced : null,
       risk_notice: Array.isArray(parsed?.risk_notice) ? parsed.risk_notice : [],
+      icv: parsed?.icv && typeof parsed.icv === 'object' ? parsed.icv : null,
+      ekv: parsed?.ekv && typeof parsed.ekv === 'object' ? parsed.ekv : null,
+      consensus: parsed?.consensus && typeof parsed.consensus === 'object' ? parsed.consensus : null,
     }
   } catch {
     return null
@@ -344,6 +374,16 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({ patientId, f
       '关键结论需结合完整影像序列、临床表现与实验室结果综合判读。',
     ]
   }, [reportPayload, aiReport])
+
+  const ekvClaims = useMemo(() => {
+    const claims = reportPayload?.ekv?.claims
+    return Array.isArray(claims) ? claims : []
+  }, [reportPayload])
+
+  const ekvCitations = useMemo(() => {
+    const citations = reportPayload?.ekv?.citations
+    return Array.isArray(citations) ? citations : []
+  }, [reportPayload])
 
   useEffect(() => {
     if (!patientId) {
@@ -622,6 +662,82 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({ patientId, f
                   </li>
                 ))}
               </ul>
+            </div>
+          </div>
+        </div>
+
+        <div className="report-module">
+          <div className="module-header" style={{ background: 'linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%)' }}>
+            Evidence Validation Summary
+          </div>
+          <div className="module-content">
+            <div className="field-value">
+              <div style={{ display: 'grid', gap: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>EKV status</span>
+                  <strong>{reportPayload?.ekv?.status || '-'}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>EKV findings</span>
+                  <strong>{reportPayload?.ekv?.finding_count ?? 0}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Support rate</span>
+                  <strong>
+                    {typeof reportPayload?.ekv?.support_rate === 'number'
+                      ? `${Math.round(reportPayload.ekv.support_rate * 10000) / 100}%`
+                      : '-'}
+                  </strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Consensus decision</span>
+                  <strong>{reportPayload?.consensus?.decision || '-'}</strong>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <span>Conflict count</span>
+                  <strong>{reportPayload?.consensus?.conflict_count ?? 0}</strong>
+                </div>
+              </div>
+
+              {ekvClaims.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 8 }}>Claims</div>
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {ekvClaims.map((claim, idx) => {
+                      const verdict = String(claim?.verdict || 'unavailable')
+                      const color =
+                        verdict === 'supported'
+                          ? '#10b981'
+                          : verdict === 'partially_supported'
+                            ? '#f59e0b'
+                            : verdict === 'not_supported'
+                              ? '#ef4444'
+                              : '#94a3b8'
+                      return (
+                        <li key={`ekv-claim-${idx}`} style={{ marginBottom: 8, lineHeight: 1.6 }}>
+                          <span style={{ fontWeight: 600, color }}>{verdict}</span>
+                          <span style={{ marginLeft: 8 }}>{claim?.claim_text || claim?.claim_id || 'claim'}</span>
+                          {claim?.message ? <div style={{ color: '#cbd5e1', marginTop: 4 }}>{claim.message}</div> : null}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                </div>
+              )}
+
+              {ekvCitations.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <div style={{ fontWeight: 600, marginBottom: 8 }}>Citations</div>
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {ekvCitations.slice(0, 8).map((item, idx) => (
+                      <li key={`ekv-citation-${idx}`} style={{ marginBottom: 8, lineHeight: 1.6 }}>
+                        <span style={{ color: '#7dd3fc' }}>{item?.source_ref || '-'}</span>
+                        {item?.snippet ? <div style={{ color: '#cbd5e1', marginTop: 4 }}>{item.snippet}</div> : null}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
         </div>

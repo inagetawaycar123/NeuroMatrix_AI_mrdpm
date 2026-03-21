@@ -46,6 +46,11 @@ function getAgentPanelElements() {
         lastError: document.getElementById('agentLastError'),
         icvStatus: document.getElementById('agentIcvStatus'),
         icvFindings: document.getElementById('agentIcvFindings'),
+        ekvStatus: document.getElementById('agentEkvStatus'),
+        ekvFindings: document.getElementById('agentEkvFindings'),
+        ekvSupportRate: document.getElementById('agentEkvSupportRate'),
+        consensusDecision: document.getElementById('agentConsensusDecision'),
+        consensusConflicts: document.getElementById('agentConsensusConflicts'),
         message: document.getElementById('agentRunMessage'),
         retryStep: document.getElementById('agentRetryStep'),
         retryHint: document.getElementById('agentRetryHint'),
@@ -504,6 +509,140 @@ function getIcvFindingCount(icvObj) {
     return 0;
 }
 
+function parseEkvPayload(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    if (raw.ekv && typeof raw.ekv === 'object') return raw.ekv;
+    if (raw.success && raw.ekv && typeof raw.ekv === 'object') return raw.ekv;
+    if (raw.result && raw.result.ekv && typeof raw.result.ekv === 'object') return raw.result.ekv;
+    if (raw.status && (Array.isArray(raw.claims) || Array.isArray(raw.findings))) return raw;
+    return null;
+}
+
+function resolveEkvFromRun(run) {
+    if (!run || typeof run !== 'object') {
+        return null;
+    }
+
+    const toolResults = Array.isArray(run.tool_results) ? run.tool_results : [];
+    const completed = [...toolResults]
+        .reverse()
+        .find((item) => item && item.tool_name === 'ekv' && item.status === 'completed');
+    if (completed) {
+        const parsed = parseEkvPayload(completed.structured_output || completed.raw_ref || null);
+        if (parsed) return { ...parsed, __source: 'tool_results_completed' };
+    }
+
+    const fromReport = parseEkvPayload(
+        (((run.result || {}).report_result || {}).report_payload || {}).ekv || null
+    );
+    if (fromReport) {
+        return { ...fromReport, __source: 'run_result_report_payload' };
+    }
+
+    const failed = [...toolResults]
+        .reverse()
+        .find((item) => item && item.tool_name === 'ekv' && item.status === 'failed');
+    if (failed) {
+        return {
+            status: 'unavailable',
+            finding_count: 0,
+            score: 0.0,
+            confidence_delta: 0.0,
+            support_rate: 0.0,
+            claims: [],
+            findings: [],
+            citations: [],
+            error_code: failed.error_code || '',
+            error_message: failed.error_message || '',
+            suggested_action: failed.suggested_action || '',
+            __source: 'tool_results_failed',
+        };
+    }
+    return null;
+}
+
+function getEkvFindingCount(ekvObj) {
+    if (!ekvObj || typeof ekvObj !== 'object') return 0;
+    if (typeof ekvObj.finding_count === 'number') return ekvObj.finding_count;
+    if (Array.isArray(ekvObj.findings)) return ekvObj.findings.length;
+    return 0;
+}
+
+function getEkvSupportRateText(ekvObj) {
+    if (!ekvObj || typeof ekvObj !== 'object') return '-';
+    const val = Number(ekvObj.support_rate);
+    if (Number.isFinite(val)) {
+        return `${Math.round(val * 10000) / 100}%`;
+    }
+    if (Array.isArray(ekvObj.claims) && ekvObj.claims.length > 0) {
+        const supported = ekvObj.claims.filter((c) => String(c?.verdict || '').toLowerCase() === 'supported').length;
+        const ratio = supported / ekvObj.claims.length;
+        return `${Math.round(ratio * 10000) / 100}%`;
+    }
+    return '-';
+}
+
+function parseConsensusPayload(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    if (raw.consensus && typeof raw.consensus === 'object') return raw.consensus;
+    if (raw.success && raw.consensus && typeof raw.consensus === 'object') return raw.consensus;
+    if (raw.result && raw.result.consensus && typeof raw.result.consensus === 'object') return raw.result.consensus;
+    if (raw.status && (typeof raw.decision === 'string' || Array.isArray(raw.conflicts))) return raw;
+    return null;
+}
+
+function resolveConsensusFromRun(run) {
+    if (!run || typeof run !== 'object') {
+        return null;
+    }
+
+    const toolResults = Array.isArray(run.tool_results) ? run.tool_results : [];
+    const completed = [...toolResults]
+        .reverse()
+        .find((item) => item && item.tool_name === 'consensus_lite' && item.status === 'completed');
+    if (completed) {
+        const parsed = parseConsensusPayload(completed.structured_output || completed.raw_ref || null);
+        if (parsed) return { ...parsed, __source: 'tool_results_completed' };
+    }
+
+    const fromReport = parseConsensusPayload(
+        (((run.result || {}).report_result || {}).report_payload || {}).consensus || null
+    );
+    if (fromReport) {
+        return { ...fromReport, __source: 'run_result_report_payload' };
+    }
+
+    const failed = [...toolResults]
+        .reverse()
+        .find((item) => item && item.tool_name === 'consensus_lite' && item.status === 'failed');
+    if (failed) {
+        return {
+            status: 'unavailable',
+            decision: 'review_required',
+            conflict_count: 0,
+            summary: failed.error_message || '',
+            conflicts: [],
+            next_actions: [],
+            error_code: failed.error_code || '',
+            error_message: failed.error_message || '',
+            suggested_action: failed.suggested_action || '',
+            __source: 'tool_results_failed',
+        };
+    }
+    return null;
+}
+
+function getConsensusConflictCount(consensusObj) {
+    if (!consensusObj || typeof consensusObj !== 'object') return 0;
+    if (typeof consensusObj.conflict_count === 'number') return consensusObj.conflict_count;
+    if (Array.isArray(consensusObj.conflicts)) return consensusObj.conflicts.length;
+    return 0;
+}
+
 function getLatestRetryableFailedStep(run) {
     if (!run || !Array.isArray(run.steps)) {
         return null;
@@ -614,29 +753,29 @@ function updateAgentPanel(run, events) {
     if (els.eventCount) els.eventCount.textContent = String((events || []).length);
     if (els.reportStatus) els.reportStatus.textContent = getReportStatusText(run);
     if (els.lastError) els.lastError.textContent = getLastErrorText(run);
+
     let icvObj = null;
+    let ekvObj = null;
+    let consensusObj = null;
+
     try {
         icvObj = resolveIcvFromRun(run);
+        ekvObj = resolveEkvFromRun(run);
+        consensusObj = resolveConsensusFromRun(run);
 
-        // 将 ICV 结果尽早落盘到 localStorage，供 Viewer 直接读取
-        try {
-            if (icvObj && processingFileId) {
-                const key = `ai_report_payload_${processingFileId}`;
-                let existing = null;
-                try {
-                    existing = JSON.parse(localStorage.getItem(key) || 'null');
-                } catch (e) {
-                    existing = null;
-                }
-                // 仅在当前 payload 还没有 icv 字段时写入，避免覆盖完整的 report_payload
-                if (!existing || typeof existing !== 'object' || (!existing.icv && !existing.result)) {
-                    const payloadToStore = existing && typeof existing === 'object' ? existing : {};
-                    payloadToStore.icv = icvObj;
-                    localStorage.setItem(key, JSON.stringify(payloadToStore));
-                }
+        if (processingFileId) {
+            const key = `ai_report_payload_${processingFileId}`;
+            let existing = null;
+            try {
+                existing = JSON.parse(localStorage.getItem(key) || 'null');
+            } catch (e) {
+                existing = null;
             }
-        } catch (e) {
-            // localStorage 失败时忽略，不影响页面其它逻辑
+            const payloadToStore = existing && typeof existing === 'object' ? existing : {};
+            if (icvObj && !payloadToStore.icv) payloadToStore.icv = icvObj;
+            if (ekvObj && !payloadToStore.ekv) payloadToStore.ekv = ekvObj;
+            if (consensusObj && !payloadToStore.consensus) payloadToStore.consensus = consensusObj;
+            localStorage.setItem(key, JSON.stringify(payloadToStore));
         }
 
         if (els.icvStatus) {
@@ -655,39 +794,80 @@ function updateAgentPanel(run, events) {
         if (els.icvFindings) {
             els.icvFindings.textContent = String(getIcvFindingCount(icvObj));
         }
+
+        if (els.ekvStatus) {
+            if (ekvObj && ekvObj.status) {
+                const statusText = String(ekvObj.status);
+                const unavailableReason = statusText.toLowerCase() === 'unavailable'
+                    ? (ekvObj.error_message || ekvObj.error_code || '')
+                    : '';
+                els.ekvStatus.textContent = unavailableReason
+                    ? `${statusText} (${unavailableReason})`
+                    : statusText;
+            } else {
+                els.ekvStatus.textContent = '-';
+            }
+        }
+        if (els.ekvFindings) {
+            els.ekvFindings.textContent = String(getEkvFindingCount(ekvObj));
+        }
+        if (els.ekvSupportRate) {
+            els.ekvSupportRate.textContent = getEkvSupportRateText(ekvObj);
+        }
+
+        if (els.consensusDecision) {
+            els.consensusDecision.textContent =
+                consensusObj && consensusObj.decision
+                    ? String(consensusObj.decision)
+                    : '-';
+        }
+        if (els.consensusConflicts) {
+            els.consensusConflicts.textContent = String(getConsensusConflictCount(consensusObj));
+        }
     } catch (e) {
         if (els.icvStatus) els.icvStatus.textContent = '-';
         if (els.icvFindings) els.icvFindings.textContent = '0';
+        if (els.ekvStatus) els.ekvStatus.textContent = '-';
+        if (els.ekvFindings) els.ekvFindings.textContent = '0';
+        if (els.ekvSupportRate) els.ekvSupportRate.textContent = '-';
+        if (els.consensusDecision) els.consensusDecision.textContent = '-';
+        if (els.consensusConflicts) els.consensusConflicts.textContent = '0';
     }
+
     updateRetryControls(run);
 
     if (!els.message) {
         return;
     }
     if (run.status === 'running' || run.status === 'queued') {
-        els.message.textContent = `Agent 后置汇总运行中: ${run.current_tool || run.stage || '-'}`;
+        els.message.textContent = `Agent post-upload chain running: ${run.current_tool || run.stage || '-'}`;
         return;
     }
     if (run.status === 'succeeded') {
-        if (icvObj && String(icvObj.status || '').toLowerCase() === 'unavailable') {
-            const reason = icvObj.error_message || icvObj.error_code || 'unknown';
-            els.message.textContent = `Agent 后置汇总已完成（ICV unavailable: ${reason}）。`;
-        } else {
-            els.message.textContent = 'Agent 后置汇总已完成。';
+        const ekvStatus = String((ekvObj || {}).status || '').toLowerCase();
+        const consensusDecision = String((consensusObj || {}).decision || '').toLowerCase();
+        if (ekvStatus === 'unavailable') {
+            const reason = (ekvObj || {}).error_message || (ekvObj || {}).error_code || 'unknown';
+            els.message.textContent = `Agent completed (EKV unavailable: ${reason}).`;
+            return;
         }
+        if (consensusDecision && consensusDecision !== 'accept') {
+            els.message.textContent = `Agent completed with consensus decision: ${consensusDecision}.`;
+            return;
+        }
+        els.message.textContent = 'Agent post-upload chain completed.';
         return;
     }
     if (run.status === 'failed') {
-        els.message.textContent = `Agent 后置汇总失败（不影响影像处理）: ${getLastErrorText(run)}`;
+        els.message.textContent = `Agent post-upload chain failed (upload chain unaffected): ${getLastErrorText(run)}`;
         return;
     }
     if (run.status === 'cancelled') {
-        els.message.textContent = 'Agent 后置汇总已取消。';
+        els.message.textContent = 'Agent post-upload chain cancelled.';
         return;
     }
-    els.message.textContent = `Agent 状态: ${run.status || '-'}`;
+    els.message.textContent = `Agent status: ${run.status || '-'}`;
 }
-
 async function pollAgentStatus() {
     if (!processingAgentRunId) {
         return;

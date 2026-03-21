@@ -247,6 +247,24 @@ function extractIcvPayload(payload) {
     return null;
 }
 
+function extractEkvPayload(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    if (payload.ekv && typeof payload.ekv === 'object') return payload.ekv;
+    if (payload.success && payload.ekv && typeof payload.ekv === 'object') return payload.ekv;
+    if (payload.result && payload.result.ekv && typeof payload.result.ekv === 'object') return payload.result.ekv;
+    if (payload.status && (Array.isArray(payload.claims) || Array.isArray(payload.findings))) return payload;
+    return null;
+}
+
+function extractConsensusPayload(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    if (payload.consensus && typeof payload.consensus === 'object') return payload.consensus;
+    if (payload.success && payload.consensus && typeof payload.consensus === 'object') return payload.consensus;
+    if (payload.result && payload.result.consensus && typeof payload.result.consensus === 'object') return payload.result.consensus;
+    if (payload.status && (typeof payload.decision === 'string' || Array.isArray(payload.conflicts))) return payload;
+    return null;
+}
+
 function buildIcvSummaryHtml(icv) {
     if (!icv || typeof icv !== 'object') return '';
     const status = (icv.status || '').toLowerCase();
@@ -316,13 +334,13 @@ function tryRenderIcvFromStoredPayload() {
 
         const payload = JSON.parse(payloadRaw || '{}');
         const icv = extractIcvPayload(payload);
-        if (!icv) return;
-
-        // 无论是否已有全文报告，先更新静态 ICV 状态/问题面板
-        renderIcvStaticFields(icv);
+        const ekv = extractEkvPayload(payload);
+        const consensus = extractConsensusPayload(payload);
+        renderIcvStaticFields(icv, ekv, consensus);
 
         // 如果已经有全文报告，避免覆盖由 displayAIReport 渲染的报告正文
         if (reportText) return;
+        if (!icv) return;
 
         const aiReportSection = document.getElementById('aiReportSection');
         const aiReportContent = document.getElementById('aiReportContent');
@@ -337,7 +355,7 @@ function tryRenderIcvFromStoredPayload() {
     }
 }
 
-function renderIcvStaticFields(icv) {
+function renderIcvStaticFields(icv, ekv = null, consensus = null) {
     try {
         const statusEl = document.getElementById('icvStaticStatus');
         const issuesEl = document.getElementById('icvStaticIssues');
@@ -347,20 +365,42 @@ function renderIcvStaticFields(icv) {
         statusEl.textContent = status;
         statusEl.style.color = status === 'PASS' ? '#10b981' : status === 'WARN' ? '#f59e0b' : status === 'UNAVAILABLE' ? '#f59e0b' : '#ef4444';
 
+        const ekvStatus = ekv && ekv.status ? String(ekv.status).toUpperCase() : 'N/A';
+        const ekvFindings = Number.isFinite(Number(ekv && ekv.finding_count))
+            ? Number(ekv.finding_count)
+            : (Array.isArray(ekv && ekv.findings) ? ekv.findings.length : 0);
+        const supportRate = Number.isFinite(Number(ekv && ekv.support_rate))
+            ? `${Math.round(Number(ekv.support_rate) * 10000) / 100}%`
+            : '-';
+        const consensusDecision = consensus && consensus.decision ? String(consensus.decision) : 'N/A';
+        const conflictCount = Number.isFinite(Number(consensus && consensus.conflict_count))
+            ? Number(consensus.conflict_count)
+            : (Array.isArray(consensus && consensus.conflicts) ? consensus.conflicts.length : 0);
+        const validationSummaryHtml = `
+            <div style="margin-bottom:8px;padding:8px;border-radius:6px;background:#f8fafc;border:1px solid #e5e7eb;">
+                <div style="font-weight:700;color:#334155;margin-bottom:6px;">Validation Summary</div>
+                <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span style="color:#64748b;">EKV status</span><span style="font-weight:600;color:#0f172a;">${ekvStatus}</span></div>
+                <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span style="color:#64748b;">EKV findings</span><span style="font-weight:600;color:#0f172a;">${ekvFindings}</span></div>
+                <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span style="color:#64748b;">Support rate</span><span style="font-weight:600;color:#0f172a;">${supportRate}</span></div>
+                <div style="display:flex;justify-content:space-between;margin-bottom:4px;"><span style="color:#64748b;">Consensus decision</span><span style="font-weight:600;color:#0f172a;">${consensusDecision}</span></div>
+                <div style="display:flex;justify-content:space-between;"><span style="color:#64748b;">Conflicts</span><span style="font-weight:600;color:#0f172a;">${conflictCount}</span></div>
+            </div>
+        `;
+
         if (status === 'UNAVAILABLE') {
             const reason = (icv && (icv.error_message || icv.error_code)) ? String(icv.error_message || icv.error_code) : 'unknown';
-            issuesEl.innerHTML = `<div style="color:#b45309;font-weight:600;">ICV result unavailable: ${reason}</div>`;
+            issuesEl.innerHTML = `${validationSummaryHtml}<div style="color:#b45309;font-weight:600;">ICV result unavailable: ${reason}</div>`;
             return;
         }
 
         const findings = Array.isArray(icv && icv.findings) ? icv.findings : [];
         const problems = findings.filter(f => String((f && f.status) || '').toLowerCase() !== 'pass');
         if (!problems.length) {
-            issuesEl.innerHTML = '<div style="color:#10b981;font-weight:600;">未发现 ICV 问题</div>';
+            issuesEl.innerHTML = `${validationSummaryHtml}<div style="color:#10b981;font-weight:600;">未发现 ICV 问题</div>`;
             return;
         }
 
-        issuesEl.innerHTML = problems.map((f) => `
+        const icvProblemsHtml = problems.map((f) => `
             <div style="padding:6px 0;border-bottom:1px dashed #eee;">
                 <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;">
                     <div style="font-weight:700;color:#ef4444;">${String((f.id||'unknown')).replace(/_/g,' ')}</div>
@@ -370,6 +410,7 @@ function renderIcvStaticFields(icv) {
                 ${f.suggested_action ? `<div style="margin-top:4px;color:#2563eb;">建议: ${f.suggested_action}</div>` : ''}
             </div>
         `).join('');
+        issuesEl.innerHTML = `${validationSummaryHtml}${icvProblemsHtml}`;
     } catch (e) {
         // ignore
     }
@@ -1233,9 +1274,11 @@ function displayAIReport(report, isMock) {
         if (payloadRaw) {
                 const payload = JSON.parse(payloadRaw || '{}');
                 const icv = extractIcvPayload(payload);
+                const ekv = extractEkvPayload(payload);
+                const consensus = extractConsensusPayload(payload);
+                renderIcvStaticFields(icv, ekv, consensus);
             if (icv) {
                 // 同步固定 HTML 字段（状态 + 具体问题）
-                renderIcvStaticFields(icv);
                 icvHtml = buildIcvSummaryHtml(icv);
             }
         }

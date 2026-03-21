@@ -261,3 +261,45 @@
    - `POST /api/agent/runs/{run_id}/retry`
 5. 已保持上传链路兼容：`/api/upload/start`、`/api/upload/progress/{job_id}` 不变，并支持可选返回 `agent_run_id`。
 6. Week3 运行态目前为进程内存态，后续阶段再迁移持久化。
+
+## 12. Week5 Closure Update (2026-03-20)
+
+### 12.1 Implemented in code
+
+- Added `ekv` and `consensus_lite` into Agent tool sequences and post-upload summary sequence.
+- Added stage observability:
+  - `ekv -> ekv`
+  - `consensus_lite -> consensus`
+  - report generation -> `summary`
+- Added non-blocking behavior for verification tools:
+  - `icv`, `ekv`, `consensus_lite` failures are recorded but do not stop report generation.
+- Added Week5 contracts:
+  - `EKVResult`: `status/finding_count/score/confidence_delta/support_rate/claims/findings/citations`
+  - `ConsensusResult`: `status/decision/conflict_count/summary/conflicts/next_actions`
+
+### 12.2 Evidence-driven EKV
+
+- Introduced local retrieval module: `backend/ekv_retrieval.py`
+  - source directory: `EKV_docs`
+  - indexing unit: `doc -> page -> chunk`
+  - retrieval: lightweight TF-IDF/BM25-like scoring
+  - citation fields: `doc_name/page/source_ref/snippet`
+- `_query_guideline_kb` now consumes local retrieval results first and keeps a fallback path for robustness.
+
+### 12.3 Frontend visibility
+
+- Processing summary card now binds:
+  - `EKV status/findings/support_rate`
+  - `Consensus decision/conflicts`
+- Viewer static validation area now displays ICV + EKV + Consensus summary.
+- Structured Report (React) now includes `Evidence Validation Summary`.
+
+### 12.4 Verification notes
+
+- Syntax/build smoke passed:
+  - `python -m py_compile backend/app.py backend/ekv.py backend/ekv_retrieval.py`
+  - `node --check static/js/processing.js`
+  - `node --check static/js/viewer.js`
+  - `npm run build` under `frontend/`
+- Local retrieval smoke confirms citations can be returned from `EKV_docs` with `doc+page`.
+- Manual clinical-case sign-off remains required in acceptance record.
