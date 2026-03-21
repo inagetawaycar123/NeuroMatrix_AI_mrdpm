@@ -46,6 +46,10 @@ function getAgentPanelElements() {
         lastError: document.getElementById('agentLastError'),
         icvStatus: document.getElementById('agentIcvStatus'),
         icvFindings: document.getElementById('agentIcvFindings'),
+        ekvStatus: document.getElementById('agentEkvStatus'),
+        ekvFindings: document.getElementById('agentEkvFindings'),
+        consensusDecision: document.getElementById('agentConsensusDecision'),
+        consensusConflicts: document.getElementById('agentConsensusConflicts'),
         message: document.getElementById('agentRunMessage'),
         retryStep: document.getElementById('agentRetryStep'),
         retryHint: document.getElementById('agentRetryHint'),
@@ -504,6 +508,105 @@ function getIcvFindingCount(icvObj) {
     return 0;
 }
 
+function parseEkvPayload(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    if (raw.ekv && typeof raw.ekv === 'object') return raw.ekv;
+    if (raw.result && raw.result.ekv && typeof raw.result.ekv === 'object') return raw.result.ekv;
+    if (raw.status && (Array.isArray(raw.claims) || Array.isArray(raw.findings))) return raw;
+    return null;
+}
+
+function resolveEkvFromRun(run) {
+    if (!run || typeof run !== 'object') {
+        return null;
+    }
+
+    const toolResults = Array.isArray(run.tool_results) ? run.tool_results : [];
+    const completed = [...toolResults]
+        .reverse()
+        .find((item) => item && item.tool_name === 'ekv' && item.status === 'completed');
+    if (completed) {
+        const parsed = parseEkvPayload(completed.structured_output || completed.raw_ref || null);
+        if (parsed) return { ...parsed, __source: 'tool_results_completed' };
+    }
+
+    const reportEkv = parseEkvPayload((((run.result || {}).report_result || {}).report_payload || {}).ekv || null);
+    if (reportEkv) return { ...reportEkv, __source: 'run_result_report_payload' };
+
+    const failed = [...toolResults]
+        .reverse()
+        .find((item) => item && item.tool_name === 'ekv' && item.status === 'failed');
+    if (failed) {
+        return {
+            status: 'unavailable',
+            finding_count: 0,
+            score: 0.0,
+            confidence_delta: 0.0,
+            claims: [],
+            findings: [],
+            error_code: failed.error_code || '',
+            error_message: failed.error_message || '',
+            suggested_action: failed.suggested_action || '',
+            __source: 'tool_results_failed',
+        };
+    }
+    return null;
+}
+
+function getEkvFindingCount(ekvObj) {
+    if (!ekvObj || typeof ekvObj !== 'object') return 0;
+    if (typeof ekvObj.finding_count === 'number') return ekvObj.finding_count;
+    if (Array.isArray(ekvObj.findings)) return ekvObj.findings.length;
+    return 0;
+}
+
+function parseConsensusPayload(raw) {
+    if (!raw || typeof raw !== 'object') {
+        return null;
+    }
+    if (raw.consensus && typeof raw.consensus === 'object') return raw.consensus;
+    if (raw.result && raw.result.consensus && typeof raw.result.consensus === 'object') return raw.result.consensus;
+    if (raw.decision || raw.conflict_count !== undefined) return raw;
+    return null;
+}
+
+function resolveConsensusFromRun(run) {
+    if (!run || typeof run !== 'object') {
+        return null;
+    }
+
+    const toolResults = Array.isArray(run.tool_results) ? run.tool_results : [];
+    const completed = [...toolResults]
+        .reverse()
+        .find((item) => item && item.tool_name === 'consensus_lite' && item.status === 'completed');
+    if (completed) {
+        const parsed = parseConsensusPayload(completed.structured_output || completed.raw_ref || null);
+        if (parsed) return { ...parsed, __source: 'tool_results_completed' };
+    }
+
+    const reportConsensus = parseConsensusPayload((((run.result || {}).report_result || {}).report_payload || {}).consensus || null);
+    if (reportConsensus) return { ...reportConsensus, __source: 'run_result_report_payload' };
+
+    const failed = [...toolResults]
+        .reverse()
+        .find((item) => item && item.tool_name === 'consensus_lite' && item.status === 'failed');
+    if (failed) {
+        return {
+            status: 'unavailable',
+            decision: 'review_required',
+            conflict_count: 0,
+            summary: failed.error_message || failed.error_code || '',
+            error_code: failed.error_code || '',
+            error_message: failed.error_message || '',
+            suggested_action: failed.suggested_action || '',
+            __source: 'tool_results_failed',
+        };
+    }
+    return null;
+}
+
 function getLatestRetryableFailedStep(run) {
     if (!run || !Array.isArray(run.steps)) {
         return null;
@@ -615,12 +718,16 @@ function updateAgentPanel(run, events) {
     if (els.reportStatus) els.reportStatus.textContent = getReportStatusText(run);
     if (els.lastError) els.lastError.textContent = getLastErrorText(run);
     let icvObj = null;
+    let ekvObj = null;
+    let consensusObj = null;
     try {
         icvObj = resolveIcvFromRun(run);
+        ekvObj = resolveEkvFromRun(run);
+        consensusObj = resolveConsensusFromRun(run);
 
-        // 将 ICV 结果尽早落盘到 localStorage，供 Viewer 直接读取
+        // 将校验结果尽早落盘到 localStorage，供 Viewer 直接读取
         try {
-            if (icvObj && processingFileId) {
+            if ((icvObj || ekvObj || consensusObj) && processingFileId) {
                 const key = `ai_report_payload_${processingFileId}`;
                 let existing = null;
                 try {
@@ -628,10 +735,12 @@ function updateAgentPanel(run, events) {
                 } catch (e) {
                     existing = null;
                 }
-                // 仅在当前 payload 还没有 icv 字段时写入，避免覆盖完整的 report_payload
-                if (!existing || typeof existing !== 'object' || (!existing.icv && !existing.result)) {
+                // 仅在当前 payload 还没有对应字段时写入，避免覆盖完整的 report_payload
+                if (!existing || typeof existing !== 'object' || (!existing.icv && !existing.ekv && !existing.consensus && !existing.result)) {
                     const payloadToStore = existing && typeof existing === 'object' ? existing : {};
-                    payloadToStore.icv = icvObj;
+                    if (icvObj) payloadToStore.icv = icvObj;
+                    if (ekvObj) payloadToStore.ekv = ekvObj;
+                    if (consensusObj) payloadToStore.consensus = consensusObj;
                     localStorage.setItem(key, JSON.stringify(payloadToStore));
                 }
             }
@@ -655,9 +764,42 @@ function updateAgentPanel(run, events) {
         if (els.icvFindings) {
             els.icvFindings.textContent = String(getIcvFindingCount(icvObj));
         }
+
+        if (els.ekvStatus) {
+            if (ekvObj && ekvObj.status) {
+                const statusText = String(ekvObj.status);
+                const unavailableReason = statusText.toLowerCase() === 'unavailable'
+                    ? (ekvObj.error_message || ekvObj.error_code || '')
+                    : '';
+                els.ekvStatus.textContent = unavailableReason
+                    ? `${statusText} (${unavailableReason})`
+                    : statusText;
+            } else {
+                els.ekvStatus.textContent = '-';
+            }
+        }
+        if (els.ekvFindings) {
+            els.ekvFindings.textContent = String(getEkvFindingCount(ekvObj));
+        }
+
+        if (els.consensusDecision) {
+            els.consensusDecision.textContent = (consensusObj && consensusObj.decision)
+                ? String(consensusObj.decision)
+                : '-';
+        }
+        if (els.consensusConflicts) {
+            const count = (consensusObj && typeof consensusObj.conflict_count === 'number')
+                ? consensusObj.conflict_count
+                : 0;
+            els.consensusConflicts.textContent = String(count);
+        }
     } catch (e) {
         if (els.icvStatus) els.icvStatus.textContent = '-';
         if (els.icvFindings) els.icvFindings.textContent = '0';
+        if (els.ekvStatus) els.ekvStatus.textContent = '-';
+        if (els.ekvFindings) els.ekvFindings.textContent = '0';
+        if (els.consensusDecision) els.consensusDecision.textContent = '-';
+        if (els.consensusConflicts) els.consensusConflicts.textContent = '0';
     }
     updateRetryControls(run);
 

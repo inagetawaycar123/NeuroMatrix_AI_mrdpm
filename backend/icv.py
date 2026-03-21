@@ -132,7 +132,10 @@ def evaluate_icv(
         # Common places where report payload may live
         candidates = []
         if isinstance(analysis_result.get("report"), dict):
-            candidates.append(analysis_result.get("report"))
+            report_obj = analysis_result.get("report")
+            candidates.append(report_obj)
+            if isinstance(report_obj.get("summary"), dict):
+                candidates.append(report_obj.get("summary"))
         if isinstance(analysis_result.get("report_result"), dict):
             # some runs embed the payload under report_result.report_payload or report
             rr = analysis_result.get("report_result")
@@ -202,10 +205,6 @@ def evaluate_icv(
             has_ctp = "tmax" in joined or "cbf" in joined or "cbv" in joined or "ctp" in joined
     except Exception:
         has_ctp = False
-
-    # If volumetric CTP-derived numbers are present (core/penumbra/mismatch), treat as CTP evidence
-    if not has_ctp and (core_vol is not None or penumbra_vol is not None or mismatch_ratio is not None):
-        has_ctp = True
 
     if not has_ctp:
         findings.append({
