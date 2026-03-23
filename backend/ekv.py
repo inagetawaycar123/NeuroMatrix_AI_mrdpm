@@ -1,4 +1,13 @@
 from typing import Any, Dict, List, Optional
+import logging
+
+# 导入文献检索模块
+try:
+    from .ekv_retrieval import query_guideline_kb
+    EKV_RETRIEVAL_AVAILABLE = True
+except ImportError:
+    EKV_RETRIEVAL_AVAILABLE = False
+    logging.warning("EKV 文献检索模块不可用，将使用回退引用")
 
 
 def _safe_float(value: Any) -> Optional[float]:
@@ -102,6 +111,7 @@ def _claim(
     message: str,
     evidence_refs: Optional[List[str]] = None,
     confidence: Optional[float] = None,
+    evidence_documents: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     v = _normalize_verdict(verdict)
     return {
@@ -109,6 +119,7 @@ def _claim(
         "claim_text": claim_text,
         "verdict": v,
         "evidence_refs": evidence_refs or [],
+        "evidence_documents": evidence_documents or [],
         "message": message,
         "confidence": float(confidence if confidence is not None else _confidence_from_verdict(v)),
     }
@@ -148,6 +159,20 @@ def _confidence_delta_from_claims(claims: List[Dict[str, Any]]) -> float:
     if delta < -1.0:
         delta = -1.0
     return round(delta, 4)
+
+
+def _get_evidence_for_claim(claim_id: str, claim_text: str, message: str) -> List[Dict[str, Any]]:
+    """获取 claim 的文献证据"""
+    if not EKV_RETRIEVAL_AVAILABLE:
+        return []
+    
+    try:
+        # 根据 claim_id 和 claim_text 查询文献
+        evidence = query_guideline_kb(f"{claim_text} {message}", claim_id)
+        return evidence
+    except Exception as e:
+        logging.warning(f"获取 claim {claim_id} 的文献证据失败: {e}")
+        return []
 
 
 def evaluate_ekv(
@@ -200,45 +225,58 @@ def evaluate_ekv(
     else:
         verdict = "unavailable"
         message = "病变侧别信息不可用"
-    claims.append(_claim("hemisphere", "病变侧别", verdict, message, ["rule:hemisphere_consistency"]))
+    
+    # 获取文献证据
+    evidence_docs = _get_evidence_for_claim("hemisphere", "病变侧别", message)
+    claims.append(_claim("hemisphere", "病变侧别", verdict, message, 
+                        ["rule:hemisphere_consistency"], evidence_documents=evidence_docs))
 
     # C2-C4 quantitative claims
     core_verdict = _verdict_from_pair(
         analysis_metrics.get("core_infarct_volume"), report_metrics.get("core_infarct_volume"), tolerance=0.1
     )
+    core_message = "核心体积与结构化结果的一致性校验"
+    core_evidence = _get_evidence_for_claim("core_volume_ml", "核心体积（ml）", core_message)
     claims.append(
         _claim(
             "core_volume_ml",
             "核心体积（ml）",
             core_verdict,
-            "核心体积与结构化结果的一致性校验",
+            core_message,
             ["rule:core_volume_consistency"],
+            evidence_documents=core_evidence,
         )
     )
 
     penumbra_verdict = _verdict_from_pair(
         analysis_metrics.get("penumbra_volume"), report_metrics.get("penumbra_volume"), tolerance=0.1
     )
+    penumbra_message = "半暗带体积与结构化结果的一致性校验"
+    penumbra_evidence = _get_evidence_for_claim("penumbra_volume_ml", "半暗带体积（ml）", penumbra_message)
     claims.append(
         _claim(
             "penumbra_volume_ml",
             "半暗带体积（ml）",
             penumbra_verdict,
-            "半暗带体积与结构化结果的一致性校验",
+            penumbra_message,
             ["rule:penumbra_volume_consistency"],
+            evidence_documents=penumbra_evidence,
         )
     )
 
     mismatch_verdict = _verdict_from_pair(
         analysis_metrics.get("mismatch_ratio"), report_metrics.get("mismatch_ratio"), tolerance=0.12
     )
+    mismatch_message = "不匹配比值与结构化结果的一致性校验"
+    mismatch_evidence = _get_evidence_for_claim("mismatch_ratio", "不匹配比值", mismatch_message)
     claims.append(
         _claim(
             "mismatch_ratio",
             "不匹配比值",
             mismatch_verdict,
-            "不匹配比值与结构化结果的一致性校验",
+            mismatch_message,
             ["rule:mismatch_consistency"],
+            evidence_documents=mismatch_evidence,
         )
     )
 
@@ -260,6 +298,8 @@ def evaluate_ekv(
     if not has_ctp:
         verdict = "unavailable"
         message = "当前模态缺少 CTP，显著不匹配结论不可判定"
+    
+    significant_evidence = _get_evidence_for_claim("significant_mismatch_present", "是否存在显著不匹配", message)
     claims.append(
         _claim(
             "significant_mismatch_present",
@@ -267,6 +307,7 @@ def evaluate_ekv(
             verdict,
             message,
             ["rule:significant_mismatch"],
+            evidence_documents=significant_evidence,
         )
     )
 
@@ -285,6 +326,8 @@ def evaluate_ekv(
     else:
         verdict = "partially_supported"
         message = "时间窗偏长，建议强化人工复核"
+    
+    treatment_evidence = _get_evidence_for_claim("treatment_window_hint", "治疗时窗相关提示", message)
     claims.append(
         _claim(
             "treatment_window_hint",
@@ -292,6 +335,7 @@ def evaluate_ekv(
             verdict,
             message,
             ["rule:treatment_window_hint"],
+            evidence_documents=treatment_evidence,
         )
     )
 
@@ -320,11 +364,22 @@ def evaluate_ekv(
     if unavailable_count == len(claims):
         status = "unavailable"
 
-    citations = list(kb_citations or [])
-    if not citations:
-        citations = [
-            "guideline:defuse3-mismatch",
-            "guideline:acute-ischemic-stroke-imaging",
+    # 从所有 claims 中收集文献引用
+    all_citations = list(kb_citations or [])
+    
+    # 从 evidence_documents 中提取引用
+    for claim in claims:
+        evidence_docs = claim.get("evidence_documents", [])
+        for doc in evidence_docs:
+            citation = doc.get("citation")
+            if citation and citation not in all_citations:
+                all_citations.append(citation)
+    
+    # 如果没有找到文献引用，使用默认引用
+    if not all_citations:
+        all_citations = [
+            "中国脑卒中防治指导规范（2021 年版）",
+            "急性缺血卒中血管内治疗技术中国专家共识2025",
         ]
 
     ekv_payload = {
@@ -334,7 +389,7 @@ def evaluate_ekv(
         "confidence_delta": _confidence_delta_from_claims(claims),
         "claims": claims,
         "findings": findings,
-        "citations": citations,
+        "citations": all_citations,
     }
 
     return {"success": True, "ekv": ekv_payload}

@@ -29,3 +29,4 @@ dropblock
 torchviz
 pydot_ng
 einops
+PyMuPDF
