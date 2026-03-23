@@ -195,3 +195,19 @@
 3. 本周交付物：
    - [W3_主链跑通交付.md](./W3_主链跑通交付.md)
    - [W3_主链验收记录.md](./验收记录/W3_主链验收记录.md)
+
+## Week6 Update (2026-03-23)
+1. Implemented summary and evidence-chain output in report_payload.
+2. Added final_report, evidence_items, evidence_map, and traceability contracts.
+3. Validation and report pages can display traceability metrics.
+4. Runtime sign-off with real run_id/job_id/file_id remains mandatory.
+
+## Week7 Update (2026-03-23)
+1. Added independent Cockpit page (`/cockpit`) for run-level trajectory playback.
+2. Cockpit shows run overview, step timeline, event timeline, validation summary, and result links.
+3. Added Cockpit entries from processing / validation / viewer / report pages.
+4. Reused existing APIs only (`/api/agent/runs*`, `/api/validation/context`), no new data protocol.
+5. Week7 docs delivered:
+   - [W7_Cockpit交付.md](./W7_Cockpit交付.md)
+   - [W7_Cockpit验收记录.md](./验收记录/W7_Cockpit验收记录.md)
+6. Runtime sign-off evidence with real cases remains mandatory before final week sign-off.

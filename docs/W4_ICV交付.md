@@ -173,3 +173,35 @@
 
 - Run environment cases to collect real `run_id/job_id/file_id` evidence
 - Attach terminal `[AGENT]/[ICV]` logs and page screenshots in acceptance record
+
+## Validation UI Update (Post-Week5)
+
+- ICV detailed visualization is moved out of Viewer analysis sidebar.
+- New single-entry page: /validation with dedicated ICV tab.
+- Viewer now keeps imaging + report workflow only, and opens Validation Center via top toolbar button.
+- This is a visualization refactor only; ICV tool semantics and non-blocking behavior remain unchanged.
+
+## Week4 Sign-off Supplement (2026-03-23)
+
+### A. Source Priority (UI/Backend)
+
+- Validation source priority is fixed as:
+  1. `run_id` matched run result
+  2. case-level report payload fallback
+  3. frontend local-storage fallback (UI only)
+- `run_id` is now propagated across:
+  - `processing -> viewer -> report -> validation`
+  - URL query first, then `latest_agent_run_<file_id>` fallback.
+
+### B. Unavailable Semantics
+
+- For `status=unavailable`, UI no longer shows fake KPI zeros.
+- ICV summary `finding_count` now renders `-` when unavailable and no findings.
+- Backend fallback payload avoids fake numeric values in unavailable state:
+  - `finding_count: null` (instead of `0`)
+  - related numeric KPI uses `null` where applicable.
+
+### C. Sign-off Note
+
+- Code-level closure for Week4 semantic consistency: **completed**.
+- Runtime case evidence (real `run_id/job_id/file_id`, screenshots, logs): **still required for final clinical sign-off**.

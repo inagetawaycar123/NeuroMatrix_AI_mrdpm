@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}NeuroMatrix AI | 校验中心{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/validation.css">
+{% endblock %}
+
+{% block tools %}
+<button class="tool-btn" onclick="goBackViewer()">返回阅片</button>
+<button class="tool-btn" onclick="goBackReport()">返回报告</button>
+{% endblock %}
+
+{% block content %}
+<div class="container validation-page">
+    <div class="page validation-shell">
+        <div class="validation-header">
+            <div>
+                <h1>校验中心</h1>
+                <p>内在一致性校验 / 外部证据校验 / 一致性裁决摘要与明细</p>
+            </div>
+            <div class="validation-header-actions">
+                <button class="tool-btn" id="refreshValidationBtn">刷新</button>
+            </div>
+        </div>
+
+        <div class="validation-meta-grid">
+            <div class="validation-meta-item"><span>患者ID</span><strong id="metaPatientId">-</strong></div>
+            <div class="validation-meta-item"><span>文件ID</span><strong id="metaFileId">-</strong></div>
+            <div class="validation-meta-item"><span>运行ID</span><strong id="metaRunId">-</strong></div>
+            <div class="validation-meta-item"><span>来源</span><strong id="metaSourceChain">-</strong></div>
+            <div class="validation-meta-item"><span>更新时间</span><strong id="metaUpdatedAt">-</strong></div>
+        </div>
+
+        <div class="validation-layout">
+            <aside class="validation-summary">
+                <div class="validation-card">
+                    <h3>内在一致性校验摘要</h3>
+                    <div class="kv"><span>状态</span><strong id="icvStatus">-</strong></div>
+                    <div class="kv"><span>发现数</span><strong id="icvFindingCount">-</strong></div>
+                </div>
+
+                <div class="validation-card">
+                    <h3>外部证据校验摘要</h3>
+                    <div class="kv"><span>状态</span><strong id="ekvStatus">-</strong></div>
+                    <div class="kv"><span>发现数</span><strong id="ekvFindingCount">-</strong></div>
+                    <div class="kv"><span>支持率</span><strong id="ekvSupportRate">-</strong></div>
+                </div>
+
+                <div class="validation-card">
+                    <h3>一致性裁决摘要</h3>
+                    <div class="kv"><span>状态</span><strong id="consensusStatus">-</strong></div>
+                    <div class="kv"><span>裁决</span><strong id="consensusDecision">-</strong></div>
+                    <div class="kv"><span>冲突数</span><strong id="consensusConflictCount">-</strong></div>
+                </div>
+
+                <div class="validation-card">
+                    <h3>运行备注</h3>
+                    <div id="validationMetaError" class="validation-note">无错误</div>
+                </div>
+            </aside>
+
+            <section class="validation-details">
+                <div class="validation-tabs">
+                    <button class="validation-tab active" data-tab="icv">内在一致性校验</button>
+                    <button class="validation-tab" data-tab="ekv">外部证据校验</button>
+                </div>
+
+                <div class="validation-filter-row">
+                    <span>筛选：</span>
+                    <button class="validation-filter active" data-filter="all">全部</button>
+                    <button class="validation-filter" data-filter="warn">警告</button>
+                    <button class="validation-filter" data-filter="fail">失败</button>
+                    <button class="validation-filter" data-filter="unavailable">不可用</button>
+                </div>
+
+                <div class="validation-panel active" id="panelIcv">
+                    <div class="panel-title-row">
+                        <h3>内在一致性发现项</h3>
+                        <button class="tool-btn mini" id="toggleIcvDetailBtn">收起</button>
+                    </div>
+                    <div id="icvDetailBody">
+                        <div id="icvDetailBlock"></div>
+                        <div class="validation-pagination" id="icvPagination" style="display:none;"></div>
+                    </div>
+                </div>
+
+                <div class="validation-panel" id="panelEkv">
+                    <div class="panel-title-row">
+                        <h3>外部证据结论项</h3>
+                        <button class="tool-btn mini" id="toggleEkvDetailBtn">收起</button>
+                    </div>
+                    <div id="ekvDetailBody">
+                        <div id="ekvClaimBlock"></div>
+                        <div class="validation-pagination" id="ekvClaimPagination" style="display:none;"></div>
+
+                        <div class="panel-subtitle">证据引用</div>
+                        <div id="ekvCitationBlock"></div>
+                        <div class="validation-pagination" id="ekvCitationPagination" style="display:none;"></div>
+
+                        <div class="panel-subtitle">一致性裁决</div>
+                        <div id="consensusBlock"></div>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/validation.js"></script>
+{% endblock %}

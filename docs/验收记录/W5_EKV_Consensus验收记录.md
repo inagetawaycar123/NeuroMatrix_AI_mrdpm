@@ -126,3 +126,29 @@ Result:
 - Code-level Week5 implementation: `PASS`
 - Local build/syntax/retrieval smokes: `PASS`
 - Manual E2E sign-off: `PENDING` (fill Case A/B/C and forced-failure records)
+
+---
+
+## 6. Semantic Consistency Patch (2026-03-23)
+
+### 6.1 Fixed items
+
+- Validation context linkage improved with `run_id` propagation and fallback chain clarity.
+- EKV unavailable KPI semantics corrected:
+  - unavailable + no findings => `finding_count` renders `-`
+  - unavailable => `support_rate` renders `-`, not `0%`
+- Consensus unavailable fallback aligned:
+  - decision becomes `unavailable`
+  - conflict KPI is nullable in fallback path.
+
+### 6.2 Verification checklist
+
+- [x] Frontend summary mapping updated (`processing.js`, `validation.js`)
+- [x] Backend fallback semantics updated (`backend/app.py`)
+- [x] Viewer/report jump links now keep run context for validation
+- [ ] Real-case acceptance evidence appended (A/B/C + forced-failure records)
+
+### 6.3 Current status
+
+- Week5 engineering closure: **completed**
+- Week5 final manual sign-off: **pending real-case evidence**

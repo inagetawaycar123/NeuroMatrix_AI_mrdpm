@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block title %}NeuroMatrix AI | Agent Cockpit{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/cockpit.css">
+{% endblock %}
+
+{% block tools %}
+<button class="tool-btn" onclick="goBackViewer()">返回阅片</button>
+<button class="tool-btn" onclick="goBackReport()">返回报告</button>
+<button class="tool-btn" onclick="goBackValidation()">返回校验</button>
+{% endblock %}
+
+{% block content %}
+<div class="container cockpit-page">
+    <div class="page cockpit-shell">
+        <div class="cockpit-header">
+            <div>
+                <h1>Agent Cockpit</h1>
+                <p>统一查看运行总览、事件轨迹、校验摘要与结果入口</p>
+            </div>
+            <div class="cockpit-header-actions">
+                <button class="tool-btn" id="refreshCockpitBtn">刷新</button>
+                <button class="tool-btn" id="copyRunIdBtn">复制 run_id</button>
+                <button class="tool-btn" id="exportTraceBtn">导出轨迹</button>
+            </div>
+        </div>
+
+        <div class="cockpit-meta-grid">
+            <div class="cockpit-meta-item"><span>run_id</span><strong id="metaRunId">-</strong></div>
+            <div class="cockpit-meta-item"><span>patient_id</span><strong id="metaPatientId">-</strong></div>
+            <div class="cockpit-meta-item"><span>file_id</span><strong id="metaFileId">-</strong></div>
+            <div class="cockpit-meta-item"><span>状态</span><strong id="metaRunStatus">-</strong></div>
+            <div class="cockpit-meta-item"><span>阶段</span><strong id="metaRunStage">-</strong></div>
+            <div class="cockpit-meta-item"><span>当前工具</span><strong id="metaCurrentTool">-</strong></div>
+            <div class="cockpit-meta-item"><span>事件数</span><strong id="metaEventCount">0</strong></div>
+            <div class="cockpit-meta-item"><span>更新时间</span><strong id="metaUpdatedAt">-</strong></div>
+        </div>
+
+        <div class="cockpit-layout">
+            <section class="cockpit-left">
+                <div class="cockpit-card">
+                    <div class="card-header">
+                        <h3>步骤轨迹</h3>
+                    </div>
+                    <div id="stepTimeline" class="step-timeline"></div>
+                </div>
+
+                <div class="cockpit-card">
+                    <div class="card-header">
+                        <h3>事件轨迹</h3>
+                        <div class="event-filters">
+                            <select id="eventStageFilter">
+                                <option value="all">全部阶段</option>
+                            </select>
+                            <select id="eventStatusFilter">
+                                <option value="all">全部状态</option>
+                            </select>
+                            <select id="eventToolFilter">
+                                <option value="all">全部工具</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div id="eventTimeline" class="event-timeline"></div>
+                </div>
+            </section>
+
+            <aside class="cockpit-right">
+                <div class="cockpit-card">
+                    <div class="card-header">
+                        <h3>运行摘要</h3>
+                    </div>
+                    <div class="kv"><span>最后错误</span><strong id="summaryLastError">-</strong></div>
+                    <div class="kv"><span>可重试步骤</span><strong id="summaryRetryStep">-</strong></div>
+                    <div class="kv"><span>结果状态</span><strong id="summaryResultStatus">-</strong></div>
+                    <div class="kv"><span>数据来源</span><strong id="summarySourceChain">-</strong></div>
+                </div>
+
+                <div class="cockpit-card">
+                    <div class="card-header">
+                        <h3>校验摘要</h3>
+                    </div>
+                    <div class="kv"><span>ICV 状态</span><strong id="summaryIcvStatus">-</strong></div>
+                    <div class="kv"><span>ICV 发现数</span><strong id="summaryIcvFindings">-</strong></div>
+                    <div class="kv"><span>EKV 状态</span><strong id="summaryEkvStatus">-</strong></div>
+                    <div class="kv"><span>EKV 发现数</span><strong id="summaryEkvFindings">-</strong></div>
+                    <div class="kv"><span>EKV 支持率</span><strong id="summaryEkvSupportRate">-</strong></div>
+                    <div class="kv"><span>裁决状态</span><strong id="summaryConsensusStatus">-</strong></div>
+                    <div class="kv"><span>裁决结论</span><strong id="summaryConsensusDecision">-</strong></div>
+                    <div class="kv"><span>冲突数</span><strong id="summaryConsensusConflicts">-</strong></div>
+                </div>
+
+                <div class="cockpit-card">
+                    <div class="card-header">
+                        <h3>证据追溯摘要</h3>
+                    </div>
+                    <div class="kv"><span>追溯状态</span><strong id="summaryTraceStatus">-</strong></div>
+                    <div class="kv"><span>覆盖率</span><strong id="summaryTraceCoverage">-</strong></div>
+                    <div class="kv"><span>已映射/总数</span><strong id="summaryTraceMapped">-</strong></div>
+                    <div class="kv"><span>未映射</span><strong id="summaryTraceUnmapped">-</strong></div>
+                    <div class="kv"><span>高风险未映射</span><strong id="summaryTraceHighRisk">-</strong></div>
+                </div>
+
+                <div class="cockpit-card">
+                    <div class="card-header">
+                        <h3>结果入口</h3>
+                    </div>
+                    <div class="entry-buttons">
+                        <button class="tool-btn" id="gotoViewerBtn">打开 Viewer</button>
+                        <button class="tool-btn" id="gotoReportBtn">打开 Report</button>
+                        <button class="tool-btn" id="gotoValidationBtn">打开 Validation</button>
+                    </div>
+                </div>
+
+                <div class="cockpit-card">
+                    <div id="cockpitHint" class="cockpit-note">等待加载运行信息...</div>
+                </div>
+            </aside>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/cockpit.js"></script>
+{% endblock %}

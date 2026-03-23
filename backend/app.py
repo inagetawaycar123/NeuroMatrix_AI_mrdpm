@@ -23,10 +23,12 @@ from flask import (
 try:
     from .ai_inference import get_ai_model
     from .extensions import NumpyJSONEncoder
+    from .summary_assembler import build_summary_artifacts
 except ImportError:
     # 兼容直接运行 backend/app.py 的场景
     from ai_inference import get_ai_model
     from extensions import NumpyJSONEncoder
+    from summary_assembler import build_summary_artifacts
 from datetime import datetime
 from dotenv import load_dotenv
 
@@ -1582,10 +1584,15 @@ def _append_agent_event(
     retryable=False,
     attempt=1,
 ):
+    run_state = _get_agent_run(run_id) or {}
+    current_stage = run_state.get("stage")
+    current_seq = len(_get_agent_events(run_id)) + 1
     event = {
         "event_id": str(uuid.uuid4()),
         "run_id": run_id,
+        "event_seq": current_seq,
         "timestamp": _agent_now(),
+        "stage": current_stage,
         "agent_name": agent_name,
         "tool_name": tool_name,
         "input_ref": input_ref,
@@ -1598,10 +1605,9 @@ def _append_agent_event(
     }
     with AGENT_RUNTIME_LOCK:
         AGENT_EVENTS.setdefault(run_id, []).append(event)
-    run_state = _get_agent_run(run_id) or {}
     _agent_log(
         run_id=run_id,
-        stage=run_state.get("stage"),
+        stage=current_stage,
         tool=tool_name,
         attempt=event.get("attempt"),
         status=status,
@@ -2422,7 +2428,7 @@ def _tool_generate_medgemma_report(run):
                 ekv_payload = r.get("structured_output") or r.get("raw_ref")
             if r.get("tool_name") == "ekv" and r.get("status") == "failed":
                 ekv_failed_result = r
-            if r.get("tool_name") == "consensus_lite" and r.get("status") == "completed":
+            if r.get("tool_name") == "consensus_lite" and r.get("status") in {"completed", "skipped"}:
                 consensus_payload = r.get("structured_output") or r.get("raw_ref")
             if r.get("tool_name") == "consensus_lite" and r.get("status") == "failed":
                 consensus_failed_result = r
@@ -2438,9 +2444,9 @@ def _tool_generate_medgemma_report(run):
     if icv_payload is None and icv_failed_result is not None:
         icv_payload = {
             "status": "unavailable",
-            "finding_count": 0,
-            "score": 0.0,
-            "confidence_delta": 0.0,
+            "finding_count": None,
+            "score": None,
+            "confidence_delta": None,
             "findings": [],
             "error_code": icv_failed_result.get("error_code"),
             "error_message": icv_failed_result.get("error_message"),
@@ -2450,10 +2456,10 @@ def _tool_generate_medgemma_report(run):
     if ekv_payload is None and ekv_failed_result is not None:
         ekv_payload = {
             "status": "unavailable",
-            "finding_count": 0,
-            "score": 0.0,
-            "confidence_delta": 0.0,
-            "support_rate": 0.0,
+            "finding_count": None,
+            "score": None,
+            "confidence_delta": None,
+            "support_rate": None,
             "claims": [],
             "findings": [],
             "citations": [],
@@ -2465,8 +2471,8 @@ def _tool_generate_medgemma_report(run):
     if consensus_payload is None and consensus_failed_result is not None:
         consensus_payload = {
             "status": "unavailable",
-            "decision": "review_required",
-            "conflict_count": 0,
+            "decision": "unavailable",
+            "conflict_count": None,
             "summary": consensus_failed_result.get("error_message")
             or "Consensus unavailable",
             "conflicts": [],
@@ -2494,6 +2500,20 @@ def _tool_generate_medgemma_report(run):
             report_payload["consensus"] = consensus_payload
         except Exception:
             pass
+
+    try:
+        report_payload = build_summary_artifacts(
+            run_id=str(run.get("run_id") or ""),
+            file_id=str(file_id or ""),
+            report_payload=report_payload,
+            icv=icv_payload,
+            ekv=ekv_payload,
+            consensus=consensus_payload,
+        )
+    except Exception as summary_exc:
+        print(
+            f"[SUMMARY] assembler_failed run_id={run.get('run_id')} file_id={file_id} error={summary_exc}"
+        )
 
     return (
         True,
@@ -2826,7 +2846,7 @@ def _run_agent_pipeline(run_id, start_tool=None):
     run = _get_agent_run(run_id)
     context = _build_context_from_completed_tools(run)
     final_result = {
-        "summary": "Week5 EKV + Consensus Lite chain completed",
+        "summary": "Week6 summary + evidence chain completed",
         "path_decision": (planner_output.get("path_decision") or {}),
         "tool_sequence": tool_sequence,
         "tool_results": run.get("tool_results", []),
@@ -4065,6 +4085,7 @@ def _clear_chat_context(session_id: str):
 def _extract_patient_id_command(text: str):
     if not text:
         return None
+
     content = str(text).strip()
     if re.fullmatch(r"\d{1,10}", content):
         try:
@@ -4073,18 +4094,26 @@ def _extract_patient_id_command(text: str):
             return None
 
     patterns = [
-        # 例如：“请加载患者 id: 123”、“请切换到病人 ID 456” 等
-        r"^(?:请?(?:加载|读取|查询|查看|切换到)\s*(?:患者|病人|patient)\s*(?:id)?\s*[:：]?\s*(\d{1,10})\s*$",
-        # 例如：“患者 123”、“patient id 456” 等
+        r"^(?:请?(?:加载|读取|查询|查看|切换到)\s*(?:患者|病人|patient)\s*(?:id)?\s*[:：]?\s*(\d{1,10}))\s*$",
         r"^(?:患者|病人|patient)\s*(?:id)?\s*[:：]?\s*(\d{1,10})\s*$",
     ]
+
     for pattern in patterns:
-        match = re.match(pattern, content, flags=re.IGNORECASE)
+        try:
+            match = re.match(pattern, content, flags=re.IGNORECASE)
+        except re.error as regex_error:
+            print(
+                "[Clinical Chat] invalid patient-id command pattern skipped: "
+                f"{regex_error}; pattern={pattern!r}"
+            )
+            continue
+
         if match:
             try:
                 return int(match.group(1))
             except Exception:
                 return None
+
     return None
 
 
@@ -4206,6 +4235,447 @@ def _load_result_json_for_file(file_id: str):
     except Exception as e:
         print(f"[Baichuan Chat] failed to read result json {json_path}: {e}")
         return json_path, None
+
+
+def _validation_unavailable_payload(kind: str, reason: str = "no data"):
+    k = str(kind or "").strip().lower()
+    base = {
+        "status": "unavailable",
+        "error_message": str(reason or "no data"),
+    }
+    if k == "icv":
+        base.update({"finding_count": None, "findings": []})
+    elif k == "ekv":
+        base.update(
+            {
+                "finding_count": None,
+                "support_rate": None,
+                "claims": [],
+                "findings": [],
+                "citations": [],
+            }
+        )
+    elif k == "consensus":
+        base.update(
+            {
+                "decision": "unavailable",
+                "conflict_count": None,
+                "summary": "unavailable",
+                "conflicts": [],
+                "next_actions": [],
+            }
+        )
+    return base
+
+
+def _normalize_icv_payload(payload, fallback_reason=None):
+    if not isinstance(payload, dict):
+        return _validation_unavailable_payload("icv", fallback_reason or "icv missing")
+    findings = payload.get("findings")
+    if not isinstance(findings, list):
+        findings = []
+    normalized_findings = []
+    for idx, item in enumerate(findings):
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "unknown").lower()
+        severity = str(item.get("severity") or "").strip().lower()
+        if not severity:
+            if status in {"fail", "error"}:
+                severity = "high"
+            elif status in {"warn", "warning"}:
+                severity = "medium"
+            else:
+                severity = "low"
+        normalized_findings.append(
+            {
+                "id": str(item.get("id") or f"icv_finding_{idx+1}"),
+                "status": status,
+                "message": str(item.get("message") or ""),
+                "severity": severity,
+                "suggested_action": str(item.get("suggested_action") or ""),
+            }
+        )
+    status = str(payload.get("status") or "unknown").lower()
+    finding_count = payload.get("finding_count")
+    try:
+        finding_count = int(finding_count) if finding_count is not None else None
+    except Exception:
+        finding_count = None
+    if finding_count is None:
+        finding_count = len(normalized_findings)
+    if status == "unavailable" and not normalized_findings and payload.get("finding_count") in (None, ""):
+        finding_count = None
+    return {
+        "status": status,
+        "finding_count": finding_count,
+        "findings": normalized_findings,
+        "error_message": payload.get("error_message"),
+        "error_code": payload.get("error_code"),
+    }
+
+
+def _normalize_ekv_payload(payload, fallback_reason=None):
+    if not isinstance(payload, dict):
+        return _validation_unavailable_payload("ekv", fallback_reason or "ekv missing")
+
+    claims = payload.get("claims")
+    if not isinstance(claims, list):
+        claims = []
+    normalized_claims = []
+    supported_count = 0
+    for idx, item in enumerate(claims):
+        if not isinstance(item, dict):
+            continue
+        verdict = str(item.get("verdict") or "unavailable").lower()
+        if verdict == "supported":
+            supported_count += 1
+        refs = item.get("evidence_refs")
+        if not isinstance(refs, list):
+            refs = []
+        normalized_claims.append(
+            {
+                "claim_id": str(item.get("claim_id") or f"claim_{idx+1}"),
+                "claim_text": str(item.get("claim_text") or ""),
+                "verdict": verdict,
+                "message": str(item.get("message") or ""),
+                "evidence_refs": [str(x) for x in refs if x is not None],
+            }
+        )
+
+    findings = payload.get("findings")
+    if not isinstance(findings, list):
+        findings = []
+    normalized_findings = []
+    for idx, item in enumerate(findings):
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "unknown").lower()
+        severity = str(item.get("severity") or "").strip().lower()
+        if not severity:
+            if status in {"fail", "error"}:
+                severity = "high"
+            elif status in {"warn", "warning"}:
+                severity = "medium"
+            else:
+                severity = "low"
+        normalized_findings.append(
+            {
+                "id": str(item.get("id") or f"ekv_finding_{idx+1}"),
+                "status": status,
+                "message": str(item.get("message") or ""),
+                "severity": severity,
+                "suggested_action": str(item.get("suggested_action") or ""),
+            }
+        )
+
+    citations = payload.get("citations")
+    if not isinstance(citations, list):
+        citations = []
+    normalized_citations = []
+    for item in citations:
+        if not isinstance(item, dict):
+            continue
+        normalized_citations.append(
+            {
+                "source_ref": str(item.get("source_ref") or ""),
+                "snippet": str(item.get("snippet") or ""),
+                "doc_name": str(item.get("doc_name") or ""),
+                "page": item.get("page"),
+            }
+        )
+
+    support_rate = payload.get("support_rate")
+    if not isinstance(support_rate, (int, float)):
+        support_rate = (
+            (supported_count / len(normalized_claims)) if normalized_claims else None
+        )
+
+    status = str(payload.get("status") or "unknown").lower()
+    finding_count = payload.get("finding_count")
+    try:
+        finding_count = int(finding_count) if finding_count is not None else None
+    except Exception:
+        finding_count = None
+    if finding_count is None:
+        finding_count = len(normalized_findings)
+    if status == "unavailable" and not normalized_findings and payload.get("finding_count") in (None, ""):
+        finding_count = None
+    return {
+        "status": status,
+        "finding_count": finding_count,
+        "support_rate": support_rate,
+        "claims": normalized_claims,
+        "findings": normalized_findings,
+        "citations": normalized_citations,
+        "error_message": payload.get("error_message"),
+        "error_code": payload.get("error_code"),
+    }
+
+
+def _normalize_consensus_payload(payload, fallback_reason=None):
+    if not isinstance(payload, dict):
+        return _validation_unavailable_payload(
+            "consensus", fallback_reason or "consensus missing"
+        )
+    conflicts = payload.get("conflicts")
+    if not isinstance(conflicts, list):
+        conflicts = []
+    next_actions = payload.get("next_actions")
+    if not isinstance(next_actions, list):
+        next_actions = []
+    conflict_count = payload.get("conflict_count")
+    try:
+        conflict_count = int(conflict_count) if conflict_count is not None else None
+    except Exception:
+        conflict_count = None
+    if conflict_count is None:
+        conflict_count = len(conflicts)
+    if (
+        str(payload.get("status") or "").lower() == "unavailable"
+        and not conflicts
+        and payload.get("conflict_count") in (None, "")
+    ):
+        conflict_count = None
+    return {
+        "status": str(payload.get("status") or "unknown").lower(),
+        "decision": str(payload.get("decision") or "accept"),
+        "conflict_count": conflict_count,
+        "summary": str(payload.get("summary") or ""),
+        "conflicts": conflicts,
+        "next_actions": [str(x) for x in next_actions if x is not None],
+        "error_message": payload.get("error_message"),
+        "error_code": payload.get("error_code"),
+    }
+
+
+def _normalize_traceability_payload(payload, fallback_reason=None):
+    if not isinstance(payload, dict):
+        return {
+            "status": "unavailable",
+            "total_findings": None,
+            "mapped_findings": None,
+            "coverage": None,
+            "unmapped_ids": [],
+            "high_risk_unmapped_count": None,
+            "error_message": str(fallback_reason or "traceability missing"),
+        }
+
+    total = payload.get("total_findings")
+    mapped = payload.get("mapped_findings")
+    high_risk_unmapped = payload.get("high_risk_unmapped_count")
+    try:
+        total = int(total) if total is not None else None
+    except Exception:
+        total = None
+    try:
+        mapped = int(mapped) if mapped is not None else None
+    except Exception:
+        mapped = None
+    try:
+        high_risk_unmapped = (
+            int(high_risk_unmapped) if high_risk_unmapped is not None else None
+        )
+    except Exception:
+        high_risk_unmapped = None
+
+    coverage = payload.get("coverage")
+    try:
+        coverage = float(coverage) if coverage is not None else None
+    except Exception:
+        coverage = None
+    if coverage is None and total not in (None, 0) and mapped is not None:
+        coverage = mapped / float(total)
+    if isinstance(coverage, (int, float)):
+        coverage = max(0.0, min(1.0, float(coverage)))
+
+    unmapped_ids = payload.get("unmapped_ids")
+    if not isinstance(unmapped_ids, list):
+        unmapped_ids = []
+    unmapped_ids = [str(x) for x in unmapped_ids if x is not None]
+
+    if total is None and mapped is None and coverage is None:
+        status = "unavailable"
+    elif total == 0:
+        status = "pass"
+    elif mapped is not None and total is not None and mapped >= total:
+        status = "pass"
+    else:
+        status = "warn"
+
+    return {
+        "status": status,
+        "total_findings": total,
+        "mapped_findings": mapped,
+        "coverage": coverage,
+        "unmapped_ids": unmapped_ids,
+        "high_risk_unmapped_count": high_risk_unmapped,
+        "error_message": payload.get("error_message")
+        or (str(fallback_reason) if status == "unavailable" else None),
+    }
+
+
+def _latest_tool_result_with_status(run, tool_name, allowed_statuses):
+    if not isinstance(run, dict):
+        return None
+    statuses = {str(x).lower() for x in (allowed_statuses or [])}
+    for item in reversed(run.get("tool_results", []) or []):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("tool_name") or "").strip() != str(tool_name).strip():
+            continue
+        if str(item.get("status") or "").lower() in statuses:
+            return item
+    return None
+
+
+def _failed_result_to_payload(result_item, kind):
+    if not isinstance(result_item, dict):
+        return None
+    code = result_item.get("error_code")
+    message = result_item.get("error_message") or code or f"{kind} failed"
+    base = _validation_unavailable_payload(kind, message)
+    base["error_code"] = code
+    base["suggested_action"] = result_item.get("suggested_action")
+    return base
+
+
+def _extract_validation_from_run(run):
+    if not isinstance(run, dict):
+        return None, None, None, None, None
+    run_result = run.get("result") if isinstance(run.get("result"), dict) else {}
+    report_payload = (
+        ((run_result.get("report_result") or {}).get("report_payload") or {})
+        if isinstance((run_result.get("report_result") or {}), dict)
+        else {}
+    )
+
+    icv = run_result.get("icv") if isinstance(run_result.get("icv"), dict) else None
+    ekv = run_result.get("ekv") if isinstance(run_result.get("ekv"), dict) else None
+    consensus = (
+        run_result.get("consensus")
+        if isinstance(run_result.get("consensus"), dict)
+        else None
+    )
+    traceability = (
+        report_payload.get("traceability")
+        if isinstance(report_payload.get("traceability"), dict)
+        else None
+    )
+
+    if icv is None and isinstance(report_payload.get("icv"), dict):
+        icv = report_payload.get("icv")
+    if ekv is None and isinstance(report_payload.get("ekv"), dict):
+        ekv = report_payload.get("ekv")
+    if consensus is None and isinstance(report_payload.get("consensus"), dict):
+        consensus = report_payload.get("consensus")
+    if traceability is None and isinstance(run_result.get("traceability"), dict):
+        traceability = run_result.get("traceability")
+
+    if icv is None:
+        completed = _latest_tool_result_with_status(run, "icv", {"completed"})
+        if completed and isinstance(completed.get("structured_output"), dict):
+            icv = completed.get("structured_output")
+        else:
+            failed = _latest_tool_result_with_status(run, "icv", {"failed"})
+            if failed:
+                icv = _failed_result_to_payload(failed, "icv")
+
+    if ekv is None:
+        completed = _latest_tool_result_with_status(run, "ekv", {"completed"})
+        if completed and isinstance(completed.get("structured_output"), dict):
+            ekv = completed.get("structured_output")
+        else:
+            failed = _latest_tool_result_with_status(run, "ekv", {"failed"})
+            if failed:
+                ekv = _failed_result_to_payload(failed, "ekv")
+
+    if consensus is None:
+        completed = _latest_tool_result_with_status(
+            run, "consensus_lite", {"completed", "skipped"}
+        )
+        if completed and isinstance(completed.get("structured_output"), dict):
+            consensus = completed.get("structured_output")
+        else:
+            failed = _latest_tool_result_with_status(run, "consensus_lite", {"failed"})
+            if failed:
+                consensus = _failed_result_to_payload(failed, "consensus")
+
+    source = "agent_run_result"
+    updated_at = run.get("updated_at")
+    return (
+        icv,
+        ekv,
+        consensus,
+        traceability,
+        {"source_chain": source, "last_updated": updated_at},
+    )
+
+
+def _extract_validation_from_case_payload(file_id, patient_id=None):
+    report_payload = None
+    source = None
+    updated_at = None
+    error = None
+
+    imaging = get_imaging_by_case(patient_id, file_id) if file_id else None
+    if isinstance(imaging, dict):
+        candidate = imaging.get("report_payload")
+        if isinstance(candidate, dict):
+            report_payload = candidate
+            source = "case_imaging_report_payload"
+            updated_at = imaging.get("updated_at") or imaging.get("created_at")
+        if report_payload is None:
+            analysis_candidate = imaging.get("analysis_result")
+            if isinstance(analysis_candidate, dict):
+                nested = analysis_candidate.get("report_payload")
+                if isinstance(nested, dict):
+                    report_payload = nested
+                    source = "case_imaging_analysis_result"
+                    updated_at = imaging.get("updated_at") or imaging.get("created_at")
+
+    if report_payload is None and file_id:
+        json_path, result_json = _load_result_json_for_file(file_id)
+        if isinstance(result_json, dict):
+            candidate = result_json.get("report_payload")
+            if isinstance(candidate, dict):
+                report_payload = candidate
+                source = "case_latest_result_json"
+                try:
+                    updated_at = datetime.utcfromtimestamp(
+                        os.path.getmtime(json_path)
+                    ).isoformat() + "Z"
+                except Exception:
+                    updated_at = None
+        elif json_path:
+            error = f"failed to read result json: {json_path}"
+
+    if not isinstance(report_payload, dict):
+        return None, None, None, None, {
+            "source_chain": source or "none",
+            "last_updated": updated_at,
+            "error": error or "report_payload not found",
+        }
+
+    icv = report_payload.get("icv") if isinstance(report_payload.get("icv"), dict) else None
+    ekv = report_payload.get("ekv") if isinstance(report_payload.get("ekv"), dict) else None
+    consensus = (
+        report_payload.get("consensus")
+        if isinstance(report_payload.get("consensus"), dict)
+        else None
+    )
+    traceability = (
+        report_payload.get("traceability")
+        if isinstance(report_payload.get("traceability"), dict)
+        else None
+    )
+    return (
+        icv,
+        ekv,
+        consensus,
+        traceability,
+        {"source_chain": source, "last_updated": updated_at, "error": error},
+    )
 
 
 def mask_patient_context(raw: dict):
@@ -4584,7 +5054,17 @@ def api_chat_clinical_stream():
         return jsonify({"success": False, "error": "缺少会话ID或问题"}), 400
 
     def generate_stream():
-        command_patient_id = _extract_patient_id_command(question)
+        command_patient_id = None
+        try:
+            command_patient_id = _extract_patient_id_command(question)
+        except Exception as parse_error:
+            question_preview = str(question or "").replace("\n", " ")[:120]
+            print(
+                "[Clinical Chat] patient-id command parse failed "
+                f"session_id={session_id} error={parse_error} "
+                f"question={question_preview!r}"
+            )
+            command_patient_id = None
         if command_patient_id is not None:
             context_result = load_patient_context_by_id(command_patient_id)
             if context_result.get("found"):
@@ -4723,7 +5203,17 @@ def api_chat_clinical():
         if not session_id or not question:
             return jsonify({"success": False, "error": "缺少会话ID或问题"}), 400
 
-        command_patient_id = _extract_patient_id_command(question)
+        command_patient_id = None
+        try:
+            command_patient_id = _extract_patient_id_command(question)
+        except Exception as parse_error:
+            question_preview = str(question or "").replace("\n", " ")[:120]
+            print(
+                "[Clinical Chat] patient-id command parse failed "
+                f"session_id={session_id} error={parse_error} "
+                f"question={question_preview!r}"
+            )
+            command_patient_id = None
         if command_patient_id is not None:
             context_result = load_patient_context_by_id(command_patient_id)
             if context_result.get("found"):
@@ -6098,6 +6588,16 @@ def viewer_page():
     return render_template("patient/upload/viewer/index.html")
 
 
+@app.route("/validation")
+def validation_page():
+    return render_template("patient/upload/validation/index.html")
+
+
+@app.route("/cockpit")
+def cockpit_page():
+    return render_template("patient/upload/cockpit/index.html")
+
+
 @app.route("/processing")
 def processing_page():
     return render_template("patient/upload/processing/index.html")
@@ -6377,6 +6877,105 @@ def api_get_agent_result(run_id):
             "status": run.get("status"),
             "stage": run.get("stage"),
             "result": run.get("result"),
+        }
+    )
+
+
+@app.route("/api/validation/context", methods=["GET"])
+def api_get_validation_context():
+    """
+    Aggregate ICV/EKV/Consensus context for Validation Center.
+    Priority:
+      1) Agent run result (run_id hit)
+      2) Case-level report payload
+    Local-storage fallback is frontend-only and is not resolved here.
+    """
+    run_id = str(request.args.get("run_id") or "").strip()
+    file_id = str(request.args.get("file_id") or "").strip()
+    patient_id_raw = request.args.get("patient_id")
+    patient_id = None
+    if patient_id_raw not in (None, ""):
+        try:
+            patient_id = int(patient_id_raw)
+        except Exception:
+            return jsonify({"success": False, "error": "invalid patient_id"}), 400
+
+    source_chain = "none"
+    last_updated = None
+    meta_error = None
+
+    icv_payload = None
+    ekv_payload = None
+    consensus_payload = None
+    traceability_payload = None
+
+    if run_id:
+        run = _get_agent_run(run_id)
+        if run:
+            file_id = file_id or str(run.get("file_id") or "").strip()
+            if patient_id is None:
+                try:
+                    patient_id = int(run.get("patient_id"))
+                except Exception:
+                    patient_id = None
+            (
+                icv_payload,
+                ekv_payload,
+                consensus_payload,
+                traceability_payload,
+                meta,
+            ) = _extract_validation_from_run(run)
+            source_chain = (meta or {}).get("source_chain") or source_chain
+            last_updated = (meta or {}).get("last_updated") or last_updated
+        else:
+            meta_error = f"run not found: {run_id}"
+
+    if (
+        icv_payload is None
+        and ekv_payload is None
+        and consensus_payload is None
+        and traceability_payload is None
+        and file_id
+    ):
+        (
+            icv_payload,
+            ekv_payload,
+            consensus_payload,
+            traceability_payload,
+            meta,
+        ) = _extract_validation_from_case_payload(
+            file_id=file_id,
+            patient_id=patient_id,
+        )
+        if isinstance(meta, dict):
+            source_chain = meta.get("source_chain") or source_chain
+            last_updated = meta.get("last_updated") or last_updated
+            meta_error = meta.get("error") or meta_error
+
+    icv = _normalize_icv_payload(icv_payload, fallback_reason="icv unavailable")
+    ekv = _normalize_ekv_payload(ekv_payload, fallback_reason="ekv unavailable")
+    consensus = _normalize_consensus_payload(
+        consensus_payload, fallback_reason="consensus unavailable"
+    )
+    traceability = _normalize_traceability_payload(
+        traceability_payload, fallback_reason="traceability unavailable"
+    )
+
+    return jsonify(
+        {
+            "success": True,
+            "icv": icv,
+            "ekv": ekv,
+            "consensus": consensus,
+            "traceability": traceability,
+            "meta": {
+                "run_id": run_id or None,
+                "file_id": file_id or None,
+                "patient_id": patient_id,
+                "source_chain": source_chain,
+                "last_updated": last_updated,
+                "error": meta_error,
+            },
         }
     )
 

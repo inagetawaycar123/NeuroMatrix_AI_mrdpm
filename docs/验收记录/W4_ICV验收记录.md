@@ -124,3 +124,26 @@
 
 - Engineering sign-off: **ready**
 - Clinical runtime sign-off: **pending evidence attachment**
+
+---
+
+## 7. Semantic Consistency Patch (2026-03-23)
+
+### 7.1 Fixed items
+
+- `run_id` context continuity has been enforced across processing/viewer/report/validation entry.
+- Unavailable ICV KPI semantics are corrected:
+  - unavailable with empty findings => display `-` (not `0`)
+  - backend unavailable payload now uses nullable KPI values.
+
+### 7.2 Verification checklist
+
+- [x] Frontend mapping logic updated (`processing.js`, `validation.js`)
+- [x] Backend fallback payload updated (`backend/app.py`)
+- [x] Validation summary defaults updated (template)
+- [ ] Real-case runtime evidence appended (`run_id/job_id/file_id + screenshots + logs`)
+
+### 7.3 Current status
+
+- Week4 engineering closure: **completed**
+- Week4 final clinical sign-off: **pending runtime evidence**

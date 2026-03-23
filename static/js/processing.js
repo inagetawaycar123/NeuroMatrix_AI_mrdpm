@@ -63,6 +63,7 @@ function startAgentPollingIfNeeded() {
     if (!processingAgentRunId) {
         return;
     }
+    ensureCockpitEntryButton();
     const els = getAgentPanelElements();
     if (els.runId) {
         els.runId.textContent = processingAgentRunId;
@@ -103,6 +104,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (agentEls.runId) {
         agentEls.runId.textContent = processingAgentRunId || '-';
     }
+    ensureCockpitEntryButton();
+    persistAgentRunContext();
     if (processingAgentRunId) {
         if (agentEls.message) {
             agentEls.message.textContent = 'Agent 后置汇总运行中...';
@@ -134,7 +137,67 @@ function goToViewerNow() {
     if (!processingFileId) {
         return;
     }
-    window.location.href = `/viewer?file_id=${encodeURIComponent(processingFileId)}`;
+    window.location.href = getViewerUrlWithContext();
+}
+
+function getViewerUrlWithContext() {
+    if (!processingFileId) {
+        return '/viewer';
+    }
+    const params = new URLSearchParams();
+    params.set('file_id', processingFileId);
+    if (processingAgentRunId) {
+        params.set('run_id', processingAgentRunId);
+    }
+    return `/viewer?${params.toString()}`;
+}
+
+function getCockpitUrlWithContext() {
+    const params = new URLSearchParams();
+    if (processingAgentRunId) {
+        params.set('run_id', processingAgentRunId);
+    }
+    if (processingFileId) {
+        params.set('file_id', processingFileId);
+    }
+    if (processingPatientId) {
+        params.set('patient_id', processingPatientId);
+    }
+    const query = params.toString();
+    return query ? `/cockpit?${query}` : '/cockpit';
+}
+
+function ensureCockpitEntryButton() {
+    const panel = document.getElementById('agentPanel');
+    if (!panel) return;
+
+    let actions = document.getElementById('agentCockpitActions');
+    if (!actions) {
+        actions = document.createElement('div');
+        actions.id = 'agentCockpitActions';
+        actions.className = 'processing-actions';
+        actions.style.marginTop = '8px';
+        panel.appendChild(actions);
+    }
+
+    let button = document.getElementById('processingCockpitBtn');
+    if (!button) {
+        button = document.createElement('button');
+        button.id = 'processingCockpitBtn';
+        button.className = 'tool-btn';
+        button.textContent = '打开 Cockpit';
+        button.addEventListener('click', () => {
+            window.location.href = getCockpitUrlWithContext();
+        });
+        actions.appendChild(button);
+    }
+}
+
+function persistAgentRunContext() {
+    if (!processingFileId || !processingAgentRunId) {
+        return;
+    }
+    localStorage.setItem(`latest_agent_run_${processingFileId}`, processingAgentRunId);
 }
 
 function showProcessingError(message) {
@@ -284,6 +347,8 @@ function updateUploadMeta(job) {
     if (!processingAgentRunId && job.agent_run_id) {
         processingAgentRunId = job.agent_run_id;
         setTextIfPresent('processingAgentRunId', processingAgentRunId);
+        persistAgentRunContext();
+        ensureCockpitEntryButton();
         startAgentPollingIfNeeded();
     }
 }
@@ -326,6 +391,7 @@ function persistResultToStorage(job) {
     }
 
     processingFileId = fileId;
+    persistAgentRunContext();
 
     const viewerData = {
         file_id: fileId,
@@ -365,7 +431,7 @@ function maybeAutoRedirectToViewer() {
         if (!processingFileId) {
             return;
         }
-        window.location.href = `/viewer?file_id=${encodeURIComponent(processingFileId)}`;
+        window.location.href = getViewerUrlWithContext();
     }, 1200);
 }
 
@@ -444,6 +510,10 @@ function getLastErrorText(run) {
     if (failedStep && failedStep.message) {
         return failedStep.message;
     }
+    const runStatus = String(run?.status || '').toLowerCase();
+    if (['queued', 'running', 'succeeded', 'cancelled'].includes(runStatus)) {
+        return '无';
+    }
     return '-';
 }
 
@@ -488,9 +558,9 @@ function resolveIcvFromRun(run) {
         return {
             status: 'unavailable',
             findings: [],
-            finding_count: 0,
-            score: 0.0,
-            confidence_delta: 0.0,
+            finding_count: null,
+            score: null,
+            confidence_delta: null,
             error_code: failedIcv.error_code || '',
             error_message: failedIcv.error_message || '',
             suggested_action: failedIcv.suggested_action || '',
@@ -547,10 +617,10 @@ function resolveEkvFromRun(run) {
     if (failed) {
         return {
             status: 'unavailable',
-            finding_count: 0,
-            score: 0.0,
-            confidence_delta: 0.0,
-            support_rate: 0.0,
+            finding_count: null,
+            score: null,
+            confidence_delta: null,
+            support_rate: null,
             claims: [],
             findings: [],
             citations: [],
@@ -572,6 +642,10 @@ function getEkvFindingCount(ekvObj) {
 
 function getEkvSupportRateText(ekvObj) {
     if (!ekvObj || typeof ekvObj !== 'object') return '-';
+    const status = String(ekvObj.status || '').toLowerCase();
+    if (status === 'unavailable') {
+        return '-';
+    }
     const val = Number(ekvObj.support_rate);
     if (Number.isFinite(val)) {
         return `${Math.round(val * 10000) / 100}%`;
@@ -582,6 +656,27 @@ function getEkvSupportRateText(ekvObj) {
         return `${Math.round(ratio * 10000) / 100}%`;
     }
     return '-';
+}
+
+function getUnavailableAwareCountDisplay(obj, countValue, listKeys = []) {
+    if (!obj || typeof obj !== 'object') {
+        return '-';
+    }
+    const status = String(obj.status || '').toLowerCase();
+    if (status !== 'unavailable') {
+        return String(countValue ?? 0);
+    }
+
+    const hasItems = listKeys.some((key) => Array.isArray(obj[key]) && obj[key].length > 0);
+    if (hasItems) {
+        return String(countValue ?? 0);
+    }
+
+    const countNum = Number(countValue);
+    if (!Number.isFinite(countNum) || countNum <= 0) {
+        return '-';
+    }
+    return String(countNum);
 }
 
 function parseConsensusPayload(raw) {
@@ -603,7 +698,7 @@ function resolveConsensusFromRun(run) {
     const toolResults = Array.isArray(run.tool_results) ? run.tool_results : [];
     const completed = [...toolResults]
         .reverse()
-        .find((item) => item && item.tool_name === 'consensus_lite' && item.status === 'completed');
+        .find((item) => item && item.tool_name === 'consensus_lite' && ['completed', 'skipped'].includes(item.status));
     if (completed) {
         const parsed = parseConsensusPayload(completed.structured_output || completed.raw_ref || null);
         if (parsed) return { ...parsed, __source: 'tool_results_completed' };
@@ -622,8 +717,8 @@ function resolveConsensusFromRun(run) {
     if (failed) {
         return {
             status: 'unavailable',
-            decision: 'review_required',
-            conflict_count: 0,
+            decision: 'unavailable',
+            conflict_count: null,
             summary: failed.error_message || '',
             conflicts: [],
             next_actions: [],
@@ -641,6 +736,26 @@ function getConsensusConflictCount(consensusObj) {
     if (typeof consensusObj.conflict_count === 'number') return consensusObj.conflict_count;
     if (Array.isArray(consensusObj.conflicts)) return consensusObj.conflicts.length;
     return 0;
+}
+
+function getConsensusDecisionText(consensusObj) {
+    if (!consensusObj || typeof consensusObj !== 'object') {
+        return '-';
+    }
+    const status = String(consensusObj.status || '').toLowerCase();
+    const decision = String(consensusObj.decision || '').toLowerCase();
+
+    if (status === 'unavailable') {
+        const reason = consensusObj.error_message || consensusObj.error_code || '';
+        return reason ? `unavailable (${reason})` : 'unavailable';
+    }
+    if (decision) {
+        return decision;
+    }
+    if (status === 'skipped') {
+        return 'accept';
+    }
+    return '-';
 }
 
 function getLatestRetryableFailedStep(run) {
@@ -792,7 +907,12 @@ function updateAgentPanel(run, events) {
             }
         }
         if (els.icvFindings) {
-            els.icvFindings.textContent = String(getIcvFindingCount(icvObj));
+            const icvCount = getIcvFindingCount(icvObj);
+            els.icvFindings.textContent = getUnavailableAwareCountDisplay(
+                icvObj,
+                icvCount,
+                ['findings', 'findings_list']
+            );
         }
 
         if (els.ekvStatus) {
@@ -809,29 +929,36 @@ function updateAgentPanel(run, events) {
             }
         }
         if (els.ekvFindings) {
-            els.ekvFindings.textContent = String(getEkvFindingCount(ekvObj));
+            const ekvCount = getEkvFindingCount(ekvObj);
+            els.ekvFindings.textContent = getUnavailableAwareCountDisplay(
+                ekvObj,
+                ekvCount,
+                ['findings', 'claims']
+            );
         }
         if (els.ekvSupportRate) {
             els.ekvSupportRate.textContent = getEkvSupportRateText(ekvObj);
         }
 
         if (els.consensusDecision) {
-            els.consensusDecision.textContent =
-                consensusObj && consensusObj.decision
-                    ? String(consensusObj.decision)
-                    : '-';
+            els.consensusDecision.textContent = getConsensusDecisionText(consensusObj);
         }
         if (els.consensusConflicts) {
-            els.consensusConflicts.textContent = String(getConsensusConflictCount(consensusObj));
+            const consensusCount = getConsensusConflictCount(consensusObj);
+            els.consensusConflicts.textContent = getUnavailableAwareCountDisplay(
+                consensusObj,
+                consensusCount,
+                ['conflicts']
+            );
         }
     } catch (e) {
         if (els.icvStatus) els.icvStatus.textContent = '-';
-        if (els.icvFindings) els.icvFindings.textContent = '0';
+        if (els.icvFindings) els.icvFindings.textContent = '-';
         if (els.ekvStatus) els.ekvStatus.textContent = '-';
-        if (els.ekvFindings) els.ekvFindings.textContent = '0';
+        if (els.ekvFindings) els.ekvFindings.textContent = '-';
         if (els.ekvSupportRate) els.ekvSupportRate.textContent = '-';
         if (els.consensusDecision) els.consensusDecision.textContent = '-';
-        if (els.consensusConflicts) els.consensusConflicts.textContent = '0';
+        if (els.consensusConflicts) els.consensusConflicts.textContent = '-';
     }
 
     updateRetryControls(run);
@@ -900,6 +1027,7 @@ async function pollAgentStatus() {
         const run = runData.run || {};
         const events = eventsData.events || [];
         latestAgentRun = run;
+        persistAgentRunContext();
         updateAgentPanel(run, events);
         rerenderTimelineFromSnapshot();
 

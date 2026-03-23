@@ -16,6 +16,7 @@ let reportStatusState = 'idle';
 let reportStatusDismissed = false;
 let autoReportBootstrapped = false;
 let viewerLayoutMode = 'full';
+let currentRunId = '';
 
 // Markdown 杞?HTML 瑙ｆ瀽鍑芥暟
 function parseMarkdown(text) {
@@ -111,8 +112,17 @@ function applyDynamicViewerLayout(data) {
 document.addEventListener('DOMContentLoaded', function() {
     const urlParams = new URLSearchParams(window.location.search);
     const fileIdParam = urlParams.get('file_id');
+    const runIdParam = urlParams.get('run_id') || urlParams.get('agent_run_id');
     if (fileIdParam) {
         currentFileId = fileIdParam;
+    }
+    if (runIdParam) {
+        currentRunId = String(runIdParam).trim();
+    } else if (currentFileId) {
+        currentRunId = localStorage.getItem(`latest_agent_run_${currentFileId}`) || '';
+    }
+    if (currentFileId && currentRunId) {
+        localStorage.setItem(`latest_agent_run_${currentFileId}`, currentRunId);
     }
 
     currentPatientId = getCurrentPatientId();
@@ -126,6 +136,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     setPatientInfoVisible(true);
     updatePatientHeader(currentPatientId);
+    injectValidationEntryButtons();
     // hemisphere 鐢卞悗绔彁渚涳紝閬垮厤鍓嶇鎵嬪姩閫夋嫨
     initializeContrastController();
 
@@ -234,8 +245,83 @@ function initializeViewer(data) {
     }
 
     loadSlice(0);
-    // 尝试在页面加载时直接从 localStorage 渲染 ICV（如果存在且报告文本未生成）
-    tryRenderIcvFromStoredPayload();
+    removeLegacyValidationBlocks();
+}
+
+function removeLegacyValidationBlocks() {
+    const legacyIds = ['icvPlaceholder', 'icvStaticPanel'];
+    legacyIds.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.remove();
+        }
+    });
+}
+
+function openValidation(tab = 'icv') {
+    const safeTab = String(tab || 'icv').toLowerCase() === 'ekv' ? 'ekv' : 'icv';
+    const params = new URLSearchParams();
+    if (currentFileId) params.set('file_id', currentFileId);
+    if (currentPatientId) params.set('patient_id', String(currentPatientId));
+    const runId = getActiveRunId();
+    if (runId) params.set('run_id', runId);
+    params.set('tab', safeTab);
+    window.location.href = `/validation?${params.toString()}`;
+}
+
+function openCockpit() {
+    const params = new URLSearchParams();
+    if (currentFileId) params.set('file_id', currentFileId);
+    if (currentPatientId) params.set('patient_id', String(currentPatientId));
+    const runId = getActiveRunId();
+    if (runId) params.set('run_id', runId);
+    const query = params.toString();
+    window.location.href = query ? `/cockpit?${query}` : '/cockpit';
+}
+
+function getActiveRunId() {
+    if (currentRunId) {
+        return currentRunId;
+    }
+    if (currentFileId) {
+        const cachedRunId = localStorage.getItem(`latest_agent_run_${currentFileId}`) || '';
+        if (cachedRunId) {
+            currentRunId = cachedRunId;
+        }
+    }
+    return currentRunId || '';
+}
+
+function injectValidationEntryButtons() {
+    const toolsBar = document.querySelector('.tools');
+    const reportBtn = document.getElementById('topbarReportBtn');
+    if (!toolsBar || !reportBtn) return;
+
+    const createValidationCenterBtn = () => {
+        const id = 'validationBtn_center';
+        if (document.getElementById(id)) return;
+        const btn = document.createElement('button');
+        btn.id = id;
+        btn.className = 'tool-btn';
+        btn.textContent = '校验中心';
+        btn.addEventListener('click', () => openValidation('icv'));
+        reportBtn.insertAdjacentElement('afterend', btn);
+    };
+
+    const createCockpitBtn = () => {
+        const id = 'cockpitBtn';
+        if (document.getElementById(id)) return;
+        const btn = document.createElement('button');
+        btn.id = id;
+        btn.className = 'tool-btn';
+        btn.textContent = 'Cockpit';
+        btn.addEventListener('click', openCockpit);
+        reportBtn.insertAdjacentElement('afterend', btn);
+    };
+
+    // Keep button order: report -> 校验中心 -> Cockpit
+    createCockpitBtn();
+    createValidationCenterBtn();
 }
 
 function extractIcvPayload(payload) {
@@ -923,7 +1009,15 @@ function getReportStorageKeys(fileId = currentFileId) {
 }
 
 function getReportUrl() {
-    return `/report/${currentPatientId}?file_id=${encodeURIComponent(currentFileId)}`;
+    const params = new URLSearchParams();
+    if (currentFileId) {
+        params.set('file_id', String(currentFileId));
+    }
+    const runId = getActiveRunId();
+    if (runId) {
+        params.set('run_id', runId);
+    }
+    return `/report/${currentPatientId}?${params.toString()}`;
 }
 
 function getReportCacheState(fileId = currentFileId) {
@@ -1266,47 +1360,15 @@ function displayAIReport(report, isMock) {
     if (!aiReportSection || !aiReportContent) return;
     aiReportSection.style.display = 'block';
 
-    // build ICV summary (if present in stored report payload)
-    let icvHtml = '';
-    try {
-        const keys = getReportStorageKeys(currentFileId);
-        const payloadRaw = localStorage.getItem(keys.payload) || null;
-        if (payloadRaw) {
-                const payload = JSON.parse(payloadRaw || '{}');
-                const icv = extractIcvPayload(payload);
-                const ekv = extractEkvPayload(payload);
-                const consensus = extractConsensusPayload(payload);
-                renderIcvStaticFields(icv, ekv, consensus);
-            if (icv) {
-                // 同步固定 HTML 字段（状态 + 具体问题）
-                icvHtml = buildIcvSummaryHtml(icv);
-            }
-        }
-    } catch (e) {
-        console.warn('Failed to render ICV summary', e);
-        icvHtml = '';
-    }
-
     aiReportContent.innerHTML = `
         <div style="background: #eff6ff; padding: 12px; border-radius: 6px; border-left: 3px solid #2563eb; margin-bottom: 8px;">
             <div style="font-size: 11px; font-weight: 600; color: #2563eb; margin-bottom: 8px;">
                 NeuroMatrix AI 报告 ${isMock ? '<span style="background: #ffd700; padding: 1px 6px; border-radius: 8px; font-size: 10px;">模拟</span>' : ''}
             </div>
-            ${icvHtml}
             <div style="font-size: 12px; line-height: 1.8; color: #333;">${parseMarkdown(report)}</div>
         </div>
     `;
-
-    // bind toggle handler for the ICV details
-    try { attachIcvToggleHandlers(); } catch (e) { /* ignore */ }
-
-    // 同步到静态面板或隐藏静态面板
-    try {
-        const staticPanel = document.getElementById('icvStaticPanel');
-        if (staticPanel && icvHtml && icvHtml.length > 0) {
-            staticPanel.style.display = 'block';
-        }
-    } catch (e) { /* ignore */ }
+    removeLegacyValidationBlocks();
 }
 
 function attachIcvToggleHandlers() {
@@ -1373,6 +1435,8 @@ async function triggerGenerateReportFromTopBar() {
 }
 
 window.triggerGenerateReportFromTopBar = triggerGenerateReportFromTopBar;
+window.openValidation = openValidation;
+window.openCockpit = openCockpit;
 
 function checkAnalysisStatus() {
     if (!currentFileId) return;

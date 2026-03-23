@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+﻿import React, { useEffect, useMemo, useState } from 'react'
 import { Star, X } from 'lucide-react'
 import { DoctorNotesModule } from './DoctorNotesModule'
 import { ImageFindingsModule } from './ImageFindingsModule'
@@ -63,6 +63,52 @@ type ReportPayload = {
     conflict_count?: number
     summary?: string
     next_actions?: string[]
+  } | null
+  final_report?: {
+    summary?: string
+    key_findings?: Array<{
+      finding_id?: string
+      claim_id?: string
+      title?: string
+      claim_text?: string
+      verdict?: string
+      message?: string
+      evidence_ids?: string[]
+      unavailable_reason?: string | null
+    }>
+    risk_level?: string
+    confidence?: number
+    citations?: Array<{
+      evidence_id?: string
+      source_ref?: string
+      doc_name?: string
+      page?: number | string | null
+      snippet?: string
+    }>
+    uncertainties?: string[]
+    next_actions?: string[]
+  } | null
+  evidence_items?: Array<{
+    evidence_id?: string
+    source_ref?: string
+    doc_name?: string
+    page?: number | string | null
+    snippet?: string
+  }>
+  evidence_map?: Record<
+    string,
+    {
+      evidence_ids?: string[]
+      unavailable_reason?: string | null
+    }
+  > | null
+  traceability?: {
+    status?: string
+    total_findings?: number | null
+    mapped_findings?: number | null
+    coverage?: number | null
+    unmapped_ids?: string[]
+    high_risk_unmapped_count?: number | null
   } | null
 }
 
@@ -189,6 +235,132 @@ const stripMarkdownSections = (markdown: string, sectionTitles: string[]): strin
   }
 
   return kept.join('\n').trim()
+}
+
+const FINAL_FINDING_TITLE_MAP: Record<string, string> = {
+  hemisphere: '病灶偏侧',
+  lesion_laterality: '病灶偏侧',
+  core_infarct_volume: '核心梗死体积',
+  core_volume: '核心梗死体积',
+  penumbra_volume: '半暗带体积',
+  mismatch_ratio: '不匹配比例',
+  significant_mismatch: '显著不匹配',
+  treatment_window_notice: '治疗时窗提示',
+}
+
+const FINAL_FINDING_VERDICT_MAP: Record<string, string> = {
+  supported: '支持',
+  partially_supported: '部分支持',
+  not_supported: '不支持',
+  unavailable: '不可用',
+  skipped: '已跳过',
+}
+
+const RISK_LEVEL_TEXT_MAP: Record<string, string> = {
+  low: '低',
+  medium: '中',
+  high: '高',
+}
+
+const FINAL_FINDING_TEXT_MAP: Record<string, string> = {
+  'Lesion laterality is consistent and traceable.': '病灶偏侧信息一致且可追溯。',
+  'Core infarct volume is evidence-supported.': '核心梗死体积结论得到证据支持。',
+  'Penumbra volume is evidence-supported.': '半暗带体积结论得到证据支持。',
+  'Mismatch ratio is evidence-supported.': '不匹配比例结论得到证据支持。',
+  'Significant mismatch exists.': '存在显著不匹配。',
+  'Treatment-window notice is guideline-aligned.': '治疗时窗提示与指南一致。',
+  'No evidence reference is mapped.': '未映射证据引用。',
+}
+
+const normalizeFindingToken = (value: string): string =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+
+const toChineseFindingTitle = (item: Record<string, unknown>, idx: number): string => {
+  const candidates = [
+    String(item?.claim_id || ''),
+    String(item?.finding_id || ''),
+    String(item?.title || ''),
+    String(item?.claim_text || ''),
+  ].filter(Boolean)
+
+  for (const candidate of candidates) {
+    const normalized = normalizeFindingToken(candidate)
+    if (FINAL_FINDING_TITLE_MAP[normalized]) {
+      return FINAL_FINDING_TITLE_MAP[normalized]
+    }
+  }
+
+  const englishTitle = String(item?.title || item?.claim_text || '')
+  if (/lesion\s+laterality/i.test(englishTitle)) return '病灶偏侧'
+  if (/core\s+infarct\s+volume/i.test(englishTitle)) return '核心梗死体积'
+  if (/penumbra\s+volume/i.test(englishTitle)) return '半暗带体积'
+  if (/mismatch\s+ratio/i.test(englishTitle)) return '不匹配比例'
+  if (/significant\s+mismatch/i.test(englishTitle)) return '显著不匹配'
+  if (/treatment[-\s]*window/i.test(englishTitle)) return '治疗时窗提示'
+
+  return englishTitle || `结论 ${idx + 1}`
+}
+
+const toChineseVerdict = (value: string): string => {
+  const token = String(value || '').trim().toLowerCase()
+  return FINAL_FINDING_VERDICT_MAP[token] || value || '-'
+}
+
+const toChineseRiskLevel = (value: unknown): string => {
+  const token = String(value || '').trim().toLowerCase()
+  if (!token) return '-'
+  return RISK_LEVEL_TEXT_MAP[token] || String(value)
+}
+
+const translateFindingMessage = (rawText: string): string => {
+  const text = String(rawText || '').trim()
+  if (!text) return ''
+  if (FINAL_FINDING_TEXT_MAP[text]) {
+    return FINAL_FINDING_TEXT_MAP[text]
+  }
+
+  let matched = text.match(/^Hemisphere value is available:\s*(left|right|both)\.?$/i)
+  if (matched) {
+    const sideMap: Record<string, string> = { left: '左侧', right: '右侧', both: '双侧' }
+    const side = sideMap[String(matched[1]).toLowerCase()] || matched[1]
+    return `偏侧值可用：${side}。`
+  }
+
+  matched = text.match(/^Core volume=([0-9.]+)\s*ml is internally consistent\.?$/i)
+  if (matched) {
+    return `核心体积=${matched[1]} ml，与内部一致性规则一致。`
+  }
+
+  matched = text.match(/^Penumbra volume=([0-9.]+)\s*ml is internally consistent\.?$/i)
+  if (matched) {
+    return `半暗带体积=${matched[1]} ml，与内部一致性规则一致。`
+  }
+
+  matched = text.match(/^Mismatch ratio=([0-9.]+) is internally consistent\.?$/i)
+  if (matched) {
+    return `不匹配比例=${matched[1]}，与内部一致性规则一致。`
+  }
+
+  matched = text.match(/^Mismatch ratio=([0-9.]+) supports significant mismatch\.?$/i)
+  if (matched) {
+    return `不匹配比例=${matched[1]}，支持显著不匹配结论。`
+  }
+
+  matched = text.match(/^Onset-to-admission=([0-9.]+)h is within an early window\.?$/i)
+  if (matched) {
+    return `发病至入院=${matched[1]}h，处于早期时间窗。`
+  }
+
+  return text
+}
+
+const translateUnavailableReason = (rawText: string): string => {
+  const text = String(rawText || '').trim()
+  if (!text) return ''
+  return FINAL_FINDING_TEXT_MAP[text] || text
 }
 
 const toFloat = (value: unknown): number | null => {
@@ -330,6 +502,19 @@ const parsePayloadFromStorage = (raw: string | null): ReportPayload | null => {
       icv: parsed?.icv && typeof parsed.icv === 'object' ? parsed.icv : null,
       ekv: parsed?.ekv && typeof parsed.ekv === 'object' ? parsed.ekv : null,
       consensus: parsed?.consensus && typeof parsed.consensus === 'object' ? parsed.consensus : null,
+      final_report:
+        parsed?.final_report && typeof parsed.final_report === 'object'
+          ? parsed.final_report
+          : null,
+      evidence_items: Array.isArray(parsed?.evidence_items) ? parsed.evidence_items : [],
+      evidence_map:
+        parsed?.evidence_map && typeof parsed.evidence_map === 'object'
+          ? parsed.evidence_map
+          : null,
+      traceability:
+        parsed?.traceability && typeof parsed.traceability === 'object'
+          ? parsed.traceability
+          : null,
     }
   } catch {
     return null
@@ -375,15 +560,102 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({ patientId, f
     ]
   }, [reportPayload, aiReport])
 
-  const ekvClaims = useMemo(() => {
-    const claims = reportPayload?.ekv?.claims
-    return Array.isArray(claims) ? claims : []
+  const currentRunId = useMemo(() => {
+    try {
+      const fromUrl = new URLSearchParams(window.location.search).get('run_id')
+      if (fromUrl && fromUrl.trim()) {
+        return fromUrl.trim()
+      }
+    } catch {
+      // ignore
+    }
+    if (fileId) {
+      const fromStorage = localStorage.getItem(`latest_agent_run_${fileId}`) || ''
+      if (fromStorage.trim()) {
+        return fromStorage.trim()
+      }
+    }
+    return ''
+  }, [fileId])
+
+  const openValidationCenter = (tab: 'icv' | 'ekv' = 'ekv') => {
+    const params = new URLSearchParams({
+      patient_id: String(patientId),
+      file_id: String(fileId || ''),
+      tab,
+    })
+    if (currentRunId) {
+      params.set('run_id', currentRunId)
+    }
+    window.location.href = `/validation?${params.toString()}`
+  }
+
+  const openCockpit = () => {
+    const params = new URLSearchParams({
+      patient_id: String(patientId),
+      file_id: String(fileId || ''),
+    })
+    if (currentRunId) {
+      params.set('run_id', currentRunId)
+    }
+    window.location.href = `/cockpit?${params.toString()}`
+  }
+
+  const evidenceLookup = useMemo(() => {
+    const map = new Map<string, { source_ref?: string; doc_name?: string; page?: number | string | null; snippet?: string }>()
+    const items = Array.isArray(reportPayload?.evidence_items) ? reportPayload?.evidence_items : []
+    items.forEach((item) => {
+      const id = String(item?.evidence_id || '').trim()
+      if (!id) return
+      map.set(id, {
+        source_ref: item?.source_ref,
+        doc_name: item?.doc_name,
+        page: item?.page,
+        snippet: item?.snippet,
+      })
+    })
+    const finalCitations = Array.isArray(reportPayload?.final_report?.citations)
+      ? reportPayload?.final_report?.citations
+      : []
+    finalCitations.forEach((item) => {
+      const id = String(item?.evidence_id || '').trim()
+      if (!id || map.has(id)) return
+      map.set(id, {
+        source_ref: item?.source_ref,
+        doc_name: item?.doc_name,
+        page: item?.page,
+        snippet: item?.snippet,
+      })
+    })
+    return map
   }, [reportPayload])
 
-  const ekvCitations = useMemo(() => {
-    const citations = reportPayload?.ekv?.citations
-    return Array.isArray(citations) ? citations : []
-  }, [reportPayload])
+  const finalFindingRows = useMemo(() => {
+    const findings = Array.isArray(reportPayload?.final_report?.key_findings)
+      ? reportPayload?.final_report?.key_findings
+      : []
+    return findings.map((item, idx) => {
+      const evidenceIds = Array.isArray(item?.evidence_ids) ? item?.evidence_ids : []
+      const references = evidenceIds
+        .map((id) => {
+          const row = evidenceLookup.get(String(id))
+          if (!row) return String(id)
+          const doc = row.doc_name || row.source_ref || 'evidence'
+          const page = row.page !== undefined && row.page !== null && String(row.page) !== '' ? ` p.${row.page}` : ''
+          return `${doc}${page}`
+        })
+        .filter(Boolean)
+
+      return {
+        findingId: item?.finding_id || item?.claim_id || `finding_${idx + 1}`,
+        title: toChineseFindingTitle(item as Record<string, unknown>, idx),
+        verdict: toChineseVerdict(String(item?.verdict || 'unavailable')),
+        message: translateFindingMessage(String(item?.message || '')),
+        unavailableReason: translateUnavailableReason(String(item?.unavailable_reason || '')),
+        references,
+      }
+    })
+  }, [reportPayload, evidenceLookup])
 
   useEffect(() => {
     if (!patientId) {
@@ -556,6 +828,12 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({ patientId, f
               导出PDF
             </button>
           )}
+          <button className="action-btn" onClick={() => openValidationCenter('ekv')}>
+            校验中心
+          </button>
+          <button className="action-btn" onClick={openCockpit}>
+            Cockpit
+          </button>
           <button className="action-btn ai-consult-btn" onClick={() => window.location.href = '/chat'}>
             AI问诊
           </button>
@@ -666,81 +944,82 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({ patientId, f
           </div>
         </div>
 
-        <div className="report-module">
-          <div className="module-header" style={{ background: 'linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%)' }}>
-            Evidence Validation Summary
-          </div>
-          <div className="module-content">
-            <div className="field-value">
-              <div style={{ display: 'grid', gap: 8 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>EKV status</span>
-                  <strong>{reportPayload?.ekv?.status || '-'}</strong>
+        {reportPayload?.final_report && (
+          <div className="report-module">
+            <div className="module-header" style={{ background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)' }}>
+              证据追溯
+            </div>
+            <div className="module-content">
+              <div className="field-grid">
+                <div className="field-item">
+                  <label>风险等级</label>
+                  <div className="field-value">{toChineseRiskLevel(reportPayload.final_report.risk_level)}</div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>EKV findings</span>
-                  <strong>{reportPayload?.ekv?.finding_count ?? 0}</strong>
-                </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Support rate</span>
-                  <strong>
-                    {typeof reportPayload?.ekv?.support_rate === 'number'
-                      ? `${Math.round(reportPayload.ekv.support_rate * 10000) / 100}%`
+                <div className="field-item">
+                  <label>置信度</label>
+                  <div className="field-value">
+                    {typeof reportPayload.final_report.confidence === 'number'
+                      ? reportPayload.final_report.confidence.toFixed(4)
                       : '-'}
-                  </strong>
+                  </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Consensus decision</span>
-                  <strong>{reportPayload?.consensus?.decision || '-'}</strong>
+                <div className="field-item">
+                  <label>追溯覆盖率</label>
+                  <div className="field-value">
+                    {typeof reportPayload.traceability?.coverage === 'number'
+                      ? `${(reportPayload.traceability.coverage * 100).toFixed(1)}%`
+                      : '-'}
+                  </div>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <span>Conflict count</span>
-                  <strong>{reportPayload?.consensus?.conflict_count ?? 0}</strong>
+                <div className="field-item">
+                  <label>已映射 / 总数</label>
+                  <div className="field-value">
+                    {typeof reportPayload.traceability?.mapped_findings === 'number' &&
+                    typeof reportPayload.traceability?.total_findings === 'number'
+                      ? `${reportPayload.traceability.mapped_findings}/${reportPayload.traceability.total_findings}`
+                      : '-'}
+                  </div>
                 </div>
               </div>
 
-              {ekvClaims.length > 0 && (
-                <div style={{ marginTop: 16 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 8 }}>Claims</div>
-                  <ul style={{ margin: 0, paddingLeft: 18 }}>
-                    {ekvClaims.map((claim, idx) => {
-                      const verdict = String(claim?.verdict || 'unavailable')
-                      const color =
-                        verdict === 'supported'
-                          ? '#10b981'
-                          : verdict === 'partially_supported'
-                            ? '#f59e0b'
-                            : verdict === 'not_supported'
-                              ? '#ef4444'
-                              : '#94a3b8'
-                      return (
-                        <li key={`ekv-claim-${idx}`} style={{ marginBottom: 8, lineHeight: 1.6 }}>
-                          <span style={{ fontWeight: 600, color }}>{verdict}</span>
-                          <span style={{ marginLeft: 8 }}>{claim?.claim_text || claim?.claim_id || 'claim'}</span>
-                          {claim?.message ? <div style={{ color: '#cbd5e1', marginTop: 4 }}>{claim.message}</div> : null}
-                        </li>
-                      )
-                    })}
-                  </ul>
+              {finalFindingRows.length > 0 ? (
+                <div style={{ marginTop: 12 }}>
+                  {finalFindingRows.map((item) => (
+                    <div
+                      key={String(item.findingId)}
+                      style={{
+                        border: '1px solid #334155',
+                        borderRadius: 8,
+                        padding: '10px 12px',
+                        marginBottom: 10,
+                        background: '#0b1220',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
+                        <strong style={{ color: '#dbeafe', fontSize: 14 }}>{item.title}</strong>
+                        <span style={{ color: '#93c5fd', fontSize: 12 }}>{item.verdict}</span>
+                      </div>
+                      {item.message ? (
+                        <div style={{ color: '#cbd5e1', fontSize: 13, lineHeight: 1.6, marginBottom: 6 }}>{item.message}</div>
+                      ) : null}
+                      {item.references.length > 0 ? (
+                        <div style={{ color: '#93c5fd', fontSize: 12 }}>
+                          证据：{item.references.join(' | ')}
+                        </div>
+                      ) : (
+                        <div style={{ color: '#fbbf24', fontSize: 12 }}>
+                          不可用原因：{item.unavailableReason || '未映射证据引用。'}
+                        </div>
+                      )}
+                    </div>
+                  ))}
                 </div>
-              )}
-
-              {ekvCitations.length > 0 && (
-                <div style={{ marginTop: 16 }}>
-                  <div style={{ fontWeight: 600, marginBottom: 8 }}>Citations</div>
-                  <ul style={{ margin: 0, paddingLeft: 18 }}>
-                    {ekvCitations.slice(0, 8).map((item, idx) => (
-                      <li key={`ekv-citation-${idx}`} style={{ marginBottom: 8, lineHeight: 1.6 }}>
-                        <span style={{ color: '#7dd3fc' }}>{item?.source_ref || '-'}</span>
-                        {item?.snippet ? <div style={{ color: '#cbd5e1', marginTop: 4 }}>{item.snippet}</div> : null}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+              ) : (
+                <div className="field-value">最终报告中暂无关键结论。</div>
               )}
             </div>
           </div>
-        </div>
+        )}
 
         <DoctorNotesModule notes={notes} isEditing={isEditing} onUpdate={setNotes} />
 

@@ -303,3 +303,9 @@
   - `npm run build` under `frontend/`
 - Local retrieval smoke confirms citations can be returned from `EKV_docs` with `doc+page`.
 - Manual clinical-case sign-off remains required in acceptance record.
+
+## Week6 Update (2026-03-23)
+1. Week6 artifacts are persisted only inside report_payload.
+2. Summary assembler now writes final_report, evidence_items, evidence_map, and traceability.
+3. Validation context exposes traceability for cross-page consistency.
+4. Manual runtime sign-off evidence is still required before closure.

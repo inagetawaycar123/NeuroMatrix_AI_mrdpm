@@ -1,4 +1,6 @@
-﻿document.addEventListener('DOMContentLoaded', function () {
+﻿const DEFAULT_UPLOAD_MODE = 'ncct_3phase_cta';
+
+document.addEventListener('DOMContentLoaded', function () {
     const uploadModeSelect = document.getElementById('uploadModeSelect');
     const ctaPhaseSelect = document.getElementById('ctaPhaseSelect');
     const ctaPhaseRow = document.getElementById('ctaPhaseRow');
@@ -56,7 +58,7 @@
     }
 
     function updateUIByMode() {
-        const mode = uploadModeSelect ? uploadModeSelect.value : 'ncct';
+        const mode = uploadModeSelect ? uploadModeSelect.value : DEFAULT_UPLOAD_MODE;
         if (ctaPhaseRow) {
             ctaPhaseRow.style.display = mode === 'ncct_single_cta' ? '' : 'none';
         }
@@ -158,7 +160,7 @@ function checkFilesReady() {
     const tmaxFile = document.getElementById('tmaxFile').files[0];
     const uploadMode = document.getElementById('uploadModeSelect')
         ? document.getElementById('uploadModeSelect').value
-        : 'ncct';
+        : DEFAULT_UPLOAD_MODE;
 
     let ready = !!ncctFile;
 
@@ -209,7 +211,7 @@ function processFiles() {
 
     const uploadMode = document.getElementById('uploadModeSelect')
         ? document.getElementById('uploadModeSelect').value
-        : 'ncct';
+        : DEFAULT_UPLOAD_MODE;
     formData.append('upload_mode', uploadMode);
 
     if (uploadMode === 'ncct_single_cta') {
@@ -272,3 +274,4 @@ function processFiles() {
         })
         .finally(() => showLoading(false));
 }
+
