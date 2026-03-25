@@ -25,7 +25,14 @@ const PROCESSING_STEP_ORDER = [
     'ai_report',
 ];
 
-const AGENT_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled']);
+const AGENT_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'paused_review_required']);
+
+const AGENT_DELEGATED_STEP_MAP = Object.freeze({
+    ctp_generate: 'generate_ctp_maps',
+    stroke_analysis: 'run_stroke_analysis',
+    pseudocolor: 'generate_pseudocolor',
+    ai_report: 'generate_medgemma_report',
+});
 
 function setTextIfPresent(id, value) {
     const el = document.getElementById(id);
@@ -42,6 +49,12 @@ function getAgentPanelElements() {
         stage: document.getElementById('agentRunStage'),
         currentTool: document.getElementById('agentCurrentTool'),
         eventCount: document.getElementById('agentEventCount'),
+        planRevision: document.getElementById('agentPlanRevision'),
+        replanCount: document.getElementById('agentReplanCount'),
+        planObjective: document.getElementById('agentPlanObjective'),
+        goalQuestion: document.getElementById('agentGoalQuestion'),
+        answerStatus: document.getElementById('agentAnswerStatus'),
+        terminationReason: document.getElementById('agentTerminationReason'),
         reportStatus: document.getElementById('agentReportStatus'),
         lastError: document.getElementById('agentLastError'),
         icvStatus: document.getElementById('agentIcvStatus'),
@@ -302,6 +315,70 @@ function getDisplayStepsForTimeline(job, run) {
     return steps;
 }
 
+function getDisplayStepsForTimelineAgentAware(job, run) {
+    const steps = getDisplayStepsForTimeline(job, run);
+    const agentEnabled = Boolean(job?.agent_run_id || processingAgentRunId);
+    if (!agentEnabled) {
+        return steps;
+    }
+
+    const runStatus = String(run?.status || '').toLowerCase();
+    const runSteps = Array.isArray(run?.steps) ? run.steps : [];
+    const terminalReason = stringifyRunError(run?.error || run?.termination_reason);
+
+    Object.entries(AGENT_DELEGATED_STEP_MAP).forEach(([uploadStepKey, agentStepKey]) => {
+        const uploadStep = steps.find((step) => step.key === uploadStepKey);
+        if (!uploadStep) {
+            return;
+        }
+
+        const agentStep = runSteps.find((step) => step && step.key === agentStepKey);
+        if (agentStep) {
+            const agentStepStatus = String(agentStep.status || '').toLowerCase();
+            if (agentStepStatus === 'completed') {
+                uploadStep.status = 'completed';
+            } else if (agentStepStatus === 'failed') {
+                uploadStep.status = 'failed';
+            } else if (agentStepStatus === 'skipped') {
+                uploadStep.status = 'skipped';
+            } else if (agentStepStatus === 'pending' || agentStepStatus === 'queued') {
+                uploadStep.status = 'pending';
+            } else {
+                uploadStep.status = 'running';
+            }
+            if (agentStep.message) {
+                uploadStep.message = agentStep.message;
+            }
+            return;
+        }
+
+        if (runStatus === 'failed' || runStatus === 'cancelled' || runStatus === 'paused_review_required') {
+            uploadStep.status = 'failed';
+            uploadStep.message = terminalReason && terminalReason !== '-'
+                ? `Agent failed before ${agentStepKey}: ${terminalReason}`
+                : `Agent failed before ${agentStepKey}.`;
+            return;
+        }
+
+        if (runStatus === 'succeeded') {
+            if (uploadStepKey === 'ai_report') {
+                uploadStep.status = 'completed';
+            } else {
+                uploadStep.status = 'skipped';
+            }
+            return;
+        }
+
+        if (!runStatus || runStatus === 'queued' || runStatus === 'running') {
+            if (uploadStep.status === 'pending' || uploadStep.status === 'skipped') {
+                uploadStep.status = 'running';
+            }
+        }
+    });
+
+    return steps;
+}
+
 function renderUploadSteps(steps) {
     const container = document.getElementById('processingSteps');
     if (!container) {
@@ -334,7 +411,7 @@ function rerenderTimelineFromSnapshot() {
     if (!latestJobSnapshot) {
         return;
     }
-    const displaySteps = getDisplayStepsForTimeline(latestJobSnapshot, latestAgentRun);
+    const displaySteps = getDisplayStepsForTimelineAgentAware(latestJobSnapshot, latestAgentRun);
     renderUploadSteps(displaySteps);
 }
 
@@ -500,6 +577,29 @@ function getReportStatusText(run) {
     if (run.status === 'succeeded') return '已完成';
     if (run.status === 'failed') return '失败';
     return '未开始';
+}
+
+function getCurrentPlanFrame(run) {
+    if (!run || !Array.isArray(run.plan_frames) || run.plan_frames.length === 0) {
+        return null;
+    }
+    const frames = [...run.plan_frames]
+        .filter((x) => x && typeof x === 'object')
+        .sort((a, b) => Number(a.revision || 0) - Number(b.revision || 0));
+    if (frames.length === 0) {
+        return null;
+    }
+    return frames[frames.length - 1];
+}
+
+function getAnswerStatusText(run) {
+    const token = String(run?.answer_status || '').toLowerCase();
+    if (token === 'pending') return '待生成';
+    if (token === 'running') return '生成中';
+    if (token === 'ready') return '已生成';
+    if (token === 'failed') return '失败';
+    if (token === 'unavailable') return '不可用';
+    return '-';
 }
 
 function getLastErrorText(run) {
@@ -866,6 +966,30 @@ function updateAgentPanel(run, events) {
     if (els.stage) els.stage.textContent = run.stage || '-';
     if (els.currentTool) els.currentTool.textContent = run.current_tool || '-';
     if (els.eventCount) els.eventCount.textContent = String((events || []).length);
+    const planFrame = getCurrentPlanFrame(run);
+    if (els.planRevision) {
+        els.planRevision.textContent = planFrame ? String(planFrame.revision || '-') : '-';
+    }
+    if (els.replanCount) {
+        const frames = Array.isArray(run.plan_frames) ? run.plan_frames.length : 0;
+        const fallback = Number.isFinite(Number(run.replan_count)) ? Number(run.replan_count) : 0;
+        const count = frames > 0 ? Math.max(0, frames - 1) : fallback;
+        els.replanCount.textContent = String(count);
+    }
+    if (els.planObjective) {
+        els.planObjective.textContent = planFrame?.objective || run.plan_objective || '-';
+    }
+    if (els.goalQuestion) {
+        const q = String(run.goal_question || (run.planner_input || {}).question || '').trim();
+        els.goalQuestion.textContent = q || '-';
+    }
+    if (els.answerStatus) {
+        els.answerStatus.textContent = getAnswerStatusText(run);
+    }
+    if (els.terminationReason) {
+        const reason = run.termination_reason || (run.result || {}).termination_reason || '';
+        els.terminationReason.textContent = reason ? String(reason) : '-';
+    }
     if (els.reportStatus) els.reportStatus.textContent = getReportStatusText(run);
     if (els.lastError) els.lastError.textContent = getLastErrorText(run);
 
@@ -1003,10 +1127,33 @@ async function pollAgentStatus() {
     const els = getAgentPanelElements();
 
     try {
+        console.info(`[UI][RUN_POLL] run_id=${processingAgentRunId} status=requesting`);
         const [runResp, eventsResp] = await Promise.all([
             fetch(`/api/agent/runs/${encodeURIComponent(processingAgentRunId)}`),
             fetch(`/api/agent/runs/${encodeURIComponent(processingAgentRunId)}/events`),
         ]);
+
+        console.info(
+            `[UI][RUN_POLL] run_id=${processingAgentRunId} run_http=${runResp.status} events_http=${eventsResp.status}`
+        );
+        if (runResp.status === 404 || eventsResp.status === 404) {
+            clearAgentPolling();
+            const notFoundError = 'run not found or expired';
+            latestAgentRun = {
+                run_id: processingAgentRunId,
+                status: 'failed',
+                stage: 'tooling',
+                steps: [],
+                error: notFoundError,
+                termination_reason: notFoundError,
+            };
+            rerenderTimelineFromSnapshot();
+            updateAgentPanel(latestAgentRun, []);
+            if (els.message) {
+                els.message.textContent = 'Agent run not found or expired. Please restart from upload.';
+            }
+            return;
+        }
 
         const runData = await runResp.json();
         const eventsData = await eventsResp.json();
@@ -1068,6 +1215,7 @@ async function pollAgentStatus() {
             }
         }
     } catch (err) {
+        console.warn(`[UI][RUN_POLL] run_id=${processingAgentRunId} status=exception error=${err.message}`);
         if (els.message) {
             els.message.textContent = `Agent 轮询失败: ${err.message}`;
         }

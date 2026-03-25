@@ -8,14 +8,15 @@ let cockpitResult = null;
 let cockpitValidation = null;
 
 let cockpitPollTimer = null;
-const COCKPIT_TERMINAL = new Set(['succeeded', 'failed', 'cancelled']);
+const COCKPIT_TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'paused_review_required']);
 
 const STATUS_TEXT_MAP = {
     queued: '排队中',
-    running: '执行中',
-    succeeded: '成功',
+    running: '运行中',
+    succeeded: '已完成',
     failed: '失败',
     cancelled: '已取消',
+    paused_review_required: '待人工复核',
     pending: '待执行',
     completed: '已完成',
     skipped: '已跳过',
@@ -26,13 +27,13 @@ const STATUS_TEXT_MAP = {
 };
 
 const STAGE_TEXT_MAP = {
-    triage: '分诊',
+    triage: '任务理解',
     tooling: '工具执行',
     icv: '内在一致性校验',
     ekv: '外部证据校验',
     consensus: '一致性裁决',
-    summary: '汇总',
-    done: '完成',
+    summary: '汇总阶段',
+    done: '结束',
 };
 
 const CONSENSUS_TEXT_MAP = {
@@ -43,14 +44,22 @@ const CONSENSUS_TEXT_MAP = {
     skipped: '已跳过',
 };
 
+const ANSWER_STATUS_TEXT_MAP = {
+    pending: '待生成',
+    running: '生成中',
+    ready: '已生成',
+    failed: '失败',
+    unavailable: '不可用',
+};
+
 const SOURCE_CHAIN_TEXT_MAP = {
     none: '无',
     case_latest_result_json: '病例最新结果',
     run_result: '运行结果',
-    run_result_by_id: '指定运行结果',
-    agent_run_result: '智能体运行结果',
+    run_result_by_id: '按 run_id 命中运行结果',
+    agent_run_result: 'Agent 运行结果',
     report_payload: '报告载荷',
-    local_storage_fallback: '本地缓存兜底',
+    local_storage_fallback: '本地回退',
 };
 
 function setText(id, value) {
@@ -82,8 +91,8 @@ function sourceChainText(value) {
     return mapTokenText(value, SOURCE_CHAIN_TEXT_MAP);
 }
 
-function hasChinese(text) {
-    return /[\u4e00-\u9fff]/.test(String(text || ''));
+function answerStatusText(value) {
+    return mapTokenText(value, ANSWER_STATUS_TEXT_MAP);
 }
 
 function statusClass(value) {
@@ -186,17 +195,11 @@ function persistRunContext() {
 }
 
 function updateMeta(run = {}, events = []) {
-    const runId = run.run_id || cockpitRunId || '-';
-    const patientId = run.patient_id || cockpitPatientId || '-';
-    const fileId = run.file_id || cockpitFileId || '-';
-    const stage = stageText(run.stage || '-');
-    const status = statusText(run.status || '-');
-
-    setText('metaRunId', runId);
-    setText('metaPatientId', patientId);
-    setText('metaFileId', fileId);
-    setText('metaRunStatus', status);
-    setText('metaRunStage', stage);
+    setText('metaRunId', run.run_id || cockpitRunId || '-');
+    setText('metaPatientId', run.patient_id || cockpitPatientId || '-');
+    setText('metaFileId', run.file_id || cockpitFileId || '-');
+    setText('metaRunStatus', statusText(run.status || '-'));
+    setText('metaRunStage', stageText(run.stage || '-'));
     setText('metaCurrentTool', run.current_tool || '-');
     setText('metaEventCount', String(events.length || 0));
     setText('metaUpdatedAt', formatTime(run.updated_at || run.created_at));
@@ -224,6 +227,44 @@ function computeRetryableStep(run) {
     return `${title} (${step.key || '-'}, attempt=${attempts})`;
 }
 
+function getPlanFrames(run) {
+    if (!run || !Array.isArray(run.plan_frames)) return [];
+    return [...run.plan_frames]
+        .filter((x) => x && typeof x === 'object')
+        .sort((a, b) => Number(a.revision || 0) - Number(b.revision || 0));
+}
+
+function getCurrentPlanFrame(run) {
+    const frames = getPlanFrames(run);
+    if (frames.length === 0) return null;
+    return frames[frames.length - 1];
+}
+
+function getReplanCount(run) {
+    const frames = getPlanFrames(run);
+    if (frames.length === 0) return 0;
+    return Math.max(0, frames.length - 1);
+}
+
+function getTerminationReason(run) {
+    if (!run || typeof run !== 'object') return '-';
+    if (run.termination_reason) return String(run.termination_reason);
+    if (run.result && typeof run.result === 'object') {
+        const r = run.result;
+        if (r.termination_reason) return String(r.termination_reason);
+        if (r.context_snapshot && typeof r.context_snapshot === 'object') {
+            const hint = r.context_snapshot?.working_memory?.termination_reason;
+            if (hint) return String(hint);
+        }
+    }
+    const status = String(run.status || '').toLowerCase();
+    if (status === 'succeeded') return 'normal_completion';
+    if (status === 'paused_review_required') return 'human_review_required';
+    if (status === 'failed') return computeLastError(run);
+    if (status === 'running') return 'running';
+    return '-';
+}
+
 function toSummaryCount(status, count, listLike) {
     const statusToken = String(status || '').toLowerCase();
     if (statusToken !== 'unavailable') {
@@ -237,9 +278,17 @@ function toSummaryCount(status, count, listLike) {
 
 function renderRunSummary(run, validation, resultResp) {
     const reportReady = resultResp?.ok || String(run?.status || '').toLowerCase() === 'succeeded';
-    setText('summaryResultStatus', reportReady ? '可读取' : '待完成');
+    setText('summaryResultStatus', reportReady ? '已生成' : '生成中');
     setText('summaryLastError', computeLastError(run));
     setText('summaryRetryStep', computeRetryableStep(run));
+
+    const currentPlanFrame = getCurrentPlanFrame(run);
+    setText('summaryPlanRevision', currentPlanFrame ? String(currentPlanFrame.revision || '-') : '-');
+    setText('summaryReplanCount', String(getReplanCount(run)));
+    setText('summaryPlanObjective', currentPlanFrame?.objective || '-');
+    setText('summaryGoalQuestion', run?.goal_question || (run?.planner_input || {})?.question || '-');
+    setText('summaryAnswerStatus', answerStatusText(run?.answer_status || '-'));
+    setText('summaryTerminationReason', getTerminationReason(run));
 
     const meta = validation?.meta || {};
     setText('summarySourceChain', sourceChainText(meta.source_chain || '-'));
@@ -309,7 +358,7 @@ function renderStepTimeline(run) {
     wrap.innerHTML = '';
     const steps = Array.isArray(run?.steps) ? run.steps : [];
     if (steps.length === 0) {
-        wrap.innerHTML = '<div class="empty-block">当前运行还没有步骤轨迹。</div>';
+        wrap.innerHTML = '<div class="empty-block">暂无步骤数据。</div>';
         return;
     }
     steps.forEach((step, idx) => {
@@ -332,6 +381,37 @@ function renderStepTimeline(run) {
     });
 }
 
+function renderPlanFrameTimeline(run) {
+    const wrap = document.getElementById('planFrameTimeline');
+    if (!wrap) return;
+    wrap.innerHTML = '';
+    const frames = getPlanFrames(run);
+    if (frames.length === 0) {
+        wrap.innerHTML = '<div class="empty-block">暂无计划帧（PlanFrame）。</div>';
+        return;
+    }
+    frames.forEach((frame) => {
+        const item = document.createElement('div');
+        item.className = 'event-item';
+        const nextTools = Array.isArray(frame.next_tools) && frame.next_tools.length > 0
+            ? frame.next_tools.join(' -> ')
+            : '-';
+        item.innerHTML = `
+            <div class="event-item-head">
+                <div class="event-item-title">rev ${frame.revision || '-'} | ${frame.source || 'rule'}</div>
+                <div class="badge ${statusClass('completed')}">已规划</div>
+            </div>
+            <div class="event-item-meta">
+                <div>objective: ${frame.objective || '-'}</div>
+                <div>reasoning: ${frame.reasoning_summary || '-'}</div>
+                <div>next_tools: ${nextTools}</div>
+                <div>confidence: ${Number(frame.confidence || 0).toFixed(2)}</div>
+            </div>
+        `;
+        wrap.appendChild(item);
+    });
+}
+
 function uniqueValues(items, getter) {
     const set = new Set();
     items.forEach((item) => {
@@ -347,12 +427,6 @@ function updateEventFilterOptions(events) {
     const toolSel = document.getElementById('eventToolFilter');
     if (!stageSel || !statusSel || !toolSel) return;
 
-    const preserve = {
-        stage: stageSel.value || 'all',
-        status: statusSel.value || 'all',
-        tool: toolSel.value || 'all',
-    };
-
     const stages = uniqueValues(events, (e) => String(e.stage || '').trim().toLowerCase()).sort();
     const statuses = uniqueValues(events, (e) => String(e.status || '').trim().toLowerCase()).sort();
     const tools = uniqueValues(events, (e) => String(e.tool_name || '').trim()).sort();
@@ -366,13 +440,7 @@ function updateEventFilterOptions(events) {
             node.textContent = labelMapper(opt);
             el.appendChild(node);
         });
-        if (options.includes(old)) {
-            el.value = old;
-        } else if (options.includes(preserve[el.id.includes('Stage') ? 'stage' : el.id.includes('Status') ? 'status' : 'tool'])) {
-            el.value = preserve[el.id.includes('Stage') ? 'stage' : el.id.includes('Status') ? 'status' : 'tool'];
-        } else {
-            el.value = 'all';
-        }
+        el.value = options.includes(old) ? old : 'all';
     };
 
     fill(stageSel, stages, (x) => stageText(x));
@@ -383,7 +451,7 @@ function updateEventFilterOptions(events) {
 function getFilteredEvents(events) {
     const stageFilter = (document.getElementById('eventStageFilter')?.value || 'all').toLowerCase();
     const statusFilter = (document.getElementById('eventStatusFilter')?.value || 'all').toLowerCase();
-    const toolFilter = (document.getElementById('eventToolFilter')?.value || 'all');
+    const toolFilter = document.getElementById('eventToolFilter')?.value || 'all';
 
     return [...events]
         .sort((a, b) => Number(a.event_seq || 0) - Number(b.event_seq || 0))
@@ -404,7 +472,7 @@ function renderEventTimeline(events) {
     wrap.innerHTML = '';
     const filtered = getFilteredEvents(events);
     if (filtered.length === 0) {
-        wrap.innerHTML = '<div class="empty-block">当前筛选条件下无事件。</div>';
+        wrap.innerHTML = '<div class="empty-block">当前过滤条件下无事件。</div>';
         return;
     }
 
@@ -412,9 +480,7 @@ function renderEventTimeline(events) {
         const status = String(event.status || '');
         const item = document.createElement('div');
         item.className = 'event-item';
-        const toolName = event.tool_name || '-';
-        const title = `#${event.event_seq || '-'} | ${toolName}`;
-        const errorCode = event.error_code || '-';
+        const title = `#${event.event_seq || '-'} | ${event.tool_name || '-'}`;
         item.innerHTML = `
             <div class="event-item-head">
                 <div class="event-item-title">${title}</div>
@@ -422,7 +488,7 @@ function renderEventTimeline(events) {
             </div>
             <div class="event-item-meta">
                 <div>stage: ${stageText(event.stage || '-')} | attempt: ${event.attempt || 0} | retryable: ${event.retryable === true ? 'true' : 'false'}</div>
-                <div>latency: ${formatLatency(event.latency_ms)} | error_code: ${errorCode}</div>
+                <div>latency: ${formatLatency(event.latency_ms)} | error_code: ${event.error_code || '-'}</div>
                 <div>timestamp: ${formatTime(event.timestamp)}</div>
             </div>
         `;
@@ -438,25 +504,15 @@ function updateHint(message, isError = false) {
 }
 
 function bindEntryButtons() {
-    const viewerBtn = document.getElementById('gotoViewerBtn');
-    const reportBtn = document.getElementById('gotoReportBtn');
-    const validationBtn = document.getElementById('gotoValidationBtn');
-
-    if (viewerBtn) {
-        viewerBtn.onclick = () => {
-            window.location.href = getViewerUrl();
-        };
-    }
-    if (reportBtn) {
-        reportBtn.onclick = () => {
-            window.location.href = getReportUrl();
-        };
-    }
-    if (validationBtn) {
-        validationBtn.onclick = () => {
-            window.location.href = getValidationUrl('ekv');
-        };
-    }
+    document.getElementById('gotoViewerBtn')?.addEventListener('click', () => {
+        window.location.href = getViewerUrl();
+    });
+    document.getElementById('gotoReportBtn')?.addEventListener('click', () => {
+        window.location.href = getReportUrl();
+    });
+    document.getElementById('gotoValidationBtn')?.addEventListener('click', () => {
+        window.location.href = getValidationUrl('ekv');
+    });
 }
 
 function bindActions() {
@@ -466,7 +522,7 @@ function bindActions() {
 
     document.getElementById('copyRunIdBtn')?.addEventListener('click', async () => {
         if (!cockpitRunId) {
-            updateHint('当前没有可复制的 run_id。');
+            updateHint('当前没有 run_id。');
             return;
         }
         try {
@@ -477,21 +533,16 @@ function bindActions() {
         }
     });
 
-    document.getElementById('exportTraceBtn')?.addEventListener('click', () => {
-        exportTraceText();
-    });
+    document.getElementById('exportTraceBtn')?.addEventListener('click', exportTraceText);
 
     ['eventStageFilter', 'eventStatusFilter', 'eventToolFilter'].forEach((id) => {
-        const el = document.getElementById(id);
-        if (el) {
-            el.addEventListener('change', () => renderEventTimeline(cockpitEvents));
-        }
+        document.getElementById(id)?.addEventListener('change', () => renderEventTimeline(cockpitEvents));
     });
 }
 
 function exportTraceText() {
     if (!cockpitRunId && !cockpitFileId) {
-        updateHint('没有可导出的轨迹上下文。');
+        updateHint('没有可导出的轨迹。');
         return;
     }
     const lines = [];
@@ -502,11 +553,17 @@ function exportTraceText() {
     lines.push(`stage: ${cockpitRun?.stage || '-'}`);
     lines.push(`current_tool: ${cockpitRun?.current_tool || '-'}`);
     lines.push('');
+    lines.push('[plan_frames]');
+    getPlanFrames(cockpitRun).forEach((frame) => {
+        lines.push(`rev=${frame.revision || '-'} source=${frame.source || '-'} confidence=${frame.confidence || 0}`);
+        lines.push(`objective=${frame.objective || '-'}`);
+        lines.push(`reasoning=${frame.reasoning_summary || '-'}`);
+        lines.push(`next_tools=${Array.isArray(frame.next_tools) ? frame.next_tools.join(' -> ') : '-'}`);
+    });
+    lines.push('');
     lines.push('[steps]');
     (cockpitRun?.steps || []).forEach((step, idx) => {
-        lines.push(
-            `${idx + 1}. key=${step.key || '-'} title=${step.title || '-'} status=${step.status || '-'} attempts=${step.attempts || 0} retryable=${step.retryable === true}`
-        );
+        lines.push(`${idx + 1}. key=${step.key || '-'} title=${step.title || '-'} status=${step.status || '-'} attempts=${step.attempts || 0} retryable=${step.retryable === true}`);
         lines.push(`   message=${step.message || '-'}`);
     });
     lines.push('');
@@ -515,9 +572,7 @@ function exportTraceText() {
         .slice()
         .sort((a, b) => Number(a.event_seq || 0) - Number(b.event_seq || 0))
         .forEach((event) => {
-            lines.push(
-                `#${event.event_seq || '-'} stage=${event.stage || '-'} tool=${event.tool_name || '-'} status=${event.status || '-'} attempt=${event.attempt || 0} latency=${event.latency_ms || 0}ms error_code=${event.error_code || '-'}`
-            );
+            lines.push(`#${event.event_seq || '-'} stage=${event.stage || '-'} tool=${event.tool_name || '-'} status=${event.status || '-'} attempt=${event.attempt || 0} latency=${event.latency_ms || 0}ms error_code=${event.error_code || '-'}`);
         });
 
     const blob = new Blob([lines.join('\n')], { type: 'text/plain;charset=utf-8' });
@@ -528,7 +583,7 @@ function exportTraceText() {
     anchor.download = fileName;
     anchor.click();
     URL.revokeObjectURL(anchor.href);
-    updateHint(`轨迹导出成功: ${fileName}`);
+    updateHint(`轨迹已导出: ${fileName}`);
 }
 
 function parseResultPayload(resultResp) {
@@ -540,21 +595,21 @@ function parseResultPayload(resultResp) {
 
 async function fetchCockpitData(isManual = false) {
     parseCockpitParams();
-    bindEntryButtons();
     persistRunContext();
 
     if (!cockpitRunId) {
         updateMeta({}, []);
         renderStepTimeline(null);
+        renderPlanFrameTimeline(null);
         updateEventFilterOptions([]);
         renderEventTimeline([]);
-        updateHint('未提供 run_id，请从 processing/viewer/report 页面进入，或在 URL 追加 run_id。');
+        updateHint('缺少 run_id，请从 Processing/Viewer/Report 跳转，或在 URL 中提供 run_id。');
         stopPolling();
         return;
     }
 
     if (isManual) {
-        updateHint('正在刷新运行轨迹...');
+        updateHint('正在刷新运行数据...');
     }
 
     const runUrl = `/api/agent/runs/${encodeURIComponent(cockpitRunId)}`;
@@ -577,10 +632,10 @@ async function fetchCockpitData(isManual = false) {
         const validationData = await validationResp.json().catch(() => ({}));
 
         if (!runResp.ok || !runData.success) {
-            throw new Error(runData.error || `获取 run 失败 (${runResp.status})`);
+            throw new Error(runData.error || `读取 run 失败 (${runResp.status})`);
         }
         if (!eventsResp.ok || !eventsData.success) {
-            throw new Error(eventsData.error || `获取 events 失败 (${eventsResp.status})`);
+            throw new Error(eventsData.error || `读取 events 失败 (${eventsResp.status})`);
         }
 
         cockpitRun = runData.run || {};
@@ -598,6 +653,7 @@ async function fetchCockpitData(isManual = false) {
 
         updateMeta(cockpitRun, cockpitEvents);
         renderStepTimeline(cockpitRun);
+        renderPlanFrameTimeline(cockpitRun);
         updateEventFilterOptions(cockpitEvents);
         renderEventTimeline(cockpitEvents);
         renderRunSummary(cockpitRun, cockpitValidation, cockpitResult);
@@ -612,19 +668,19 @@ async function fetchCockpitData(isManual = false) {
             updateHint(`运行已结束：${statusText(cockpitRun.status || '-')}`);
         } else {
             startPolling();
-            updateHint(`运行进行中：${stageText(cockpitRun.stage || '-')} / ${cockpitRun.current_tool || '-'}`);
+            const currentFrame = getCurrentPlanFrame(cockpitRun);
+            const revHint = currentFrame ? `rev=${currentFrame.revision || '-'}` : 'rev=-';
+            updateHint(`运行中：${stageText(cockpitRun.stage || '-')} / ${cockpitRun.current_tool || '-'} / ${revHint}`);
         }
     } catch (err) {
-        updateHint(`加载失败：${err.message}`, true);
+        updateHint(`刷新失败: ${err.message}`, true);
         stopPolling();
     }
 }
 
 function startPolling() {
     if (cockpitPollTimer) return;
-    cockpitPollTimer = setInterval(() => {
-        fetchCockpitData(false);
-    }, 1500);
+    cockpitPollTimer = setInterval(() => fetchCockpitData(false), 1500);
 }
 
 function stopPolling() {

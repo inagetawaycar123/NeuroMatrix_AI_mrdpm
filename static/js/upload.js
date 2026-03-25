@@ -30,6 +30,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const cbfInput = document.getElementById('cbfFile');
     const cbvInput = document.getElementById('cbvFile');
     const tmaxInput = document.getElementById('tmaxFile');
+    const questionInput = document.getElementById('agentQuestion');
+    const agentToggle = document.getElementById('agentRunToggle');
 
     function isValidNiftiFile(file) {
         if (!file || !file.name) {
@@ -138,6 +140,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
     if (uploadModeSelect) uploadModeSelect.addEventListener('change', updateUIByMode);
     if (ctaPhaseSelect) ctaPhaseSelect.addEventListener('change', updateUIByMode);
+    if (questionInput) questionInput.addEventListener('input', checkFilesReady);
+    if (agentToggle) agentToggle.addEventListener('change', checkFilesReady);
 
     bindFileInput(mctaInput, 'mctaBtn', '动脉期CTA');
     bindFileInput(vctaInput, 'vctaBtn', '静脉期CTA');
@@ -161,6 +165,8 @@ function checkFilesReady() {
     const uploadMode = document.getElementById('uploadModeSelect')
         ? document.getElementById('uploadModeSelect').value
         : DEFAULT_UPLOAD_MODE;
+    const questionText = (document.getElementById('agentQuestion')?.value || '').trim();
+    const startAgentRun = !document.getElementById('agentRunToggle') || !!document.getElementById('agentRunToggle').checked;
 
     let ready = !!ncctFile;
 
@@ -177,6 +183,10 @@ function checkFilesReady() {
         ready = !!(ncctFile && mctaFile && vctaFile && dctaFile);
     } else if (uploadMode === 'ncct_3phase_cta_ctp') {
         ready = !!(ncctFile && mctaFile && vctaFile && dctaFile && cbfFile && cbvFile && tmaxFile);
+    }
+
+    if (ready && startAgentRun && !questionText) {
+        ready = false;
     }
 
     document.getElementById('uploadBtn').disabled = !ready;
@@ -226,12 +236,21 @@ function processFiles() {
         : 'both';
     formData.append('hemisphere', hemisphere);
 
+    const question = (document.getElementById('agentQuestion')?.value || '').trim();
+
     if (cbfFile && cbvFile && tmaxFile) {
         formData.append('skip_ai', 'true');
     }
 
     const agentToggle = document.getElementById('agentRunToggle');
     const startAgentRun = !agentToggle || !!agentToggle.checked;
+    if (startAgentRun && !question) {
+        showMsg('启用 Agent 时请填写任务问题。', 'error');
+        return;
+    }
+    if (question) {
+        formData.append('question', question);
+    }
     if (startAgentRun) {
         formData.append('start_agent_run', 'true');
     }

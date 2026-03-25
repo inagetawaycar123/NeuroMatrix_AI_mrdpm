@@ -15,7 +15,7 @@
                     <select id="uploadModeSelect" class="form-select" style="width: auto; flex: 1;">
                         <option value="ncct">1. NCCT-only</option>
                         <option value="ncct_single_cta">2. NCCT + single-phase CTA</option>
-                        <option value="ncct_3phase_cta" selected>3. NCCT + mCTA (recommend)</option>
+                        <option value="ncct_3phase_cta" selected>3. NCCT + mCTA（推荐）</option>
                         <option value="ncct_3phase_cta_ctp">4. NCCT + mCTA + CTP</option>
                     </select>
                 </div>
@@ -74,8 +74,17 @@
                     <label class="file-label">模型:</label>
                     <select id="modelSelect" class="form-select" style="width: auto; flex: 1;">
                         <option value="palette">palette</option>
-                        <option value="mrdpm" selected>mrdpm (推荐)</option>
+                        <option value="mrdpm" selected>mrdpm（推荐）</option>
                     </select>
+                </div>
+                <div class="file-input-row" style="align-items:flex-start;">
+                    <label class="file-label">任务:</label>
+                    <textarea
+                        id="agentQuestion"
+                        class="form-select"
+                        style="width: auto; flex: 1; min-height: 78px; resize: vertical;"
+                        placeholder="请描述本次诊疗目标，例如评估可挽救脑组织并给出下一步建议。"
+                    ></textarea>
                 </div>
                 <div class="file-input-row upload-switch-row">
                     <label class="file-label">Agent:</label>

@@ -29,6 +29,15 @@ CLAIM_TITLES = {
     "treatment_window_notice": "Treatment window notice",
 }
 
+QUESTION_FOCUS_KEYWORDS = {
+    "hemisphere": ["偏侧", "侧别", "半球", "hemisphere", "laterality"],
+    "core_infarct_volume": ["核心", "梗死核心", "core", "infarct volume"],
+    "penumbra_volume": ["半暗带", "penumbra"],
+    "mismatch_ratio": ["不匹配", "mismatch ratio"],
+    "significant_mismatch": ["显著不匹配", "mismatch", "可挽救"],
+    "treatment_window_notice": ["时间窗", "时窗", "window", "治疗"],
+}
+
 
 def _now_iso() -> str:
     return _dt.datetime.utcnow().isoformat() + "Z"
@@ -352,6 +361,168 @@ def _build_traceability(
     }
 
 
+def _detect_question_focus_claims(question: str) -> List[str]:
+    text = str(question or "").strip().lower()
+    if not text:
+        return []
+    hits: List[str] = []
+    for claim_id, keywords in QUESTION_FOCUS_KEYWORDS.items():
+        if any(str(keyword).lower() in text for keyword in keywords):
+            hits.append(claim_id)
+    return hits
+
+
+def _build_question_answer(
+    *,
+    goal_question: str,
+    key_findings: List[Dict[str, Any]],
+    consensus: Dict[str, Any],
+    next_actions: List[str],
+    uncertainties: List[str],
+    evidence_lookup: Dict[str, Dict[str, Any]],
+    traceability: Dict[str, Any],
+    base_confidence: float,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    question = str(goal_question or "").strip() or "请基于当前病例给出综合诊疗建议。"
+    focus_claims = _detect_question_focus_claims(question)
+    selected_findings = [
+        item
+        for item in key_findings
+        if str(item.get("claim_id") or "") in focus_claims
+    ]
+    if not selected_findings:
+        selected_findings = list(key_findings[:4])
+
+    supported_count = 0
+    unavailable_count = 0
+    not_supported_count = 0
+    key_points: List[str] = []
+    evidence_refs: List[Dict[str, Any]] = []
+    ledger_map: Dict[str, Dict[str, Any]] = {}
+
+    for item in selected_findings:
+        verdict = str(item.get("verdict") or "unavailable").lower()
+        if verdict == "supported":
+            supported_count += 1
+        elif verdict == "not_supported":
+            not_supported_count += 1
+        elif verdict == "unavailable":
+            unavailable_count += 1
+
+        title = str(item.get("title") or item.get("claim_id") or "结论")
+        message = str(item.get("message") or "").strip()
+        unavailable_reason = str(item.get("unavailable_reason") or "").strip()
+        verdict_text = {
+            "supported": "支持",
+            "partially_supported": "部分支持",
+            "not_supported": "不支持",
+            "unavailable": "不可用",
+        }.get(verdict, verdict)
+
+        if message:
+            key_points.append(f"{title}：{message}（{verdict_text}）")
+        elif unavailable_reason:
+            key_points.append(f"{title}：{unavailable_reason}（{verdict_text}）")
+        else:
+            key_points.append(f"{title}：{verdict_text}")
+
+        finding_id = str(item.get("finding_id") or item.get("claim_id") or "")
+        claim_id = str(item.get("claim_id") or finding_id or "unknown")
+        evidence_ids = [str(x).strip() for x in (item.get("evidence_ids") or []) if str(x).strip()]
+        evidence_rows = []
+        for evidence_id in evidence_ids:
+            evidence = evidence_lookup.get(evidence_id) or {}
+            evidence_rows.append(
+                {
+                    "evidence_id": evidence_id,
+                    "source_ref": evidence.get("source_ref"),
+                    "doc_name": evidence.get("doc_name"),
+                    "page": evidence.get("page"),
+                }
+            )
+        evidence_refs.append(
+            {
+                "finding_id": finding_id,
+                "claim_id": claim_id,
+                "verdict": verdict,
+                "evidence_ids": evidence_ids,
+                "evidence": evidence_rows,
+                "unavailable_reason": unavailable_reason or None,
+            }
+        )
+        ledger_map[finding_id or claim_id] = {
+            "claim_id": claim_id,
+            "verdict": verdict,
+            "evidence_ids": evidence_ids,
+            "source_refs": [row.get("source_ref") for row in evidence_rows if row.get("source_ref")],
+            "unavailable_reason": unavailable_reason or None,
+        }
+
+    consensus_decision = str(consensus.get("decision") or "accept").strip().lower()
+    direct_answer_prefix = "综合结论："
+    if consensus_decision == "escalate":
+        direct_answer_prefix = "高风险提示："
+    elif consensus_decision == "review_required":
+        direct_answer_prefix = "复核提示："
+
+    if not_supported_count > 0:
+        direct_answer = (
+            f"{direct_answer_prefix}当前证据对关键问题存在不支持项，"
+            "建议先完成人工复核后再做治疗决策。"
+        )
+    elif unavailable_count > 0:
+        direct_answer = (
+            f"{direct_answer_prefix}当前能够给出初步结论，但部分关键证据不足，"
+            "需结合完整影像序列与临床信息复核。"
+        )
+    elif supported_count > 0:
+        direct_answer = (
+            f"{direct_answer_prefix}当前证据总体支持对该问题的结论，"
+            "可按建议的下一步动作继续评估。"
+        )
+    else:
+        direct_answer = (
+            f"{direct_answer_prefix}当前未形成稳定结论，"
+            "建议补充数据并重新运行校验流程。"
+        )
+
+    total_selected = max(len(selected_findings), 1)
+    unresolved_penalty = (unavailable_count + not_supported_count) / total_selected * 0.35
+    consensus_penalty = 0.0
+    if consensus_decision == "review_required":
+        consensus_penalty = 0.12
+    elif consensus_decision == "escalate":
+        consensus_penalty = 0.25
+    high_risk_unmapped = int(traceability.get("high_risk_unmapped_count") or 0)
+    trace_penalty = min(0.25, high_risk_unmapped * 0.08)
+    confidence = max(0.0, min(1.0, float(base_confidence) - unresolved_penalty - consensus_penalty - trace_penalty))
+
+    answer_uncertainties = list(uncertainties or [])
+    if unavailable_count > 0 and not answer_uncertainties:
+        answer_uncertainties.append("部分关键结论缺少充分证据映射。")
+
+    if not next_actions:
+        next_actions = ["建议结合原始影像与临床信息进行人工复核。"]
+
+    question_answer = {
+        "question": question,
+        "direct_answer": direct_answer,
+        "key_points": key_points[:6],
+        "recommendations": list(next_actions[:6]),
+        "confidence": round(confidence, 4),
+        "evidence_refs": evidence_refs,
+        "uncertainties": answer_uncertainties,
+        "consensus_decision": consensus_decision,
+    }
+
+    ledger = {
+        "question": question,
+        "generated_at": _now_iso(),
+        "mapping": ledger_map,
+    }
+    return question_answer, ledger
+
+
 def build_summary_artifacts(
     *,
     run_id: str,
@@ -360,6 +531,9 @@ def build_summary_artifacts(
     icv: Optional[Dict[str, Any]],
     ekv: Optional[Dict[str, Any]],
     consensus: Optional[Dict[str, Any]],
+    goal_question: Optional[str] = None,
+    decision_trace: Optional[List[Dict[str, Any]]] = None,
+    tool_metrics: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Build Week6 summary artifacts from Week5 outputs.
@@ -451,10 +625,26 @@ def build_summary_artifacts(
         "next_actions": next_actions,
     }
 
+    question_answer, answer_ledger = _build_question_answer(
+        goal_question=str(goal_question or ""),
+        key_findings=key_findings,
+        consensus=consensus_payload,
+        next_actions=next_actions,
+        uncertainties=uncertainties,
+        evidence_lookup=evidence_lookup,
+        traceability=traceability,
+        base_confidence=confidence,
+    )
+
     payload["final_report"] = final_report
     payload["evidence_items"] = evidence_items
     payload["evidence_map"] = evidence_map
     payload["traceability"] = traceability
+    payload["question_answer"] = question_answer
+    payload["answer_evidence_ledger"] = answer_ledger
+    payload["answer_metrics"] = dict(tool_metrics or {})
+    if isinstance(decision_trace, list):
+        payload["decision_trace"] = decision_trace
 
     try:
         print(
@@ -466,6 +656,12 @@ def build_summary_artifacts(
             f"items={len(evidence_items)} mapped={mapped}/{total} "
             f"coverage={traceability.get('coverage')} "
             f"high_risk_unmapped={traceability.get('high_risk_unmapped_count')}"
+        )
+        print(
+            f"[ANSWER] run_id={run_id} file_id={file_id} "
+            f"confidence={question_answer.get('confidence')} "
+            f"consensus={question_answer.get('consensus_decision')} "
+            f"points={len(question_answer.get('key_points') or [])}"
         )
     except Exception:
         pass

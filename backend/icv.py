@@ -374,10 +374,40 @@ def evaluate_icv(
 
     # R1: modality-chapter consistency
     try:
+        def _has_report_content(value):
+            if value is None:
+                return False
+            if isinstance(value, str):
+                return bool(value.strip())
+            if isinstance(value, dict):
+                return any(_has_report_content(v) for v in value.values())
+            if isinstance(value, (list, tuple, set)):
+                return any(_has_report_content(v) for v in value)
+            return True
+
         cta_present_in_report = False
         if report_payload and isinstance(report_payload, dict):
-            # presence of cta_enhanced or cta text
-            cta_present_in_report = bool(report_payload.get("cta_enhanced") or report_payload.get("cta") or report_payload.get("cta_text"))
+            # 1) legacy top-level keys
+            if _has_report_content(
+                report_payload.get("cta_enhanced")
+                or report_payload.get("cta")
+                or report_payload.get("cta_text")
+            ):
+                cta_present_in_report = True
+
+            # 2) stage-2 explicit keys
+            if not cta_present_in_report:
+                cta_present_in_report = _has_report_content(
+                    report_payload.get("cta_arterial_enhanced")
+                    or report_payload.get("cta_venous_enhanced")
+                    or report_payload.get("cta_delayed_enhanced")
+                )
+
+            # 3) nested sections payload used by current report renderer
+            if not cta_present_in_report:
+                sections = report_payload.get("sections")
+                if isinstance(sections, dict):
+                    cta_present_in_report = _has_report_content(sections.get("cta"))
 
         # NCCT-only: if only ncct in modalities, report must not contain CTA sections
         only_ncct = raw_modalities == ["ncct"]
@@ -392,20 +422,77 @@ def evaluate_icv(
     except Exception:
         findings.append({"id": "R1_modality_chapter_consistency", "status": "not_applicable", "message": "无法评估模态与报告章节的一致性"})
 
-    # R2: trigger-chain consistency
+    # R2: trigger-chain consistency (expected plan + observed execution/context)
     try:
         imaging_path = (planner_output or {}).get("path_decision", {}).get("imaging_path") if planner_output else None
-        # already computed gen_ctp
-        if imaging_path == "ncct_mcta" and not gen_ctp:
-            findings.append({"id": "R2_trigger_chain_consistency", "status": "warn", "message": "imaging_path='ncct_mcta' 时预期应运行 generate_ctp_maps，但实际未运行"})
-            overall = "warn" if overall != "fail" else overall
-        elif imaging_path == "ncct_mcta_ctp" and gen_ctp:
-            findings.append({"id": "R2_trigger_chain_consistency", "status": "warn", "message": "imaging_path='ncct_mcta_ctp' 场景下通常不需要重新生成 CTP 图像"})
-            overall = "warn" if overall != "fail" else overall
+        planner_tool_sequence = (planner_output or {}).get("tool_sequence") if planner_output else None
+        expected_generate_ctp = None
+        sequence_source = "path_decision.imaging_path"
+
+        # Prefer planner tool sequence (actual executable sequence for this run).
+        if isinstance(planner_tool_sequence, (list, tuple)) and len(planner_tool_sequence) > 0:
+            normalized_sequence = [str(x).strip() for x in planner_tool_sequence]
+            expected_generate_ctp = "generate_ctp_maps" in normalized_sequence
+            sequence_source = "planner_output.tool_sequence"
         else:
-            findings.append({"id": "R2_trigger_chain_consistency", "status": "pass", "message": "检查链路（trigger chain）与实际执行步骤一致"})
+            # Backward-compatible fallback to imaging_path inference.
+            if imaging_path == "ncct_mcta":
+                expected_generate_ctp = True
+            elif imaging_path == "ncct_mcta_ctp":
+                expected_generate_ctp = False
+
+        has_quantitative_context = any(
+            x is not None for x in [core_vol, penumbra_vol, mismatch_ratio]
+        )
+        stroke_with_quant = bool(run_stroke and has_quantitative_context)
+        has_ctp_context = bool(has_ctp or has_quantitative_context)
+        observed_generate_ctp = bool(gen_ctp)
+        observed_ok = bool(observed_generate_ctp or has_ctp_context or stroke_with_quant)
+        details = {
+            "expected_generate_ctp": expected_generate_ctp,
+            "observed_generate_ctp": observed_generate_ctp,
+            "has_ctp_context": has_ctp_context,
+            "stroke_with_quant": stroke_with_quant,
+            "sequence_source": sequence_source,
+            "imaging_path": imaging_path,
+        }
+
+        if expected_generate_ctp is True and not observed_ok:
+            findings.append({
+                "id": "R2_trigger_chain_consistency",
+                "status": "warn",
+                "message": "Expected generate_ctp_maps in current run, but no executed step or usable CTP context was found.",
+                "details": details,
+            })
+            overall = "warn" if overall != "fail" else overall
+        elif expected_generate_ctp is False and observed_generate_ctp:
+            findings.append({
+                "id": "R2_trigger_chain_consistency",
+                "status": "warn",
+                "message": "Current run was not expected to regenerate CTP maps, but generate_ctp_maps executed.",
+                "details": details,
+            })
+            overall = "warn" if overall != "fail" else overall
+        elif expected_generate_ctp is None:
+            findings.append({
+                "id": "R2_trigger_chain_consistency",
+                "status": "not_applicable",
+                "message": "Unable to evaluate trigger-chain consistency due to missing plan metadata.",
+                "details": details,
+            })
+        else:
+            findings.append({
+                "id": "R2_trigger_chain_consistency",
+                "status": "pass",
+                "message": "Trigger chain is consistent with observed execution and available CTP context.",
+                "details": details,
+            })
     except Exception:
-        findings.append({"id": "R2_trigger_chain_consistency", "status": "not_applicable", "message": "无法评估检查链路（trigger chain）的一致性"})
+        findings.append({
+            "id": "R2_trigger_chain_consistency",
+            "status": "not_applicable",
+            "message": "Unable to evaluate trigger-chain consistency.",
+        })
 
     # R3: quantification consistency between analysis and report payload
     try:

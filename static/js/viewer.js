@@ -1,4 +1,4 @@
-﻿let currentPatientId = '';
+let currentPatientId = '';
 let currentFileId = null;
 let currentSlice = 0;
 let totalSlices = 0;
@@ -38,6 +38,19 @@ function parseMarkdown(text) {
 
 function hasImageUrl(url) {
     return typeof url === 'string' ? url.trim().length > 0 : !!url;
+}
+
+function hasCompleteAnalysisPayload(payload) {
+    if (!payload || typeof payload !== 'object') return false;
+    const reportSummary = payload.report?.summary;
+    const combined = payload.visualizations?.combined;
+    return !!(
+        payload.success &&
+        reportSummary &&
+        typeof reportSummary === 'object' &&
+        Array.isArray(combined) &&
+        combined.length > 0
+    );
 }
 
 function setCellVisible(cellId, visible) {
@@ -182,8 +195,13 @@ function initializeViewer(data) {
         const savedAnalysis = localStorage.getItem(`stroke_analysis_${currentFileId}`);
         if (savedAnalysis) {
             try {
-                analysisResults = JSON.parse(savedAnalysis);
-                displayAnalysisResults();
+                const parsed = JSON.parse(savedAnalysis);
+                if (hasCompleteAnalysisPayload(parsed)) {
+                    analysisResults = parsed;
+                    displayAnalysisResults();
+                } else {
+                    localStorage.removeItem(`stroke_analysis_${currentFileId}`);
+                }
             } catch (e) {
                 console.error('鍔犺浇鍒嗘瀽缁撴灉澶辫触:', e);
             }
@@ -1440,26 +1458,38 @@ window.openCockpit = openCockpit;
 
 function checkAnalysisStatus() {
     if (!currentFileId) return;
-    
+
     fetch(`/api/get_imaging/${currentFileId}`)
         .then(res => res.json())
         .then(resp => {
             if (resp && resp.success && resp.data && resp.data.analysis_result) {
                 const dbAnalysis = resp.data.analysis_result;
-                if (dbAnalysis.success) {
-                    // 妫€鏌ocalStorage涓槸鍚﹀凡鏈夊垎鏋愮粨鏋?
-                    const savedAnalysis = localStorage.getItem(`stroke_analysis_${currentFileId}`);
-                    if (!savedAnalysis) {
-                        // 濡傛灉localStorage涓病鏈夛紝浣嗘暟鎹簱涓湁锛屾洿鏂板墠绔姸鎬?
+                if (hasCompleteAnalysisPayload(dbAnalysis)) {
+                    const savedAnalysisRaw = localStorage.getItem(`stroke_analysis_${currentFileId}`);
+                    let savedAnalysis = null;
+                    if (savedAnalysisRaw) {
+                        try {
+                            savedAnalysis = JSON.parse(savedAnalysisRaw);
+                        } catch (e) {
+                            savedAnalysis = null;
+                        }
+                    }
+
+                    const shouldPromoteDb =
+                        !hasCompleteAnalysisPayload(savedAnalysis) ||
+                        !hasCompleteAnalysisPayload(analysisResults);
+
+                    if (shouldPromoteDb) {
                         analysisResults = dbAnalysis;
                         displayAnalysisResults();
-                        console.log('浠庢暟鎹簱鍔犺浇鍒嗘瀽缁撴灉');
+                        localStorage.setItem(`stroke_analysis_${currentFileId}`, JSON.stringify(dbAnalysis));
+                        console.log('stroke analysis payload refreshed from case imaging');
                     }
                 }
             }
         })
         .catch(err => {
-            console.warn('妫€鏌ュ垎鏋愮姸鎬佸け璐?', err);
+            console.warn('check analysis status failed', err);
         });
 }
 

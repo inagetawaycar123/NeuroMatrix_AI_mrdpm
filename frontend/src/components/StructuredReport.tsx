@@ -110,6 +110,38 @@ type ReportPayload = {
     unmapped_ids?: string[]
     high_risk_unmapped_count?: number | null
   } | null
+  question_answer?: {
+    question?: string
+    direct_answer?: string
+    key_points?: string[]
+    recommendations?: string[]
+    confidence?: number
+    evidence_refs?: Array<{
+      finding_id?: string
+      claim_id?: string
+      verdict?: string
+      evidence_ids?: string[]
+      unavailable_reason?: string | null
+    }>
+    uncertainties?: string[]
+    consensus_decision?: string
+  } | null
+  answer_evidence_ledger?: {
+    question?: string
+    generated_at?: string
+    mapping?: Record<
+      string,
+      {
+        claim_id?: string
+        verdict?: string
+        evidence_ids?: string[]
+        source_refs?: string[]
+        unavailable_reason?: string | null
+      }
+    >
+  } | null
+  answer_metrics?: Record<string, unknown> | null
+  decision_trace?: Array<Record<string, unknown>> | null
 }
 
 interface PatientData {
@@ -315,6 +347,17 @@ const toChineseRiskLevel = (value: unknown): string => {
   return RISK_LEVEL_TEXT_MAP[token] || String(value)
 }
 
+const toChineseConsensusDecision = (value: unknown): string => {
+  const token = String(value || '').trim().toLowerCase()
+  if (!token) return '-'
+  if (token === 'accept') return '接受'
+  if (token === 'review_required') return '需复核'
+  if (token === 'escalate') return '需升级处理'
+  if (token === 'unavailable') return '不可用'
+  if (token === 'skipped') return '已跳过'
+  return String(value)
+}
+
 const translateFindingMessage = (rawText: string): string => {
   const text = String(rawText || '').trim()
   if (!text) return ''
@@ -515,6 +558,19 @@ const parsePayloadFromStorage = (raw: string | null): ReportPayload | null => {
         parsed?.traceability && typeof parsed.traceability === 'object'
           ? parsed.traceability
           : null,
+      question_answer:
+        parsed?.question_answer && typeof parsed.question_answer === 'object'
+          ? parsed.question_answer
+          : null,
+      answer_evidence_ledger:
+        parsed?.answer_evidence_ledger && typeof parsed.answer_evidence_ledger === 'object'
+          ? parsed.answer_evidence_ledger
+          : null,
+      answer_metrics:
+        parsed?.answer_metrics && typeof parsed.answer_metrics === 'object'
+          ? parsed.answer_metrics
+          : null,
+      decision_trace: Array.isArray(parsed?.decision_trace) ? parsed.decision_trace : null,
     }
   } catch {
     return null
@@ -656,6 +712,25 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({ patientId, f
       }
     })
   }, [reportPayload, evidenceLookup])
+
+  const questionAnswer = useMemo(() => {
+    const raw = reportPayload?.question_answer
+    if (!raw || typeof raw !== 'object') return null
+    const keyPoints = Array.isArray(raw.key_points) ? raw.key_points.filter(Boolean) : []
+    const recommendations = Array.isArray(raw.recommendations) ? raw.recommendations.filter(Boolean) : []
+    const uncertainties = Array.isArray(raw.uncertainties) ? raw.uncertainties.filter(Boolean) : []
+    const evidenceRefs = Array.isArray(raw.evidence_refs) ? raw.evidence_refs : []
+    return {
+      question: String(raw.question || '').trim(),
+      directAnswer: String(raw.direct_answer || '').trim(),
+      confidence: typeof raw.confidence === 'number' ? raw.confidence : null,
+      consensusDecision: String(raw.consensus_decision || '').trim(),
+      keyPoints,
+      recommendations,
+      uncertainties,
+      evidenceRefs,
+    }
+  }, [reportPayload])
 
   useEffect(() => {
     if (!patientId) {
@@ -850,6 +925,110 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({ patientId, f
           isEditing={isEditing}
           onUpdate={handleFindingsUpdate}
         />
+
+        {questionAnswer && (
+          <div className="report-module">
+            <div className="module-header" style={{ background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)' }}>
+              问题驱动结论
+            </div>
+            <div className="module-content">
+              <div className="field-grid">
+                <div className="field-item">
+                  <label>用户问题</label>
+                  <div className="field-value">{questionAnswer.question || '-'}</div>
+                </div>
+                <div className="field-item">
+                  <label>一致性裁决</label>
+                  <div className="field-value">{toChineseConsensusDecision(questionAnswer.consensusDecision)}</div>
+                </div>
+                <div className="field-item">
+                  <label>置信度</label>
+                  <div className="field-value">
+                    {typeof questionAnswer.confidence === 'number' ? questionAnswer.confidence.toFixed(4) : '-'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="field-item" style={{ marginTop: 12 }}>
+                <label>直接回答</label>
+                <div className="field-value" style={{ lineHeight: 1.8 }}>
+                  {questionAnswer.directAnswer || '-'}
+                </div>
+              </div>
+
+              {questionAnswer.keyPoints.length > 0 && (
+                <div className="field-item" style={{ marginTop: 12 }}>
+                  <label>关键要点</label>
+                  <div className="field-value">
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {questionAnswer.keyPoints.map((item, idx) => (
+                        <li key={`qa-point-${idx}`} style={{ marginBottom: 8, lineHeight: 1.7 }}>
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              {questionAnswer.recommendations.length > 0 && (
+                <div className="field-item" style={{ marginTop: 12 }}>
+                  <label>下一步建议</label>
+                  <div className="field-value">
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {questionAnswer.recommendations.map((item, idx) => (
+                        <li key={`qa-action-${idx}`} style={{ marginBottom: 8, lineHeight: 1.7 }}>
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              {questionAnswer.uncertainties.length > 0 && (
+                <div className="field-item" style={{ marginTop: 12 }}>
+                  <label>不确定性</label>
+                  <div className="field-value">
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {questionAnswer.uncertainties.map((item, idx) => (
+                        <li key={`qa-uncertainty-${idx}`} style={{ marginBottom: 8, lineHeight: 1.7 }}>
+                          {item}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
+
+              <div className="field-item" style={{ marginTop: 12 }}>
+                <label>证据映射</label>
+                <div className="field-value">
+                  {questionAnswer.evidenceRefs.length > 0 ? (
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {questionAnswer.evidenceRefs.slice(0, 8).map((row, idx) => {
+                        const claimId = String(row?.claim_id || row?.finding_id || `claim_${idx + 1}`)
+                        const verdict = toChineseVerdict(String(row?.verdict || 'unavailable'))
+                        const evidenceIds = Array.isArray(row?.evidence_ids) ? row.evidence_ids.filter(Boolean) : []
+                        const unavailableReason = String(row?.unavailable_reason || '').trim()
+                        return (
+                          <li key={`qa-evidence-${idx}`} style={{ marginBottom: 8, lineHeight: 1.7 }}>
+                            <strong>{claimId}</strong>（{verdict}）：
+                            {evidenceIds.length > 0
+                              ? ` ${evidenceIds.join(', ')}`
+                              : ` ${unavailableReason || '未映射证据'}`}
+                          </li>
+                        )
+                      })}
+                    </ul>
+                  ) : (
+                    <span>-</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {isGeneratingReport ? (
           <div

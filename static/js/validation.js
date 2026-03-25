@@ -62,6 +62,8 @@ const STATUS_TEXT_MAP = {
     unknown: '未知',
 };
 
+STATUS_TEXT_MAP.paused_review_required = '待人工复核';
+
 const VERDICT_TEXT_MAP = {
     supported: '支持',
     partially_supported: '部分支持',

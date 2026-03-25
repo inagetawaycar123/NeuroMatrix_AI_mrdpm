@@ -1097,12 +1097,16 @@ def _result_has_ctp_images(upload_result):
     rgb_files = (upload_result or {}).get("rgb_files") or []
     if not rgb_files:
         return False
-    first_slice = rgb_files[0] or {}
-    return bool(
-        first_slice.get("cbf_image")
-        or first_slice.get("cbv_image")
-        or first_slice.get("tmax_image")
-    )
+    expected_slices = int((upload_result or {}).get("total_slices") or len(rgb_files) or 0)
+    for model_key in REQUIRED_CTP_MODELS:
+        generated_count = sum(
+            1 for slice_item in rgb_files if bool((slice_item or {}).get(f"{model_key}_image"))
+        )
+        if generated_count <= 0:
+            return False
+        if expected_slices > 0 and generated_count < expected_slices:
+            return False
+    return True
 
 
 def _invoke_internal_upload(payload):
@@ -1194,6 +1198,14 @@ def _run_upload_processing_job(job_id, payload):
             return
 
         if should_ctp_generate:
+            has_complete_ctp = _result_has_ctp_images(upload_result)
+            if not has_complete_ctp:
+                ctp_error = (
+                    "CTP generation incomplete: missing required outputs (cbf/cbv/tmax)"
+                )
+                _update_step(job_id, "ctp_generate", "failed", ctp_error)
+                _set_job_status(job_id, "failed", ctp_error)
+                return
             _update_step(job_id, "ctp_generate", "completed", "CTP 灌注图生成完成")
 
         if should_stroke:
@@ -1927,7 +1939,7 @@ def _tool_generate_ctp_maps(run):
         "hemisphere": hemisphere,
         "model_type": "mrdpm",
         "upload_mode": "ncct_3phase_cta",
-        "skip_ai": True,
+        "skip_ai": False,
     }
     ok, msg, upload_result = _invoke_internal_upload(payload)
     if not ok:
@@ -3022,6 +3034,208 @@ def get_weight_base_path(weight_dir: str) -> str:
 # 全局模型字典
 ai_models = {}
 
+# Startup warmup controls (hybrid mode: fast boot + async model warmup)
+def _env_bool(name, default=False):
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+MODEL_WARMUP_ASYNC = _env_bool("MODEL_WARMUP_ASYNC", True)
+try:
+    MODEL_WARMUP_WAIT_TIMEOUT_MS = max(
+        0, int(os.environ.get("MODEL_WARMUP_WAIT_TIMEOUT_MS", "12000"))
+    )
+except Exception:
+    MODEL_WARMUP_WAIT_TIMEOUT_MS = 12000
+try:
+    MODEL_WARMUP_CTP_TIMEOUT_MS = max(
+        0, int(os.environ.get("MODEL_WARMUP_CTP_TIMEOUT_MS", "120000"))
+    )
+except Exception:
+    MODEL_WARMUP_CTP_TIMEOUT_MS = 120000
+
+REQUIRED_CTP_MODELS = ("cbf", "cbv", "tmax")
+
+_STARTUP_STATE_NOT_STARTED = "NOT_STARTED"
+_STARTUP_STATE_WARMING = "WARMING"
+_STARTUP_STATE_READY = "READY"
+_STARTUP_STATE_FAILED = "FAILED"
+
+_startup_lock = threading.Lock()
+_startup_ready_event = threading.Event()
+_startup_state = _STARTUP_STATE_NOT_STARTED
+_startup_error = ""
+_startup_worker = None
+_startup_token = 0
+
+
+def _log_startup(prefix, message):
+    print(f"[{prefix}] {message}")
+
+def _set_startup_state(state, error=""):
+    global _startup_state, _startup_error
+    with _startup_lock:
+        _startup_state = state
+        _startup_error = error or ""
+        if state in (_STARTUP_STATE_READY, _STARTUP_STATE_FAILED):
+            _startup_ready_event.set()
+        elif state == _STARTUP_STATE_WARMING:
+            _startup_ready_event.clear()
+
+
+def _get_startup_state():
+    with _startup_lock:
+        return _startup_state, _startup_error
+
+
+def _should_start_warmup_in_this_process():
+    # In Flask debug reloader mode, run heavy warmup only in child process.
+    if app.debug and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        return False
+    return True
+
+
+def _initialize_app_lightweight():
+    print("=" * 50)
+    print("医学图像处理Web系统初始化 - 医学标准伪彩图版本")
+    print("=" * 50)
+    os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+    os.makedirs(app.config["PROCESSED_FOLDER"], exist_ok=True)
+    print(f"上传目录: {app.config['UPLOAD_FOLDER']}")
+    print(f"处理目录: {app.config['PROCESSED_FOLDER']}")
+    app.config["AI_AVAILABLE"] = False
+    app.config["AI_MODELS"] = ai_models
+    app.config["MODEL_CONFIGS"] = MODEL_CONFIGS
+
+
+def _run_model_warmup_once():
+    started_at = time.time()
+    try:
+        _set_startup_state(_STARTUP_STATE_WARMING)
+        ai_initialized = init_ai_models()
+        app.config["AI_AVAILABLE"] = ai_initialized
+        app.config["AI_MODELS"] = ai_models
+        app.config["MODEL_CONFIGS"] = MODEL_CONFIGS
+        if ai_initialized:
+            _set_startup_state(_STARTUP_STATE_READY)
+        else:
+            _set_startup_state(_STARTUP_STATE_FAILED, "No AI model available")
+        elapsed_ms = int((time.time() - started_at) * 1000)
+        _log_startup(
+            "MODEL_INIT",
+            f"status={_startup_state} ai_available={ai_initialized} elapsed_ms={elapsed_ms}",
+        )
+    except Exception as exc:
+        elapsed_ms = int((time.time() - started_at) * 1000)
+        _set_startup_state(_STARTUP_STATE_FAILED, str(exc))
+        _log_startup("MODEL_INIT", f"status=FAILED elapsed_ms={elapsed_ms} error={exc}")
+        traceback.print_exc()
+
+
+def _model_warmup_worker(token):
+    _log_startup("WARMUP", f"token={token} phase=start")
+    _run_model_warmup_once()
+    state, error = _get_startup_state()
+    _log_startup("WARMUP", f"token={token} phase=end state={state} error={error or '-'}")
+
+
+def start_model_warmup_async(force=False):
+    global _startup_worker, _startup_token, _startup_state, _startup_error
+    with _startup_lock:
+        state = _startup_state
+        if state == _STARTUP_STATE_READY and not force:
+            return False
+        if state == _STARTUP_STATE_WARMING and not force:
+            return False
+        if state == _STARTUP_STATE_FAILED and not force:
+            return False
+
+        _startup_token += 1
+        token = _startup_token
+        _startup_state = _STARTUP_STATE_WARMING
+        _startup_error = ""
+        _startup_ready_event.clear()
+        _startup_worker = threading.Thread(
+            target=_model_warmup_worker,
+            args=(token,),
+            name=f"model-warmup-{token}",
+            daemon=True,
+        )
+        _startup_worker.start()
+        return True
+
+
+def _wait_for_model_warmup(timeout_ms=None):
+    ensure_app_initialized()
+    state, error = _get_startup_state()
+    if state in (_STARTUP_STATE_READY, _STARTUP_STATE_FAILED):
+        return state, error
+
+    if state == _STARTUP_STATE_NOT_STARTED:
+        start_model_warmup_async()
+        state, error = _get_startup_state()
+
+    wait_timeout_ms = (
+        MODEL_WARMUP_WAIT_TIMEOUT_MS if timeout_ms is None else max(0, int(timeout_ms))
+    )
+    if wait_timeout_ms <= 0:
+        return state, error
+
+    if _startup_ready_event.wait(wait_timeout_ms / 1000.0):
+        return _get_startup_state()
+
+    state, error = _get_startup_state()
+    _log_startup(
+        "WARMUP",
+        f"phase=wait_timeout timeout_ms={wait_timeout_ms} state={state} error={error or '-'}",
+    )
+    return state, error
+
+
+def _available_required_ctp_models():
+    return [
+        model_key
+        for model_key in REQUIRED_CTP_MODELS
+        if ai_models.get(model_key, {}).get("available")
+    ]
+
+
+def _ensure_required_ctp_models_ready(timeout_ms=None):
+    wait_timeout_ms = (
+        MODEL_WARMUP_CTP_TIMEOUT_MS if timeout_ms is None else max(0, int(timeout_ms))
+    )
+    state, error = _wait_for_model_warmup(wait_timeout_ms)
+    available = _available_required_ctp_models()
+    missing = [key for key in REQUIRED_CTP_MODELS if key not in available]
+
+    _log_startup(
+        "CTP_GATE",
+        (
+            "state={state} timeout_ms={timeout} required={required} "
+            "available={available} missing={missing} error={error}"
+        ).format(
+            state=state,
+            timeout=wait_timeout_ms,
+            required=list(REQUIRED_CTP_MODELS),
+            available=available,
+            missing=missing,
+            error=error or "-",
+        ),
+    )
+
+    if not missing:
+        return True, "", available
+
+    if state == _STARTUP_STATE_WARMING:
+        reason = f"模型预热未完成（缺少: {', '.join(missing)}）"
+    elif state == _STARTUP_STATE_FAILED:
+        reason = f"模型初始化失败（缺少: {', '.join(missing)}）"
+    else:
+        reason = f"模型未就绪（缺少: {', '.join(missing)}）"
+    return False, reason, available
+
 # 统一的伪彩图配置 - 使用医学标准 colormap
 PSEUDOCOLOR_CONFIG = {
     "colormap": "jet",  # 医学图像常用伪彩色映射
@@ -3122,25 +3336,26 @@ def init_single_ai_model(config_path, weight_base, use_ema=True, device="cpu"):
 
 
 def get_ai_model(model_key="cbf"):
-    """获取指定 key 的 AI 模型实例。"""
+    """Get model instance by key with warmup-aware fallback."""
     global ai_models
+    _wait_for_model_warmup()
     if model_key in ai_models and ai_models[model_key]["available"]:
         return ai_models[model_key]["model"]
     return None
 
 
 def are_any_models_available():
-    """检查是否有任意模型可用。"""
+    """Return whether any model is available after warmup-aware wait."""
     global ai_models
+    _wait_for_model_warmup()
     return any(model_info["available"] for model_info in ai_models.values())
 
 
 def get_available_models():
     """Return a list of available model keys."""
     global ai_models
-    # 从 palette 模型配置中获取已加载成功的模型
+    _wait_for_model_warmup()
     available = [key for key, info in ai_models.items() if info["available"]]
-    # 追加 mrdpm 模型（如果 MRDPM 权重存在）
     mrdpm_available = check_mrdpm_models_available()
     for model_key in mrdpm_available:
         if model_key not in available:
@@ -3603,7 +3818,7 @@ def api_insert_patient():
         return jsonify({"status": "success", "message": "数据写入成功", "data": result})
     else:
         # 写入失败：返回错误信息，前端会弹出错误提示
-        return jsonify({"status": "error", "message": result}), 200
+        return jsonify({"status": "error", "message": result}), 500
 
 
 @app.route("/api/update_analysis", methods=["POST"])
@@ -6151,11 +6366,11 @@ def process_rgb_synthesis(
         num_slices = mcta_data.shape[2] if len(mcta_data.shape) >= 3 else 1
 
         # 妫€鏌I妯″瀷鍙敤鎬?
-        available_models = get_available_models()
-        # MRDPM 鎺ㄧ悊鍙渶瑕?CBF/CBV/TMAX 涓夌被瀛愭ā鍨嬶紝杩囨护鎺夊崰浣嶇殑 mrdpm 鏍囪瘑
-        if model_type == "mrdpm":
-            available_models = [key for key in available_models if key in MODEL_CONFIGS]
-        models_available = len(available_models) > 0
+        ctp_ready, ctp_gate_error, ready_models = _ensure_required_ctp_models_ready()
+        if not ctp_ready:
+            return {"success": False, "error": ctp_gate_error}
+        available_models = [key for key in REQUIRED_CTP_MODELS if key in ready_models]
+        models_available = len(available_models) == len(REQUIRED_CTP_MODELS)
 
         print(f"AI妯″瀷鍙敤鎬? {models_available}")
         print(f"鍙敤妯″瀷: {available_models}")
@@ -6300,6 +6515,31 @@ def process_rgb_synthesis(
             print(f"{model_key.upper()} 模型: {count} 个切片成功 ({status})")
 
         # 在元数据中添加模型状态信息
+        expected_slices = int(num_slices)
+        incomplete_models = [
+            model_key
+            for model_key in REQUIRED_CTP_MODELS
+            if model_success_counts.get(model_key, 0) < expected_slices
+        ]
+        _log_startup(
+            "CTP_COMPLETENESS",
+            (
+                "required={required} expected_slices={expected} success_counts={counts} incomplete={incomplete}"
+            ).format(
+                required=list(REQUIRED_CTP_MODELS),
+                expected=expected_slices,
+                counts={k: model_success_counts.get(k, 0) for k in REQUIRED_CTP_MODELS},
+                incomplete=incomplete_models,
+            ),
+        )
+        if expected_slices <= 0:
+            return {"success": False, "error": "未检测到可处理切片，无法生成 CTP 灌注图"}
+        if incomplete_models:
+            return {
+                "success": False,
+                "error": "CTP 生成不完整（缺少: {}）".format(", ".join(incomplete_models)),
+            }
+
         metadata.update(
             {
                 "models_available": available_models,
@@ -6350,48 +6590,55 @@ def process_rgb_synthesis(
 
 # 在应用启动时初始化
 def initialize_app():
-    """应用初始化函数 - 多模型版本。"""
-    print("=" * 50)
-    print("医学图像处理Web系统初始化 - 医学标准伪彩图版本")
-    print("=" * 50)
-
-    # 创建必要目录
-    os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
-    os.makedirs(app.config["PROCESSED_FOLDER"], exist_ok=True)
-
-    print(f"上传目录: {app.config['UPLOAD_FOLDER']}")
-    print(f"处理目录: {app.config['PROCESSED_FOLDER']}")
-
-    # 初始化 AI 模型
-    ai_initialized = init_ai_models()
-
-    # 设置全局标记
-    app.config["AI_AVAILABLE"] = ai_initialized
-    app.config["AI_MODELS"] = ai_models
-    app.config["MODEL_CONFIGS"] = MODEL_CONFIGS
-
-    print(f"AI 功能可用: {ai_initialized}")
-    print("✓ 应用初始化完成")
-    print("=" * 50)
+    """Compatibility wrapper. Keep the old entrypoint name."""
+    ensure_app_initialized()
 
 
 def ensure_app_initialized():
-    """Ensure heavy startup initialization runs only once per process."""
+    """Thread-safe single initialization gate with async warmup option."""
     if getattr(app, "has_initialized", False):
+        state, _ = _get_startup_state()
+        if (
+            MODEL_WARMUP_ASYNC
+            and state == _STARTUP_STATE_NOT_STARTED
+            and _should_start_warmup_in_this_process()
+        ):
+            start_model_warmup_async()
         return
-    initialize_app()
-    app.has_initialized = True
+
+    with _startup_lock:
+        if getattr(app, "has_initialized", False):
+            return
+        _initialize_app_lightweight()
+        app.has_initialized = True
+
+    if not _should_start_warmup_in_this_process():
+        _log_startup("STARTUP", "phase=defer_warmup reason=werkzeug_parent_process")
+        return
+
+    if MODEL_WARMUP_ASYNC:
+        started = start_model_warmup_async()
+        if started:
+            _log_startup("STARTUP", "phase=warmup mode=async status=started")
+        else:
+            state, error = _get_startup_state()
+            _log_startup(
+                "STARTUP",
+                f"phase=warmup mode=async status=skipped state={state} error={error or '-'}",
+            )
+        return
+
+    _log_startup("STARTUP", "phase=warmup mode=sync status=running")
+    _run_model_warmup_once()
 
 
-# 使用应用上下文进行初始化
+# Start lightweight app init at import time; heavy model warmup is async/singleton.
 with app.app_context():
     ensure_app_initialized()
 
 
-# 添加启动时的初始化钩子
 @app.before_request
 def before_first_request():
-    """替代 before_first_request 的初始化方案。"""
     ensure_app_initialized()
 
 

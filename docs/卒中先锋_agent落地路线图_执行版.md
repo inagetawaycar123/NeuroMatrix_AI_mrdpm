@@ -210,4 +210,21 @@
 5. Week7 docs delivered:
    - [W7_Cockpit交付.md](./W7_Cockpit交付.md)
    - [W7_Cockpit验收记录.md](./验收记录/W7_Cockpit验收记录.md)
+
+## Week7 Update (2026-03-24) - Agent Loop V2 Canary
+1. Added modular Agent runtime under `backend/agent/`:
+   - planner, context_manager, tool_registry, executor, loop_controller, reporter.
+2. Added canary rollout controls:
+   - `AGENT_LOOP_V2_ENABLED`
+   - `AGENT_LOOP_V2_CANARY_RATIO`
+   - deterministic `run_id` hash-based selection.
+3. Added v1/v2 dispatcher with automatic fallback to v1 on v2 runtime exception.
+4. Extended planner input contract:
+   - `question`, `max_steps`, `max_duration_ms`.
+5. Added optional high-risk pause/resume mechanics:
+   - status `paused_review_required`
+   - retry endpoint supports `step_key=resume`.
+6. Added Week7 canary docs:
+   - [W7_AgentLoopV2_灰度交付.md](./W7_AgentLoopV2_灰度交付.md)
+   - [W7_AgentLoopV2_灰度验收记录.md](./验收记录/W7_AgentLoopV2_灰度验收记录.md)
 6. Runtime sign-off evidence with real cases remains mandatory before final week sign-off.

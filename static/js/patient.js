@@ -1,38 +1,39 @@
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', function () {
     const onset = document.getElementById('onset_exact_time');
     const admission = document.getElementById('admission_time');
     const diff = document.getElementById('surgery_time');
 
-    [onset, admission].forEach(el => el.addEventListener('change', () => {
-        if (onset.value && admission.value) {
+    [onset, admission].forEach((el) => {
+        el.addEventListener('change', () => {
+            if (!onset.value || !admission.value) return;
             const d1 = new Date(onset.value);
             const d2 = new Date(admission.value);
             const ms = d2 - d1;
             const h = Math.floor(ms / 3600000);
             const m = Math.floor((ms % 3600000) / 60000);
             diff.value = `${h}小时 ${m}分钟`;
-        }
-    }));
+        });
+    });
 });
 
 async function submitPatientBasicInfo() {
     const form = document.getElementById('patientForm');
     if (!form.checkValidity()) {
-        showMsg('请填写完整必填项', 'error');
+        showMsg('请完整填写必填项', 'error');
         return;
     }
 
-    showLoading(true, '正在提交患者信息...');
+    showLoading(true, '正在保存患者信息...');
 
     try {
         const data = {
             patient_name: document.getElementById('patient_name').value.trim(),
-            patient_age: parseInt(document.getElementById('patient_age').value),
+            patient_age: parseInt(document.getElementById('patient_age').value, 10),
             patient_sex: document.getElementById('patient_sex').value,
             onset_exact_time: new Date(document.getElementById('onset_exact_time').value).toISOString(),
             admission_time: new Date(document.getElementById('admission_time').value).toISOString(),
             surgery_time: document.getElementById('surgery_time').value,
-            admission_nihss: parseInt(document.getElementById('admission_nihss').value),
+            admission_nihss: parseInt(document.getElementById('admission_nihss').value, 10),
             create_time: new Date().toISOString()
         };
 
@@ -43,11 +44,20 @@ async function submitPatientBasicInfo() {
             data: JSON.stringify(data)
         });
 
-        setCurrentPatientId(res.data.id);
-        showMsg(`提交成功！患者ID: ${res.data.id}`, 'success');
-        window.location.href = '/upload?patient_id=' + res.data.id;
+        const patientId = res && res.status === 'success' && res.data ? res.data.id : null;
+        if (!patientId) {
+            throw new Error((res && res.message) || '患者信息保存失败');
+        }
+
+        setCurrentPatientId(patientId);
+        showMsg(`患者信息已成功保存（ID: ${patientId}）`, 'success');
+        window.location.href = '/upload?patient_id=' + patientId;
     } catch (err) {
-        showMsg(err.message || '服务器连接失败', 'error');
+        const msg =
+            (err && err.responseJSON && err.responseJSON.message) ||
+            (err && err.message) ||
+            '服务通信失败';
+        showMsg(msg, 'error');
     } finally {
         showLoading(false);
     }
