@@ -1477,8 +1477,21 @@ def _create_agent_run(
     linked_upload_job_id=None,
     execution_mode="default",
     trigger_source="api",
+    question=None,
 ):
     normalized_hemisphere, warning = _canonicalize_hemisphere(hemisphere)
+    planner_input = {
+        "run_id": run_id,
+        "patient_id": patient_id,
+        "file_id": file_id,
+        "available_modalities": _normalize_uploaded_modalities(
+            available_modalities or []
+        ),
+        "hemisphere": normalized_hemisphere,
+    }
+    # 将用户问题存入 planner_input
+    if question:
+        planner_input["question"] = str(question).strip()
     run = {
         "run_id": run_id,
         "patient_id": patient_id,
@@ -1491,15 +1504,7 @@ def _create_agent_run(
         "linked_upload_job_id": linked_upload_job_id,
         "execution_mode": execution_mode,
         "trigger_source": trigger_source,
-        "planner_input": {
-            "run_id": run_id,
-            "patient_id": patient_id,
-            "file_id": file_id,
-            "available_modalities": _normalize_uploaded_modalities(
-                available_modalities or []
-            ),
-            "hemisphere": normalized_hemisphere,
-        },
+        "planner_input": planner_input,
         "planner_output": None,
         "current_tool": None,
         "steps": [],
@@ -2513,6 +2518,45 @@ def _tool_generate_medgemma_report(run):
         except Exception:
             pass
 
+    # 从 planner_input 中获取用户原始问题
+    user_question = str((run.get("planner_input") or {}).get("question") or "").strip()
+
+    # 从 tool_results 中提取患者上下文和量化数据
+    patient_ctx = {}
+    try:
+        run_results = run.get("tool_results") or []
+        for r in run_results:
+            # 从 load_patient_context 获取患者基本信息
+            if r.get("tool_name") == "load_patient_context" and r.get("status") == "completed":
+                ctx_output = r.get("structured_output") or {}
+                ctx_struct = ctx_output.get("context_struct") or {}
+                patient_info = ctx_struct.get("patient") or {}
+                imaging_info = ctx_struct.get("imaging") or {}
+                patient_ctx["patient_age"] = patient_info.get("patient_age")
+                patient_ctx["patient_sex"] = patient_info.get("patient_sex")
+                patient_ctx["admission_nihss"] = patient_info.get("admission_nihss")
+                patient_ctx["onset_to_admission_hours"] = patient_info.get("onset_to_admission_hours")
+                patient_ctx["hemisphere"] = imaging_info.get("hemisphere") or ctx_output.get("hemisphere")
+            # 从 run_stroke_analysis 获取量化数据
+            if r.get("tool_name") == "run_stroke_analysis" and r.get("status") == "completed":
+                analysis_output = r.get("structured_output") or {}
+                for key in ("core_infarct_volume", "penumbra_volume", "mismatch_ratio", "hemisphere"):
+                    val = analysis_output.get(key)
+                    if val is not None:
+                        patient_ctx[key] = val
+        # 补充患者姓名（从数据库获取）
+        if patient_id:
+            try:
+                p_data = get_patient_by_id(patient_id)
+                if p_data:
+                    patient_ctx.setdefault("patient_name", p_data.get("patient_name", "未知"))
+                    patient_ctx.setdefault("patient_age", p_data.get("patient_age"))
+                    patient_ctx.setdefault("patient_sex", p_data.get("patient_sex"))
+            except Exception:
+                pass
+    except Exception as ctx_exc:
+        print(f"[SUMMARY] 提取患者上下文失败: {ctx_exc}")
+
     try:
         report_payload = build_summary_artifacts(
             run_id=str(run.get("run_id") or ""),
@@ -2521,6 +2565,8 @@ def _tool_generate_medgemma_report(run):
             icv=icv_payload,
             ekv=ekv_payload,
             consensus=consensus_payload,
+            goal_question=user_question,
+            patient_context=patient_ctx if patient_ctx else None,
         )
     except Exception as summary_exc:
         print(
@@ -6972,6 +7018,7 @@ def api_upload_start():
         }
 
         agent_run_id = None
+        upload_question = (request.form.get("question") or "").strip()
         if str(request.form.get("start_agent_run", "false")).lower() == "true":
             agent_run_id = str(uuid.uuid4())
             _create_agent_run(
@@ -6984,6 +7031,7 @@ def api_upload_start():
                 linked_upload_job_id=job_id,
                 execution_mode="post_upload_summary",
                 trigger_source="upload_start",
+                question=upload_question or None,
             )
 
         payload["agent_run_id"] = agent_run_id
@@ -7054,6 +7102,8 @@ def api_create_agent_run():
             400,
         )
 
+    api_question = str(data.get("question") or "").strip()
+
     run_id = str(uuid.uuid4())
     run = _create_agent_run(
         run_id=run_id,
@@ -7062,6 +7112,7 @@ def api_create_agent_run():
         available_modalities=available_modalities,
         hemisphere=hemisphere,
         source="api",
+        question=api_question or None,
     )
 
     worker = threading.Thread(target=_run_agent_pipeline, args=(run_id,), daemon=True)

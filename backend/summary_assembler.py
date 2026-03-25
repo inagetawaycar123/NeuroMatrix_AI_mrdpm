@@ -1,7 +1,9 @@
 import datetime as _dt
+import json
 import math
+import os
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
 KEY_CLAIM_IDS: List[str] = [
@@ -21,12 +23,12 @@ HIGH_RISK_CLAIM_IDS = {
 }
 
 CLAIM_TITLES = {
-    "hemisphere": "Lesion laterality",
-    "core_infarct_volume": "Core infarct volume",
-    "penumbra_volume": "Penumbra volume",
-    "mismatch_ratio": "Mismatch ratio",
-    "significant_mismatch": "Significant mismatch",
-    "treatment_window_notice": "Treatment window notice",
+    "hemisphere": "病灶侧别",
+    "core_infarct_volume": "核心梗死体积",
+    "penumbra_volume": "半暗带体积",
+    "mismatch_ratio": "不匹配比值",
+    "significant_mismatch": "显著不匹配",
+    "treatment_window_notice": "治疗时间窗提示",
 }
 
 QUESTION_FOCUS_KEYWORDS = {
@@ -70,6 +72,49 @@ def _normalize_verdict(value: Any) -> str:
     return "unavailable"
 
 
+# 英文 -> 中文翻译映射表，用于将 ICV/EKV 输出中的英文消息翻译为中文
+_EN_TO_ZH_TRANSLATIONS = {
+    "Hemisphere value is available": "半球侧别值可用",
+    "is internally consistent": "内部一致",
+    "is available": "可用",
+    "is not available": "不可用",
+    "Please verify this item with source images and quantitative outputs": "请结合原始影像和量化输出验证此项",
+    "Claim is missing from EKV output": "该结论在外部知识验证输出中缺失",
+    "Claim not produced by EKV": "外部知识验证未生成该结论",
+    "No evidence reference is mapped for this claim": "该结论未映射到任何证据引用",
+    "Claim marked unavailable by EKV": "该结论被外部知识验证标记为不可用",
+    "ICV finding has no direct external citation": "内部一致性校验发现无直接外部引用",
+    "Review source outputs and regenerate EKV claims": "请检查源数据输出并重新生成外部知识验证结论",
+    "Core volume": "核心梗死体积",
+    "Penumbra volume": "半暗带体积",
+    "Mismatch ratio": "不匹配比值",
+    "Hemisphere value": "半球侧别值",
+    "right": "右侧",
+    "left": "左侧",
+    "bilateral": "双侧",
+    "supported": "支持",
+    "not_supported": "不支持",
+    "unavailable": "不可用",
+    "partially_supported": "部分支持",
+}
+
+
+def _translate_claim_message(text: str) -> str:
+    """将英文消息翻译为中文，保留数值部分不变。"""
+    if not text:
+        return text
+    result = text
+    # 按照长度降序排列，确保长的短语先被替换
+    sorted_translations = sorted(
+        _EN_TO_ZH_TRANSLATIONS.items(), key=lambda x: len(x[0]), reverse=True
+    )
+    for en, zh in sorted_translations:
+        result = result.replace(en, zh)
+    # 处理常见的英文模式
+    result = result.replace(" ml ", " ml")
+    return result
+
+
 def _risk_level_from_findings(
     key_findings: List[Dict[str, Any]],
     consensus: Dict[str, Any],
@@ -101,16 +146,22 @@ def _collect_uncertainties(
     for item in key_findings:
         verdict = str(item.get("verdict") or "").lower()
         if verdict in {"not_supported", "unavailable"}:
-            text = str(item.get("message") or "").strip()
-            reason = str(item.get("unavailable_reason") or "").strip()
+            text = _translate_claim_message(str(item.get("message") or "").strip())
+            reason = _translate_claim_message(str(item.get("unavailable_reason") or "").strip())
             claim_id = str(item.get("claim_id") or "unknown")
+            title = CLAIM_TITLES.get(claim_id, claim_id)
             if reason:
-                out.append(f"{claim_id}: {reason}")
+                out.append(f"{title}: {reason}")
             elif text:
-                out.append(f"{claim_id}: {text}")
+                out.append(f"{title}: {text}")
             else:
-                out.append(f"{claim_id}: unresolved")
+                out.append(f"{title}: 未解决")
 
+    _MODULE_NAMES = {
+        "ICV": "内部一致性校验",
+        "EKV": "外部知识验证",
+        "Consensus": "共识裁决",
+    }
     for payload, name in (
         (icv, "ICV"),
         (ekv, "EKV"),
@@ -118,9 +169,10 @@ def _collect_uncertainties(
     ):
         status = str(payload.get("status") or "").lower()
         if status in {"failed", "unavailable", "fail"}:
-            err = str(payload.get("error_message") or "").strip()
+            err = _translate_claim_message(str(payload.get("error_message") or "").strip())
+            zh_name = _MODULE_NAMES.get(name, name)
             if err:
-                out.append(f"{name} unavailable: {err}")
+                out.append(f"{zh_name}不可用: {err}")
 
     # Deduplicate while preserving order.
     seen = set()
@@ -139,14 +191,14 @@ def _collect_next_actions(
 ) -> List[str]:
     actions: List[str] = []
     for item in _as_list(consensus.get("next_actions")):
-        text = str(item or "").strip()
+        text = _translate_claim_message(str(item or "").strip())
         if text:
             actions.append(text)
 
     for finding in key_findings:
         verdict = str(finding.get("verdict") or "").lower()
         if verdict in {"not_supported", "unavailable"}:
-            suggested = str(finding.get("suggested_action") or "").strip()
+            suggested = _translate_claim_message(str(finding.get("suggested_action") or "").strip())
             if suggested:
                 actions.append(suggested)
 
@@ -251,15 +303,15 @@ def _resolve_claim_finding(
             "title": title,
             "claim_text": title,
             "verdict": "unavailable",
-            "message": "Claim is missing from EKV output.",
+            "message": "该结论在外部知识验证输出中缺失。",
             "evidence_ids": [],
-            "unavailable_reason": "Claim not produced by EKV.",
+            "unavailable_reason": "外部知识验证未生成该结论。",
             "severity": "medium",
-            "suggested_action": "Review source outputs and regenerate EKV claims.",
+            "suggested_action": "请检查源数据输出并重新生成外部知识验证结论。",
         }
 
     verdict = _normalize_verdict(claim_data.get("verdict"))
-    message = str(claim_data.get("message") or "").strip()
+    message = _translate_claim_message(str(claim_data.get("message") or "").strip())
     evidence_ids = [
         str(x).strip()
         for x in _as_list(claim_data.get("evidence_refs"))
@@ -272,12 +324,12 @@ def _resolve_claim_finding(
     if not evidence_ids:
         unavailable_reason = (
             message
-            or "No evidence reference is mapped for this claim."
+            or "该结论未映射到任何证据引用。"
             if verdict == "unavailable"
-            else "No evidence reference is mapped for this claim."
+            else "该结论未映射到任何证据引用。"
         )
     elif verdict == "unavailable":
-        unavailable_reason = message or "Claim marked unavailable by EKV."
+        unavailable_reason = message or "该结论被外部知识验证标记为不可用。"
 
     return {
         "finding_id": claim_id,
@@ -308,20 +360,22 @@ def _resolve_icv_high_risk_findings(
         fid = str(item.get("id") or "").strip()
         if not fid:
             continue
+        raw_message = _translate_claim_message(str(item.get("message") or ""))
+        raw_action = _translate_claim_message(str(item.get("suggested_action") or ""))
         out.append(
             {
                 "finding_id": f"icv::{fid}",
                 "claim_id": f"icv::{fid}",
-                "title": f"ICV {fid}",
-                "claim_text": f"ICV finding {fid}",
+                "title": f"内部一致性校验 {fid}",
+                "claim_text": f"内部一致性校验发现 {fid}",
                 "verdict": "unavailable",
-                "message": str(item.get("message") or ""),
+                "message": raw_message,
                 "evidence_ids": [],
-                "unavailable_reason": str(item.get("suggested_action") or "")
-                or str(item.get("message") or "")
-                or "ICV finding has no direct external citation.",
+                "unavailable_reason": raw_action
+                or raw_message
+                or "内部一致性校验发现无直接外部引用。",
                 "severity": severity or ("high" if status == "fail" else "medium"),
-                "suggested_action": str(item.get("suggested_action") or ""),
+                "suggested_action": raw_action,
             }
         )
     return out
@@ -372,6 +426,156 @@ def _detect_question_focus_claims(question: str) -> List[str]:
     return hits
 
 
+def _build_llm_question_prompt(
+    *,
+    question: str,
+    key_points: List[str],
+    patient_context: Dict[str, Any],
+    consensus_decision: str,
+    next_actions: List[str],
+    uncertainties: List[str],
+) -> str:
+    """构建发送给百川M3的问题分析 prompt。"""
+    # 患者基本信息
+    patient_name = patient_context.get("patient_name", "未知")
+    patient_age = patient_context.get("patient_age", "未知")
+    patient_sex = patient_context.get("patient_sex", "未知")
+    nihss = patient_context.get("admission_nihss", "未记录")
+    onset_hours = patient_context.get("onset_to_admission_hours", "未记录")
+
+    # 量化数据
+    core_volume = patient_context.get("core_infarct_volume", "未知")
+    penumbra_volume = patient_context.get("penumbra_volume", "未知")
+    mismatch_ratio = patient_context.get("mismatch_ratio", "未知")
+    hemisphere = patient_context.get("hemisphere", "未知")
+
+    findings_text = "\n".join(f"  - {p}" for p in key_points) if key_points else "  （无）"
+    actions_text = "\n".join(f"  - {a}" for a in next_actions) if next_actions else "  （无）"
+    uncertainties_text = "\n".join(f"  - {u}" for u in uncertainties) if uncertainties else "  （无）"
+
+    decision_map = {
+        "accept": "接受（数据一致性良好）",
+        "escalate": "升级（存在高风险冲突）",
+        "review_required": "需要复核",
+    }
+    decision_zh = decision_map.get(consensus_decision, consensus_decision)
+
+    prompt = f"""你是一位资深的神经内科/卒中专科医生。请根据以下患者数据和系统分析结果，针对用户提出的临床问题，给出专业、详细、有条理的中文回答。
+
+【用户问题】
+{question}
+
+【患者基本信息】
+- 姓名：{patient_name}
+- 年龄：{patient_age}
+- 性别：{patient_sex}
+- 入院NIHSS评分：{nihss}
+- 发病至入院时间：{onset_hours}小时
+
+【影像量化数据】
+- 核心梗死体积（Core）：{core_volume} ml
+- 半暗带体积（Penumbra）：{penumbra_volume} ml
+- 不匹配比值（Mismatch Ratio）：{mismatch_ratio}
+- 受累侧别：{hemisphere}
+
+【系统校验关键发现】
+{findings_text}
+
+【一致性裁决】
+{decision_zh}
+
+【当前不确定性】
+{uncertainties_text}
+
+【写作要求】
+1. 必须全部使用中文回答，不得出现英文。
+2. 直接针对用户的问题进行回答，不要偏离主题。
+3. 回答需要结合患者的具体数据（核心梗死体积、半暗带体积、不匹配比值等）进行分析。
+4. 参考《中国急性缺血性脑卒中诊治指南》等权威指南给出建议。
+5. 回答应包含以下方面（根据问题相关性选择）：
+   a) 对患者当前影像数据的解读
+   b) 可挽救脑组织的评估（如适用）
+   c) 治疗建议及依据
+   d) 风险提示和注意事项
+6. 回答应专业但易于理解，长度适中（300-600字）。
+7. 不要使用Markdown格式，使用纯文本段落。"""
+
+    return prompt
+
+
+def _call_llm_for_answer(
+    prompt: str,
+    llm_callback: Optional[Callable[[str], str]] = None,
+) -> Optional[str]:
+    """调用LLM生成详细回答。优先使用传入的回调，否则直接调用百川API。"""
+    # 方式1：使用传入的回调函数
+    if callable(llm_callback):
+        try:
+            result = llm_callback(prompt)
+            if result and isinstance(result, str) and len(result.strip()) > 20:
+                return result.strip()
+        except Exception as exc:
+            print(f"[SUMMARY] LLM callback failed: {exc}")
+
+    # 方式2：直接调用百川API
+    try:
+        import requests
+        api_url = os.environ.get(
+            "BAICHUAN_API_URL", "https://api.baichuan-ai.com/v1/chat/completions"
+        )
+        api_key = os.environ.get("BAICHUAN_API_KEY", "") or os.environ.get("BAICHUAN_AK", "")
+        model = (os.environ.get("BAICHUAN_MODEL", "Baichuan-M3") or "Baichuan-M3").strip()
+
+        if not api_key:
+            print("[SUMMARY] 百川API Key未配置，跳过LLM增强回答")
+            return None
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        payload = {
+            "model": model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "你是一位专业的神经内科医生，擅长脑卒中的诊断和治疗。请用中文回答所有问题。",
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": 2048,
+            "temperature": 0.4,
+            "top_p": 0.9,
+        }
+
+        print(f"[SUMMARY] 调用百川M3生成问题驱动回答...")
+        response = requests.post(api_url, headers=headers, json=payload, timeout=60)
+
+        if response.status_code == 200:
+            result = response.json()
+            content = ""
+            if "choices" in result and len(result["choices"]) > 0:
+                choice = result["choices"][0]
+                if "message" in choice and "content" in choice["message"]:
+                    content = choice["message"]["content"]
+                elif "text" in choice:
+                    content = choice["text"]
+            if not content and "content" in result:
+                content = result["content"]
+
+            if content and len(content.strip()) > 20:
+                print(f"[SUMMARY] 百川M3回答生成成功，长度: {len(content)}")
+                return content.strip()
+            else:
+                print(f"[SUMMARY] 百川M3返回内容过短或为空")
+        else:
+            print(f"[SUMMARY] 百川M3 API调用失败: {response.status_code}")
+    except Exception as exc:
+        print(f"[SUMMARY] 百川M3 API调用异常: {exc}")
+
+    return None
+
+
 def _build_question_answer(
     *,
     goal_question: str,
@@ -382,6 +586,8 @@ def _build_question_answer(
     evidence_lookup: Dict[str, Dict[str, Any]],
     traceability: Dict[str, Any],
     base_confidence: float,
+    patient_context: Optional[Dict[str, Any]] = None,
+    llm_callback: Optional[Callable[[str], str]] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     question = str(goal_question or "").strip() or "请基于当前病例给出综合诊疗建议。"
     focus_claims = _detect_question_focus_claims(question)
@@ -459,32 +665,100 @@ def _build_question_answer(
         }
 
     consensus_decision = str(consensus.get("decision") or "accept").strip().lower()
-    direct_answer_prefix = "综合结论："
-    if consensus_decision == "escalate":
-        direct_answer_prefix = "高风险提示："
-    elif consensus_decision == "review_required":
-        direct_answer_prefix = "复核提示："
 
-    if not_supported_count > 0:
-        direct_answer = (
-            f"{direct_answer_prefix}当前证据对关键问题存在不支持项，"
-            "建议先完成人工复核后再做治疗决策。"
-        )
-    elif unavailable_count > 0:
-        direct_answer = (
-            f"{direct_answer_prefix}当前能够给出初步结论，但部分关键证据不足，"
-            "需结合完整影像序列与临床信息复核。"
-        )
-    elif supported_count > 0:
-        direct_answer = (
-            f"{direct_answer_prefix}当前证据总体支持对该问题的结论，"
-            "可按建议的下一步动作继续评估。"
-        )
+    # ---- 尝试调用LLM生成详细回答 ----
+    llm_answer: Optional[str] = None
+    p_ctx = patient_context if isinstance(patient_context, dict) else {}
+    if p_ctx or key_points:
+        try:
+            llm_prompt = _build_llm_question_prompt(
+                question=question,
+                key_points=key_points,
+                patient_context=p_ctx,
+                consensus_decision=consensus_decision,
+                next_actions=next_actions,
+                uncertainties=uncertainties,
+            )
+            llm_answer = _call_llm_for_answer(llm_prompt, llm_callback)
+        except Exception as exc:
+            print(f"[SUMMARY] LLM问题回答生成失败: {exc}")
+
+    # ---- 构建直接回答 ----
+    if llm_answer:
+        direct_answer = llm_answer
     else:
-        direct_answer = (
-            f"{direct_answer_prefix}当前未形成稳定结论，"
-            "建议补充数据并重新运行校验流程。"
-        )
+        # 回退到规则生成的回答（增强版）
+        direct_answer_prefix = "综合结论："
+        if consensus_decision == "escalate":
+            direct_answer_prefix = "高风险提示："
+        elif consensus_decision == "review_required":
+            direct_answer_prefix = "复核提示："
+
+        # 构建包含具体数据的回答
+        data_summary = ""
+        core_vol = p_ctx.get("core_infarct_volume")
+        penumbra_vol = p_ctx.get("penumbra_volume")
+        mr = p_ctx.get("mismatch_ratio")
+        hemi = p_ctx.get("hemisphere", "")
+
+        if core_vol is not None and penumbra_vol is not None and mr is not None:
+            hemi_zh = {"right": "右侧", "left": "左侧", "bilateral": "双侧"}.get(
+                str(hemi).lower(), str(hemi) if hemi else "未知"
+            )
+            data_summary = (
+                f"该患者影像量化数据显示：核心梗死体积约{core_vol} ml，"
+                f"半暗带体积约{penumbra_vol} ml，不匹配比值为{mr}，"
+                f"受累侧别为{hemi_zh}。"
+            )
+            # 判断是否存在可挽救脑组织
+            try:
+                mr_val = float(mr)
+                penumbra_val = float(penumbra_vol)
+                core_val = float(core_vol)
+                if mr_val >= 1.8 and penumbra_val > core_val:
+                    data_summary += (
+                        f"不匹配比值{mr_val}≥1.8，提示存在显著的缺血半暗带，"
+                        f"即存在潜在可挽救的脑组织（约{round(penumbra_val - core_val, 2)} ml）。"
+                    )
+                    if core_val < 70:
+                        data_summary += "核心梗死体积较小，患者可能从血管内治疗中获益。"
+                    else:
+                        data_summary += "但核心梗死体积较大，需谨慎评估治疗获益与风险。"
+                else:
+                    data_summary += (
+                        f"不匹配比值{mr_val}未达到显著不匹配标准（≥1.8），"
+                        "可挽救脑组织有限，需综合评估治疗方案。"
+                    )
+            except (ValueError, TypeError):
+                pass
+
+        if not_supported_count > 0:
+            direct_answer = (
+                f"{direct_answer_prefix}{data_summary}"
+                "当前证据对关键问题存在不支持项，"
+                "建议先完成人工复核后再做治疗决策。"
+                "需结合完整影像序列、临床症状及实验室检查综合判断。"
+            )
+        elif unavailable_count > 0:
+            direct_answer = (
+                f"{direct_answer_prefix}{data_summary}"
+                "当前能够给出初步结论，但部分关键证据不足，"
+                "需结合完整影像序列与临床信息复核。"
+                "建议尽快完善相关检查，以便做出更准确的治疗决策。"
+            )
+        elif supported_count > 0:
+            direct_answer = (
+                f"{direct_answer_prefix}{data_summary}"
+                "当前证据总体支持对该问题的结论，"
+                "可按建议的下一步动作继续评估。"
+                "建议结合患者临床表现和家属意愿，制定个体化治疗方案。"
+            )
+        else:
+            direct_answer = (
+                f"{direct_answer_prefix}{data_summary}"
+                "当前未形成稳定结论，"
+                "建议补充数据并重新运行校验流程。"
+            )
 
     total_selected = max(len(selected_findings), 1)
     unresolved_penalty = (unavailable_count + not_supported_count) / total_selected * 0.35
@@ -513,6 +787,7 @@ def _build_question_answer(
         "evidence_refs": evidence_refs,
         "uncertainties": answer_uncertainties,
         "consensus_decision": consensus_decision,
+        "llm_enhanced": llm_answer is not None,
     }
 
     ledger = {
@@ -534,10 +809,12 @@ def build_summary_artifacts(
     goal_question: Optional[str] = None,
     decision_trace: Optional[List[Dict[str, Any]]] = None,
     tool_metrics: Optional[Dict[str, Any]] = None,
+    patient_context: Optional[Dict[str, Any]] = None,
+    llm_callback: Optional[Callable[[str], str]] = None,
 ) -> Dict[str, Any]:
     """
-    Build Week6 summary artifacts from Week5 outputs.
-    Single source of truth: report_payload.
+    构建综合摘要产物（包含问题驱动结论）。
+    支持传入患者上下文和LLM回调以生成详细的问题回答。
     """
     payload = _as_dict(report_payload).copy()
     icv_payload = _as_dict(icv) if isinstance(icv, dict) else _as_dict(payload.get("icv"))
@@ -611,8 +888,8 @@ def build_summary_artifacts(
     mapped = traceability.get("mapped_findings", 0)
     total = traceability.get("total_findings", 0)
     summary_text = (
-        f"Summary generated from Week5 outputs. "
-        f"Evidence mapped for {mapped}/{total} findings."
+        f"基于多模态校验输出生成的综合摘要。"
+        f"已为 {mapped}/{total} 项发现映射证据。"
     )
 
     final_report = {
@@ -625,6 +902,20 @@ def build_summary_artifacts(
         "next_actions": next_actions,
     }
 
+    # 从 report_payload 中提取患者上下文（如果未显式传入）
+    effective_patient_ctx = patient_context
+    if not effective_patient_ctx:
+        effective_patient_ctx = {}
+        # 尝试从 payload 中提取量化数据
+        for key in (
+            "core_infarct_volume", "penumbra_volume", "mismatch_ratio",
+            "hemisphere", "patient_name", "patient_age", "patient_sex",
+            "admission_nihss", "onset_to_admission_hours",
+        ):
+            val = payload.get(key)
+            if val is not None:
+                effective_patient_ctx[key] = val
+
     question_answer, answer_ledger = _build_question_answer(
         goal_question=str(goal_question or ""),
         key_findings=key_findings,
@@ -634,6 +925,8 @@ def build_summary_artifacts(
         evidence_lookup=evidence_lookup,
         traceability=traceability,
         base_confidence=confidence,
+        patient_context=effective_patient_ctx,
+        llm_callback=llm_callback,
     )
 
     payload["final_report"] = final_report

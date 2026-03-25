@@ -301,3 +301,426 @@
 .ai-report-content p {
   margin: 0 0 8px 0;
 }
+
+/* ==================== 问题驱动结论 & 证据追溯 ==================== */
+
+/* 通用字段网格 */
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.field-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field-item label {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.field-item .field-value {
+  color: #e2e8f0;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* --- 问题驱动结论模块 --- */
+.qa-question-banner {
+  background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+  border-left: 4px solid #3b82f6;
+  border-radius: 0 8px 8px 0;
+  padding: 14px 18px;
+  margin-bottom: 16px;
+}
+
+.qa-question-banner .qa-label {
+  color: #60a5fa;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 6px;
+}
+
+.qa-question-banner .qa-text {
+  color: #f1f5f9;
+  font-size: 15px;
+  font-weight: 500;
+  line-height: 1.6;
+}
+
+/* 元信息标签行 */
+.qa-meta-row {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.qa-meta-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+
+.qa-meta-badge .badge-label {
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.qa-meta-badge .badge-value {
+  font-weight: 600;
+}
+
+.qa-meta-badge.accept {
+  background: rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.3);
+  color: #4ade80;
+}
+
+.qa-meta-badge.escalate {
+  background: rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.3);
+  color: #f87171;
+}
+
+.qa-meta-badge.review_required {
+  background: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.3);
+  color: #fbbf24;
+}
+
+.qa-meta-badge.confidence {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.3);
+  color: #60a5fa;
+}
+
+/* 直接回答区域 */
+.qa-answer-card {
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  border: 1px solid #1e3a5f;
+  border-radius: 10px;
+  padding: 20px;
+  margin-bottom: 16px;
+  position: relative;
+}
+
+.qa-answer-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, #3b82f6 0%, #8b5cf6 100%);
+  border-radius: 3px 0 0 3px;
+}
+
+.qa-answer-card .qa-answer-title {
+  color: #60a5fa;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.qa-answer-card .qa-answer-body {
+  color: #cbd5e1;
+  font-size: 14px;
+  line-height: 1.9;
+  white-space: pre-line;
+}
+
+/* 关键要点列表 */
+.qa-section-title {
+  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #1e293b;
+}
+
+.qa-keypoints-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.qa-keypoint-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 14px;
+  background: #0f172a;
+  border-radius: 8px;
+  border: 1px solid #1e293b;
+  font-size: 13px;
+  line-height: 1.7;
+  color: #cbd5e1;
+}
+
+.qa-keypoint-item .kp-icon {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.qa-keypoint-item .kp-icon.supported {
+  background: rgba(34, 197, 94, 0.2);
+  color: #4ade80;
+}
+
+.qa-keypoint-item .kp-icon.not-supported {
+  background: rgba(239, 68, 68, 0.2);
+  color: #f87171;
+}
+
+.qa-keypoint-item .kp-icon.unavailable {
+  background: rgba(251, 191, 36, 0.2);
+  color: #fbbf24;
+}
+
+/* 建议 / 不确定性 紧凑列表 */
+.qa-compact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.qa-compact-list li {
+  padding: 8px 12px;
+  background: #0f172a;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #cbd5e1;
+  border-left: 3px solid #3b82f6;
+}
+
+.qa-compact-list.warning li {
+  border-left-color: #f59e0b;
+}
+
+/* 证据映射 */
+.qa-evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+
+.qa-evidence-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.qa-evidence-chip .ev-title {
+  color: #e2e8f0;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.qa-evidence-chip .ev-verdict {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.qa-evidence-chip .ev-verdict.supported {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.qa-evidence-chip .ev-verdict.not-supported {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.qa-evidence-chip .ev-verdict.unavailable {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+}
+
+.qa-evidence-chip .ev-id {
+  color: #64748b;
+  font-size: 11px;
+  font-family: monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- 证据追溯模块 --- */
+.trace-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 640px) {
+  .trace-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.trace-stat-card {
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 14px 16px;
+  text-align: center;
+}
+
+.trace-stat-card .stat-label {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 8px;
+}
+
+.trace-stat-card .stat-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: #e2e8f0;
+}
+
+.trace-stat-card.risk-low .stat-value { color: #4ade80; }
+.trace-stat-card.risk-medium .stat-value { color: #fbbf24; }
+.trace-stat-card.risk-high .stat-value { color: #f87171; }
+
+/* 覆盖率进度条 */
+.trace-coverage-bar {
+  width: 100%;
+  height: 6px;
+  background: #1e293b;
+  border-radius: 3px;
+  margin-top: 8px;
+  overflow: hidden;
+}
+
+.trace-coverage-bar .bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.6s ease;
+  background: linear-gradient(90deg, #3b82f6 0%, #8b5cf6 100%);
+}
+
+/* 发现卡片增强 */
+.trace-finding-card {
+  border: 1px solid #1e293b;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 10px;
+  background: #0b1220;
+  transition: border-color 0.2s;
+}
+
+.trace-finding-card:hover {
+  border-color: #334155;
+}
+
+.trace-finding-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.trace-finding-title {
+  color: #dbeafe;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.trace-finding-verdict {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.trace-finding-verdict.supported {
+  background: rgba(34, 197, 94, 0.15);
+  color: #4ade80;
+}
+
+.trace-finding-verdict.partially_supported {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+}
+
+.trace-finding-verdict.not_supported {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+}
+
+.trace-finding-verdict.unavailable {
+  background: rgba(251, 191, 36, 0.15);
+  color: #fbbf24;
+}
+
+.trace-finding-message {
+  color: #94a3b8;
+  font-size: 13px;
+  line-height: 1.6;
+  margin-bottom: 8px;
+}
+
+.trace-finding-evidence {
+  color: #60a5fa;
+  font-size: 12px;
+}
+
+.trace-finding-unavailable {
+  color: #f59e0b;
+  font-size: 12px;
+}
+
+/* 分隔线 */
+.qa-divider {
+  height: 1px;
+  background: #1e293b;
+  margin: 16px 0;
+}

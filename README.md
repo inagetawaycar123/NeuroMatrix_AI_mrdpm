@@ -1,5 +1,82 @@
-# 重构版项目说明-开发前请阅读
+# NeuroMatrix AI — 卒中先锋智能影像诊断平台
 
+## 项目简介
+
+**NeuroMatrix AI** 是一个面向急性缺血性脑卒中的 AI 辅助影像诊断与治疗决策平台。系统通过深度学习模型自动生成 CTP 灌注参数图（CBF/CBV/Tmax），结合大语言模型（百川 M3 / MedGemma）进行影像分析与报告生成，并通过多层校验智能体架构确保结论的可靠性与可追溯性。
+
+### 核心功能
+
+| 功能模块 | 说明 |
+|---------|------|
+| **NCCT + mCTA 上传与解析** | 支持 NIfTI 格式的 NCCT、多相 CTA 影像上传，自动识别模态 |
+| **CTP 灌注图生成** | 基于 MRDPM / Palette 扩散模型，从 mCTA 序列生成 CBF、CBV、Tmax 灌注参数图 |
+| **脑卒中自动量化分析** | 自动计算核心梗死体积、半暗带体积、不匹配比值（Mismatch Ratio）、受累侧别等关键指标 |
+| **AI 影像报告生成** | 调用百川 M3 大语言模型，结合患者数据和量化指标，生成规范的影像学评估与治疗建议报告 |
+| **问题驱动结论** | 用户可输入临床问题（如"评估可挽救脑组织"），系统结合数据和 LLM 分析给出针对性回答 |
+| **多层校验智能体** | ICV（内部一致性校验）→ EKV（外部知识验证）→ Consensus（共识裁决）三级校验链 |
+| **证据追溯** | 每项结论均可追溯到原始数据和指南引用，支持完整的证据链审计 |
+| **AI 临床问答** | 基于百川 M3 的流式对话，支持结合患者上下文的实时临床咨询 |
+
+### 技术栈
+
+| 层级 | 技术 |
+|------|------|
+| **后端框架** | Python 3.14 + Flask |
+| **前端框架** | React 18 + TypeScript + Vite |
+| **深度学习** | PyTorch（MRDPM 扩散模型、Palette 灌注图生成） |
+| **大语言模型** | 百川 M3（报告生成 + 临床问答 + 问题驱动分析）、MedGemma（医学影像理解） |
+| **数据库** | Supabase（PostgreSQL，患者信息 + 影像元数据存储） |
+| **包管理** | uv（Python）、npm（前端） |
+| **构建工具** | Vite（前端打包，输出到 `static/dist/`） |
+
+### 智能体架构
+
+系统采用 **Agent Loop V2** 架构，由多个专业智能体协同完成从影像上传到报告生成的全流程：
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Agent Loop Controller                     │
+│  (loop_controller.py — 循环调度、超时控制、重试策略)           │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐   │
+│  │ Triage        │    │ Clinical     │    │ Verification │   │
+│  │ Planner Agent │───▶│ Tool Agent   │───▶│ Agent        │   │
+│  └──────────────┘    └──────────────┘    └──────────────┘   │
+│        │                    │                    │            │
+│   detect_modalities    generate_ctp_maps    ICV 校验         │
+│   load_patient_context run_stroke_analysis  EKV 验证         │
+│                        generate_report      Consensus 裁决   │
+│                                                              │
+├─────────────────────────────────────────────────────────────┤
+│  Planner (planner.py)     — 规则+LLM混合规划                 │
+│  Context Manager          — 上下文状态管理                    │
+│  Tool Registry            — 工具注册与契约校验                │
+│  Reporter (reporter.py)   — 结果汇总与证据链组装              │
+│  Summary Assembler        — 问题驱动结论 + 证据追溯生成       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**工具链执行顺序：**
+1. `detect_modalities` — 识别上传影像的模态类型
+2. `load_patient_context` — 加载患者基本信息和影像元数据
+3. `generate_ctp_maps` — 基于 mCTA 生成 CTP 灌注参数图（CBF/CBV/Tmax）
+4. `run_stroke_analysis` — 执行脑卒中自动量化分析
+5. `icv` — 内部一致性校验（Internal Consistency Verification）
+6. `ekv` — 外部知识验证（External Knowledge Verification）
+7. `consensus_lite` — 共识裁决（综合 ICV + EKV 结果）
+8. `generate_medgemma_report` — 生成最终报告 + 问题驱动结论
+
+### 示例数据
+
+> 示例 NCCT + mCTA 影像数据（NIfTI 格式）：
+>
+> **百度网盘：** [example_NCCT_mCTA](https://pan.baidu.com/s/1n4ufFqn7TsQUrGORSX1CAg)
+> **提取码：** `98tu`
+
+---
+
+## 开发指南
 
 ## 一、环境变量配置（`.env`）
 
@@ -104,44 +181,53 @@ npm run dev
 
 ### 1) MedGemma 权重（`safetensors`）
 
-请将 MedGemma 的本地模型文件放到：
+请将 MedGemma 的本地模型文件放到 `MedGemma_Model/` 目录。
 
-- `MedGemma_Model/`
+**下载地址（百度网盘）：**
 
-至少应包含类似文件：
+| 文件 | 链接 | 提取码 |
+|------|------|--------|
+| `model-00001-of-00002.safetensors` | [下载](https://pan.baidu.com/s/1G6Ru1CaU3OiqDt5W7OrOUQ) | `31k4` |
+| `model-00002-of-00002.safetensors` | [下载](https://pan.baidu.com/s/1xtl-r96R0f_dvJSFLwUDmw) | `vqj8` |
 
-- `model-00001-of-00002.safetensors`
-- `model-00002-of-00002.safetensors`
+> 将以上两个权重文件直接放入 `MedGemma_Model/` 文件夹即可。
+
+目录中还应包含以下配置文件（已随代码提交）：
+
 - `model.safetensors.index.json`
-- `config.json`
-- `generation_config.json`
-- `preprocessor_config.json`
-- `processor_config.json`
-- `tokenizer.json`
-- `tokenizer_config.json`
-- `tokenizer.model`
+- `config.json`、`generation_config.json`
+- `preprocessor_config.json`、`processor_config.json`
+- `tokenizer.json`、`tokenizer_config.json`、`tokenizer.model`
 - `special_tokens_map.json`
 
 
-### 2) 灌注模型权重（`weights` 目录）
+### 2) Palette 灌注模型权重
 
-如果需要 CBF/CBV/TMAX 的相关推理，请确认以下目录存在对应权重文件（通常是 `.pth`）：
+Palette 模型用于从 mCTA 生成 CBF/CBV/Tmax 灌注参数图。
+
+**下载地址（百度网盘）：**
+
+> [palette/weights](https://pan.baidu.com/s/1QzYK6Fx-wKtBSB-iVkhXBg) — 提取码：`ynua`
+
+将下载的 `weights` 文件夹直接放入 `palette/` 目录，最终结构：
 
 - `palette/weights/cbf/`
 - `palette/weights/cbv/`
 - `palette/weights/tmax/`
 
-项目中 `mrdpm/weights/` 也被忽略，请按你的训练/部署流程补齐。
-
 ### 3) MRDPM 权重（务必配置）
 
+MRDPM 模型包含 BRAN 权重文件。
 
-目录：
+**下载地址（百度网盘）：**
+
+> [mrdpm/weights](https://pan.baidu.com/s/1hLgUh_lVA6RDWm4SaMZedg) — 提取码：`ixqm`
+
+将下载的 `weights` 文件夹直接放入 `mrdpm/` 目录，最终结构：
 
 - `mrdpm/weights/cbf/`
 - `mrdpm/weights/cbv/`
 - `mrdpm/weights/tmax/`
-
 
 调用示例（测试脚本）：
 

@@ -302,6 +302,13 @@ const FINAL_FINDING_TEXT_MAP: Record<string, string> = {
   'Significant mismatch exists.': '存在显著不匹配。',
   'Treatment-window notice is guideline-aligned.': '治疗时窗提示与指南一致。',
   'No evidence reference is mapped.': '未映射证据引用。',
+  'No evidence reference is mapped for this claim.': '该结论未映射到任何证据引用。',
+  'Claim is missing from EKV output.': '该结论在外部知识验证输出中缺失。',
+  'Claim not produced by EKV.': '外部知识验证未生成该结论。',
+  'Claim marked unavailable by EKV.': '该结论被外部知识验证标记为不可用。',
+  'ICV finding has no direct external citation.': '内部一致性校验发现无直接外部引用。',
+  'Review source outputs and regenerate EKV claims.': '请检查源数据输出并重新生成外部知识验证结论。',
+  'Please verify this item with source images and quantitative outputs.': '请结合原始影像和量化输出验证此项。',
 }
 
 const normalizeFindingToken = (value: string): string =>
@@ -403,7 +410,29 @@ const translateFindingMessage = (rawText: string): string => {
 const translateUnavailableReason = (rawText: string): string => {
   const text = String(rawText || '').trim()
   if (!text) return ''
-  return FINAL_FINDING_TEXT_MAP[text] || text
+  // 先尝试精确匹配
+  if (FINAL_FINDING_TEXT_MAP[text]) return FINAL_FINDING_TEXT_MAP[text]
+  // 再尝试模糊翻译常见英文短语
+  let result = text
+  const replacements: [RegExp, string][] = [
+    [/Please verify this item with source images and quantitative outputs/gi, '请结合原始影像和量化输出验证此项'],
+    [/No evidence reference is mapped for this claim/gi, '该结论未映射到任何证据引用'],
+    [/Claim is missing from EKV output/gi, '该结论在外部知识验证输出中缺失'],
+    [/Claim not produced by EKV/gi, '外部知识验证未生成该结论'],
+    [/Claim marked unavailable by EKV/gi, '该结论被外部知识验证标记为不可用'],
+    [/ICV finding has no direct external citation/gi, '内部一致性校验发现无直接外部引用'],
+    [/Review source outputs and regenerate EKV claims/gi, '请检查源数据输出并重新生成外部知识验证结论'],
+    [/Hemisphere value is available:\s*(right)/gi, '半球侧别值可用：右侧'],
+    [/Hemisphere value is available:\s*(left)/gi, '半球侧别值可用：左侧'],
+    [/is internally consistent/gi, '内部一致'],
+    [/\bCore volume\b/gi, '核心梗死体积'],
+    [/\bPenumbra volume\b/gi, '半暗带体积'],
+    [/\bMismatch ratio\b/gi, '不匹配比值'],
+  ]
+  for (const [pattern, replacement] of replacements) {
+    result = result.replace(pattern, replacement)
+  }
+  return result
 }
 
 const toFloat = (value: unknown): number | null => {
@@ -932,100 +961,111 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({ patientId, f
               问题驱动结论
             </div>
             <div className="module-content">
-              <div className="field-grid">
-                <div className="field-item">
-                  <label>用户问题</label>
-                  <div className="field-value">{questionAnswer.question || '-'}</div>
-                </div>
-                <div className="field-item">
-                  <label>一致性裁决</label>
-                  <div className="field-value">{toChineseConsensusDecision(questionAnswer.consensusDecision)}</div>
-                </div>
-                <div className="field-item">
-                  <label>置信度</label>
-                  <div className="field-value">
-                    {typeof questionAnswer.confidence === 'number' ? questionAnswer.confidence.toFixed(4) : '-'}
-                  </div>
-                </div>
+              {/* 用户问题 - 高亮横幅 */}
+              <div className="qa-question-banner">
+                <div className="qa-label">用户问题</div>
+                <div className="qa-text">{questionAnswer.question || '-'}</div>
               </div>
 
-              <div className="field-item" style={{ marginTop: 12 }}>
-                <label>直接回答</label>
-                <div className="field-value" style={{ lineHeight: 1.8 }}>
+              {/* 元信息标签行 */}
+              <div className="qa-meta-row">
+                <span className={`qa-meta-badge ${questionAnswer.consensusDecision || 'accept'}`}>
+                  <span className="badge-label">裁决</span>
+                  <span className="badge-value">{toChineseConsensusDecision(questionAnswer.consensusDecision)}</span>
+                </span>
+                <span className="qa-meta-badge confidence">
+                  <span className="badge-label">置信度</span>
+                  <span className="badge-value">
+                    {typeof questionAnswer.confidence === 'number'
+                      ? `${(questionAnswer.confidence * 100).toFixed(1)}%`
+                      : '-'}
+                  </span>
+                </span>
+              </div>
+
+              {/* 直接回答 - 卡片样式 */}
+              <div className="qa-answer-card">
+                <div className="qa-answer-title">💡 AI 分析回答</div>
+                <div className="qa-answer-body">
                   {questionAnswer.directAnswer || '-'}
                 </div>
               </div>
 
+              {/* 关键要点 */}
               {questionAnswer.keyPoints.length > 0 && (
-                <div className="field-item" style={{ marginTop: 12 }}>
-                  <label>关键要点</label>
-                  <div className="field-value">
-                    <ul style={{ margin: 0, paddingLeft: 18 }}>
-                      {questionAnswer.keyPoints.map((item, idx) => (
-                        <li key={`qa-point-${idx}`} style={{ marginBottom: 8, lineHeight: 1.7 }}>
-                          {item}
+                <div style={{ marginTop: 4 }}>
+                  <div className="qa-section-title">关键要点</div>
+                  <ul className="qa-keypoints-list">
+                    {questionAnswer.keyPoints.map((item, idx) => {
+                      const verdictMatch = item.match(/（(支持|不支持|部分支持|不可用)）/)
+                      const verdictClass = verdictMatch
+                        ? verdictMatch[1] === '支持' ? 'supported'
+                          : verdictMatch[1] === '不支持' ? 'not-supported'
+                          : 'unavailable'
+                        : 'supported'
+                      return (
+                        <li key={`qa-point-${idx}`} className="qa-keypoint-item">
+                          <span className={`kp-icon ${verdictClass}`}>
+                            {verdictClass === 'supported' ? '✓' : verdictClass === 'not-supported' ? '✗' : '!'}
+                          </span>
+                          <span>{translateFindingMessage(item)}</span>
                         </li>
-                      ))}
-                    </ul>
-                  </div>
+                      )
+                    })}
+                  </ul>
                 </div>
               )}
 
+              {/* 下一步建议 */}
               {questionAnswer.recommendations.length > 0 && (
-                <div className="field-item" style={{ marginTop: 12 }}>
-                  <label>下一步建议</label>
-                  <div className="field-value">
-                    <ul style={{ margin: 0, paddingLeft: 18 }}>
-                      {questionAnswer.recommendations.map((item, idx) => (
-                        <li key={`qa-action-${idx}`} style={{ marginBottom: 8, lineHeight: 1.7 }}>
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                <div style={{ marginTop: 16 }}>
+                  <div className="qa-section-title">下一步建议</div>
+                  <ul className="qa-compact-list">
+                    {questionAnswer.recommendations.map((item, idx) => (
+                      <li key={`qa-action-${idx}`}>{translateUnavailableReason(item)}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
 
+              {/* 不确定性 */}
               {questionAnswer.uncertainties.length > 0 && (
-                <div className="field-item" style={{ marginTop: 12 }}>
-                  <label>不确定性</label>
-                  <div className="field-value">
-                    <ul style={{ margin: 0, paddingLeft: 18 }}>
-                      {questionAnswer.uncertainties.map((item, idx) => (
-                        <li key={`qa-uncertainty-${idx}`} style={{ marginBottom: 8, lineHeight: 1.7 }}>
-                          {item}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
+                <div style={{ marginTop: 16 }}>
+                  <div className="qa-section-title">⚠ 不确定性</div>
+                  <ul className="qa-compact-list warning">
+                    {questionAnswer.uncertainties.map((item, idx) => (
+                      <li key={`qa-uncertainty-${idx}`}>{translateUnavailableReason(item)}</li>
+                    ))}
+                  </ul>
                 </div>
               )}
 
-              <div className="field-item" style={{ marginTop: 12 }}>
-                <label>证据映射</label>
-                <div className="field-value">
-                  {questionAnswer.evidenceRefs.length > 0 ? (
-                    <ul style={{ margin: 0, paddingLeft: 18 }}>
-                      {questionAnswer.evidenceRefs.slice(0, 8).map((row, idx) => {
-                        const claimId = String(row?.claim_id || row?.finding_id || `claim_${idx + 1}`)
-                        const verdict = toChineseVerdict(String(row?.verdict || 'unavailable'))
-                        const evidenceIds = Array.isArray(row?.evidence_ids) ? row.evidence_ids.filter(Boolean) : []
-                        const unavailableReason = String(row?.unavailable_reason || '').trim()
-                        return (
-                          <li key={`qa-evidence-${idx}`} style={{ marginBottom: 8, lineHeight: 1.7 }}>
-                            <strong>{claimId}</strong>（{verdict}）：
-                            {evidenceIds.length > 0
-                              ? ` ${evidenceIds.join(', ')}`
-                              : ` ${unavailableReason || '未映射证据'}`}
-                          </li>
-                        )
-                      })}
-                    </ul>
-                  ) : (
-                    <span>-</span>
-                  )}
+              {/* 证据映射 */}
+              {questionAnswer.evidenceRefs.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  <div className="qa-section-title">证据映射</div>
+                  <div className="qa-evidence-grid">
+                    {questionAnswer.evidenceRefs.slice(0, 8).map((row, idx) => {
+                      const rawClaimId = String(row?.claim_id || row?.finding_id || `claim_${idx + 1}`)
+                      const claimTitle = FINAL_FINDING_TITLE_MAP[normalizeFindingToken(rawClaimId)] || rawClaimId
+                      const verdictRaw = String(row?.verdict || 'unavailable').toLowerCase()
+                      const verdictZh = toChineseVerdict(verdictRaw)
+                      const evidenceIds = Array.isArray(row?.evidence_ids) ? row.evidence_ids.filter(Boolean) : []
+                      return (
+                        <div key={`qa-evidence-${idx}`} className="qa-evidence-chip">
+                          <span className="ev-title">{claimTitle}</span>
+                          <span className={`ev-verdict ${verdictRaw}`}>{verdictZh}</span>
+                          {evidenceIds.length > 0 && (
+                            <span className="ev-id" title={evidenceIds[0]}>
+                              {evidenceIds[0].substring(0, 8)}…
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         )}
@@ -1123,82 +1163,98 @@ export const StructuredReport: React.FC<StructuredReportProps> = ({ patientId, f
           </div>
         </div>
 
-        {reportPayload?.final_report && (
-          <div className="report-module">
-            <div className="module-header" style={{ background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)' }}>
-              证据追溯
-            </div>
-            <div className="module-content">
-              <div className="field-grid">
-                <div className="field-item">
-                  <label>风险等级</label>
-                  <div className="field-value">{toChineseRiskLevel(reportPayload.final_report.risk_level)}</div>
-                </div>
-                <div className="field-item">
-                  <label>置信度</label>
-                  <div className="field-value">
-                    {typeof reportPayload.final_report.confidence === 'number'
-                      ? reportPayload.final_report.confidence.toFixed(4)
-                      : '-'}
-                  </div>
-                </div>
-                <div className="field-item">
-                  <label>追溯覆盖率</label>
-                  <div className="field-value">
-                    {typeof reportPayload.traceability?.coverage === 'number'
-                      ? `${(reportPayload.traceability.coverage * 100).toFixed(1)}%`
-                      : '-'}
-                  </div>
-                </div>
-                <div className="field-item">
-                  <label>已映射 / 总数</label>
-                  <div className="field-value">
-                    {typeof reportPayload.traceability?.mapped_findings === 'number' &&
-                    typeof reportPayload.traceability?.total_findings === 'number'
-                      ? `${reportPayload.traceability.mapped_findings}/${reportPayload.traceability.total_findings}`
-                      : '-'}
-                  </div>
-                </div>
-              </div>
+        {reportPayload?.final_report && (() => {
+          const riskLevel = String(reportPayload.final_report.risk_level || '').toLowerCase()
+          const coverageVal = typeof reportPayload.traceability?.coverage === 'number'
+            ? reportPayload.traceability.coverage
+            : null
+          const coveragePct = coverageVal !== null ? (coverageVal * 100).toFixed(1) : null
+          const mapped = reportPayload.traceability?.mapped_findings
+          const total = reportPayload.traceability?.total_findings
+          const confidenceVal = reportPayload.final_report.confidence
 
-              {finalFindingRows.length > 0 ? (
-                <div style={{ marginTop: 12 }}>
-                  {finalFindingRows.map((item) => (
-                    <div
-                      key={String(item.findingId)}
-                      style={{
-                        border: '1px solid #334155',
-                        borderRadius: 8,
-                        padding: '10px 12px',
-                        marginBottom: 10,
-                        background: '#0b1220',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
-                        <strong style={{ color: '#dbeafe', fontSize: 14 }}>{item.title}</strong>
-                        <span style={{ color: '#93c5fd', fontSize: 12 }}>{item.verdict}</span>
-                      </div>
-                      {item.message ? (
-                        <div style={{ color: '#cbd5e1', fontSize: 13, lineHeight: 1.6, marginBottom: 6 }}>{item.message}</div>
-                      ) : null}
-                      {item.references.length > 0 ? (
-                        <div style={{ color: '#93c5fd', fontSize: 12 }}>
-                          证据：{item.references.join(' | ')}
-                        </div>
-                      ) : (
-                        <div style={{ color: '#fbbf24', fontSize: 12 }}>
-                          不可用原因：{item.unavailableReason || '未映射证据引用。'}
-                        </div>
-                      )}
+          return (
+            <div className="report-module">
+              <div className="module-header" style={{ background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)' }}>
+                证据追溯
+              </div>
+              <div className="module-content">
+                {/* 统计仪表盘 */}
+                <div className="trace-stats-grid">
+                  <div className={`trace-stat-card risk-${riskLevel || 'medium'}`}>
+                    <div className="stat-label">风险等级</div>
+                    <div className="stat-value">{toChineseRiskLevel(riskLevel)}</div>
+                  </div>
+                  <div className="trace-stat-card">
+                    <div className="stat-label">置信度</div>
+                    <div className="stat-value">
+                      {typeof confidenceVal === 'number' ? `${(confidenceVal * 100).toFixed(1)}%` : '-'}
                     </div>
-                  ))}
+                  </div>
+                  <div className="trace-stat-card">
+                    <div className="stat-label">追溯覆盖率</div>
+                    <div className="stat-value">{coveragePct !== null ? `${coveragePct}%` : '-'}</div>
+                    {coverageVal !== null && (
+                      <div className="trace-coverage-bar">
+                        <div className="bar-fill" style={{ width: `${Math.min(100, coverageVal * 100)}%` }} />
+                      </div>
+                    )}
+                  </div>
+                  <div className="trace-stat-card">
+                    <div className="stat-label">已映射 / 总数</div>
+                    <div className="stat-value">
+                      {typeof mapped === 'number' && typeof total === 'number' ? `${mapped}/${total}` : '-'}
+                    </div>
+                  </div>
                 </div>
-              ) : (
-                <div className="field-value">最终报告中暂无关键结论。</div>
-              )}
+
+                {/* 发现卡片列表 */}
+                {finalFindingRows.length > 0 ? (
+                  <div>
+                    <div className="qa-section-title">关键发现详情</div>
+                    {finalFindingRows.map((item) => {
+                      const verdictClass = String(item.verdict || '')
+                        .replace(/[\s]/g, '_')
+                        .toLowerCase()
+                      const verdictToken = (() => {
+                        if (verdictClass.includes('支持') && !verdictClass.includes('不') && !verdictClass.includes('部分')) return 'supported'
+                        if (verdictClass.includes('部分')) return 'partially_supported'
+                        if (verdictClass.includes('不支持')) return 'not_supported'
+                        return 'unavailable'
+                      })()
+                      return (
+                        <div key={String(item.findingId)} className="trace-finding-card">
+                          <div className="trace-finding-header">
+                            <span className="trace-finding-title">{item.title}</span>
+                            <span className={`trace-finding-verdict ${verdictToken}`}>{item.verdict}</span>
+                          </div>
+                          {item.message && (
+                            <div className="trace-finding-message">{item.message}</div>
+                          )}
+                          {item.references.length > 0 ? (
+                            <div className="trace-finding-evidence">
+                              📎 证据引用：{item.references.map((ref, i) => (
+                                <span key={i} style={{ marginRight: 8 }}>{String(ref).substring(0, 12)}…</span>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="trace-finding-unavailable">
+                              ⚠ {item.unavailableReason || '未映射证据引用'}
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                ) : (
+                  <div className="field-value" style={{ textAlign: 'center', padding: 20, color: '#64748b' }}>
+                    最终报告中暂无关键结论。
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          )
+        })()}
 
         <DoctorNotesModule notes={notes} isEditing={isEditing} onUpdate={setNotes} />
 
