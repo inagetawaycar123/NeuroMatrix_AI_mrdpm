@@ -4,6 +4,13 @@
 
 **NeuroMatrix AI** 是一个面向急性缺血性脑卒中的 AI 辅助影像诊断与治疗决策平台。系统通过深度学习模型自动生成 CTP 灌注参数图（CBF/CBV/Tmax），结合大语言模型（百川 M3 / MedGemma）进行影像分析与报告生成，并通过多层校验智能体架构确保结论的可靠性与可追溯性。
 
+## 仓库与体验地址
+
+- **代码仓库地址：** `https://github.com/inagetawaycar123/NeuroMatrix_AI_mrdpm.git`
+- **Demo 公网体验地址：** `https://nonmodally-tinkliest-bennie.ngrok-free.dev`
+
+> 说明：若 Demo 公网地址因 ngrok 会话更新而失效，请以最新发布信息或本地部署方式为准。
+
 ### 核心功能
 
 | 功能模块 | 说明 |
