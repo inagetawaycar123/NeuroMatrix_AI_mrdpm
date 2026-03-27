@@ -8,6 +8,7 @@
 
 - **代码仓库地址：** `https://github.com/inagetawaycar123/NeuroMatrix_AI_mrdpm.git`
 - **Demo 公网体验地址：** `https://nonmodally-tinkliest-bennie.ngrok-free.dev`
+- **项目演示视频（B站）：** 【NeuroMatrix 卒中智能体演示视频-哔哩哔哩】https://b23.tv/J9K5SUK  # 新增B站视频链接
 
 > 说明：若 Demo 公网地址因 ngrok 会话更新而失效，请以最新发布信息或本地部署方式为准。
 
