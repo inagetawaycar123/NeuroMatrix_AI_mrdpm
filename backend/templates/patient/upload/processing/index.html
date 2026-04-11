@@ -38,6 +38,11 @@
                         <div class="processing-kv"><span>file_id</span><span id="processingFileId">-</span></div>
                         <div class="processing-kv"><span>job_id</span><span id="processingJobId">-</span></div>
                         <div class="processing-kv"><span>agent_run_id</span><span id="processingAgentRunId">-</span></div>
+                        <div class="processing-note" id="processingReusableFileHint">可复用 file_id（用于 W0 联调）：-</div>
+                        <div class="processing-actions" style="margin-top:8px;">
+                            <button class="tool-btn" id="processingCopyFileIdBtn" onclick="copyProcessingFileId()">复制 file_id</button>
+                            <button class="tool-btn" id="processingGoW0Btn" onclick="goToW0WithContext()">前往 W0 联调页</button>
+                        </div>
                     </div>
 
                     <div class="processing-card" id="agentPanel" style="display:none;">

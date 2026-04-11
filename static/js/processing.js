@@ -41,6 +41,43 @@ function setTextIfPresent(id, value) {
     }
 }
 
+function updateReusableFileHint() {
+    const hintEl = document.getElementById('processingReusableFileHint');
+    if (!hintEl) return;
+    if (!processingFileId) {
+        hintEl.textContent = '可复用 file_id（用于 W0 联调）：-';
+        return;
+    }
+    hintEl.textContent = `可复用 file_id（用于 W0 联调）：${processingFileId}`;
+}
+
+async function copyProcessingFileId() {
+    if (!processingFileId) {
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(processingFileId);
+        const hintEl = document.getElementById('processingReusableFileHint');
+        if (hintEl) {
+            hintEl.textContent = `已复制 file_id：${processingFileId}`;
+        }
+    } catch (err) {
+        const hintEl = document.getElementById('processingReusableFileHint');
+        if (hintEl) {
+            hintEl.textContent = `复制 file_id 失败：${err.message}`;
+        }
+    }
+}
+
+function goToW0WithContext() {
+    const params = new URLSearchParams();
+    if (processingPatientId) params.set('patient_id', processingPatientId);
+    if (processingFileId) params.set('file_id', processingFileId);
+    if (processingAgentRunId) params.set('run_id', processingAgentRunId);
+    const query = params.toString();
+    window.location.href = query ? `/strokeclaw/w0?${query}` : '/strokeclaw/w0';
+}
+
 function getAgentPanelElements() {
     return {
         panel: document.getElementById('agentPanel'),
@@ -112,6 +149,7 @@ document.addEventListener('DOMContentLoaded', () => {
     setTextIfPresent('processingPatientId', processingPatientId || '-');
     setTextIfPresent('processingFileId', processingFileId || '-');
     setTextIfPresent('processingJobId', processingJobId || '-');
+    updateReusableFileHint();
 
     const agentEls = getAgentPanelElements();
     if (agentEls.runId) {
@@ -428,6 +466,11 @@ function updateUploadMeta(job) {
         ensureCockpitEntryButton();
         startAgentPollingIfNeeded();
     }
+    if (job.file_id && !processingFileId) {
+        processingFileId = String(job.file_id);
+        setTextIfPresent('processingFileId', processingFileId);
+        updateReusableFileHint();
+    }
 }
 
 function updateProgress(progress) {
@@ -468,6 +511,8 @@ function persistResultToStorage(job) {
     }
 
     processingFileId = fileId;
+    setTextIfPresent('processingFileId', processingFileId);
+    updateReusableFileHint();
     persistAgentRunContext();
 
     const viewerData = {

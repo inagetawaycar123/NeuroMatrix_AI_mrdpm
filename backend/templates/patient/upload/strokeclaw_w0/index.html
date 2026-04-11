@@ -1,0 +1,97 @@
+{% extends "base.html" %}
+
+{% block title %}NeuroMatrix AI | StrokeClaw W0 Workbench{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/strokeclaw_w0.css">
+{% endblock %}
+
+{% block tools %}
+<button class="tool-btn" onclick="window.location.href='/upload'">返回上传</button>
+<button class="tool-btn" onclick="window.location.href='/cockpit'">打开 Cockpit</button>
+{% endblock %}
+
+{% block content %}
+<div class="container strokeclaw-w0-page">
+    <div class="page strokeclaw-shell">
+        <section class="w0-card">
+            <h1>StrokeClaw W0 任务入口</h1>
+            <p class="w0-subtitle">W0 骨架联调（Mock）：任务入口 + Orchestration 计划面板 + Runtime 占位。</p>
+            <div class="w0-warning">
+                此页不上传影像，仅用于联调。此页只创建 Mock run，不会触发真实推理。请先到 <code>/upload</code> 完成影像上传，再回到本页联调。
+            </div>
+
+            <div class="w0-form-grid">
+                <label>
+                    <span>patient_id</span>
+                    <input id="w0PatientId" type="number" min="1" placeholder="例如 1">
+                </label>
+                <label>
+                    <span>file_id</span>
+                    <input id="w0FileId" type="text" placeholder="例如 CASE-20260413-0001">
+                </label>
+                <label>
+                    <span>scenario</span>
+                    <select id="w0Scenario">
+                        <option value="happy_path" selected>happy_path（全通过）</option>
+                        <option value="issue_path">issue_path（中途告警后恢复）</option>
+                    </select>
+                </label>
+            </div>
+
+            <label class="w0-label-full">
+                <span>goal_question（可选）</span>
+                <textarea id="w0Question" rows="2" placeholder="例如：评估可挽救脑组织并给出下一步建议。"></textarea>
+            </label>
+
+            <div class="w0-modality-group">
+                <div class="w0-group-title">available_modalities</div>
+                <label><input type="checkbox" value="ncct" checked> ncct</label>
+                <label><input type="checkbox" value="mcta" checked> mcta</label>
+                <label><input type="checkbox" value="vcta"> vcta</label>
+                <label><input type="checkbox" value="dcta"> dcta</label>
+                <label><input type="checkbox" value="cbf"> cbf</label>
+                <label><input type="checkbox" value="cbv"> cbv</label>
+                <label><input type="checkbox" value="tmax"> tmax</label>
+            </div>
+
+            <div class="w0-actions">
+                <button id="w0StartRunBtn" class="tool-btn primary">启动 StrokeClaw W0 Mock Run</button>
+                <button id="w0OpenCockpitBtn" class="tool-btn" disabled>进入 Runtime（Cockpit）</button>
+                <button id="w0GoUploadBtn" class="tool-btn">去上传页并回填 patient_id</button>
+            </div>
+            <div id="w0Hint" class="w0-hint">请输入 patient_id 与 file_id 后启动 Mock run。</div>
+        </section>
+
+        <section class="w0-grid">
+            <article class="w0-card">
+                <h2>Run 状态占位</h2>
+                <div class="w0-kv"><span>run_id</span><strong id="w0RunId">-</strong></div>
+                <div class="w0-kv"><span>status</span><strong id="w0RunStatus">-</strong></div>
+                <div class="w0-kv"><span>stage</span><strong id="w0RunStage">-</strong></div>
+                <div class="w0-kv"><span>current_tool</span><strong id="w0CurrentTool">-</strong></div>
+                <div class="w0-kv"><span>termination_reason</span><strong id="w0TerminationReason">-</strong></div>
+                <div class="w0-kv"><span>replan_count</span><strong id="w0ReplanCount">0</strong></div>
+            </article>
+
+            <article class="w0-card">
+                <h2>Stroke Orchestration（计划面板）</h2>
+                <ol id="w0PlanList" class="w0-plan-list">
+                    <li class="empty">等待 run 初始化...</li>
+                </ol>
+            </article>
+
+            <article class="w0-card">
+                <h2>Runtime 事件占位</h2>
+                <div id="w0EventList" class="w0-event-list">
+                    <div class="empty">暂无事件。</div>
+                </div>
+            </article>
+        </section>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/strokeclaw_w0.js"></script>
+{% endblock %}
