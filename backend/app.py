@@ -1409,6 +1409,379 @@ AGENT_RUNS = {}
 AGENT_EVENTS = {}
 AGENT_RUNTIME_LOCK = threading.Lock()
 
+# ==================== StrokeClaw W0 Mock Runtime ====================
+W0_MOCK_RUNS = {}
+W0_MOCK_EVENTS = {}
+W0_MOCK_LOCK = threading.Lock()
+W0_MOCK_TTL_SECONDS = 3600
+W0_MOCK_SCENARIOS = {"happy_path", "issue_path"}
+
+W0_TOOL_TITLE_MAP = {
+    "detect_modalities": "Case_Intake.parse()",
+    "load_patient_context": "Image_QC.validate()",
+    "generate_ctp_maps": "MRDPM_Generate.run()",
+    "run_stroke_analysis": "Stroke_Analysis.segment()",
+    "icv": "Evidence_Check.icv()",
+    "ekv": "Evidence_Check.ekv()",
+    "consensus_lite": "Evidence_Check.consensus()",
+    "generate_medgemma_report": "Report_Generate.compose()",
+}
+
+
+def _w0_mock_now():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _w0_mock_run_id():
+    return f"w0m_{uuid.uuid4().hex[:18]}"
+
+
+def _w0_mock_tool_title(tool_name):
+    key = str(tool_name or "").strip()
+    if not key:
+        return "-"
+    return W0_TOOL_TITLE_MAP.get(key, key)
+
+
+def _w0_mock_prune_expired_locked():
+    now = time.time()
+    expired_ids = []
+    for run_id, run in (W0_MOCK_RUNS or {}).items():
+        created_epoch = float((run or {}).get("created_epoch") or 0)
+        if created_epoch <= 0:
+            continue
+        if (now - created_epoch) > W0_MOCK_TTL_SECONDS:
+            expired_ids.append(run_id)
+    for run_id in expired_ids:
+        W0_MOCK_RUNS.pop(run_id, None)
+        W0_MOCK_EVENTS.pop(run_id, None)
+
+
+def _w0_mock_build_steps(tool_sequence):
+    steps = []
+    for tool_name in tool_sequence or []:
+        key = str(tool_name or "").strip()
+        if not key:
+            continue
+        steps.append(
+            {
+                "key": key,
+                "title": _w0_mock_tool_title(key),
+                "status": "pending",
+                "message": "",
+                "attempt": 0,
+                "retryable": False,
+            }
+        )
+    return steps
+
+
+def _w0_mock_build_script(tool_sequence, scenario):
+    entries = [
+        {
+            "at": 0.2,
+            "event_type": "plan_created",
+            "status": "completed",
+            "tool_name": "triage_planner",
+            "message": "Mock orchestration plan created.",
+        }
+    ]
+
+    normalized_tools = [
+        str(item or "").strip() for item in (tool_sequence or []) if str(item or "").strip()
+    ]
+    issue_index = 2 if len(normalized_tools) > 2 else max(0, len(normalized_tools) - 1)
+
+    cursor_time = 0.2
+    for idx, tool_name in enumerate(normalized_tools):
+        cursor_time += 0.6
+        entries.append(
+            {
+                "at": round(cursor_time, 2),
+                "event_type": "step_started",
+                "status": "running",
+                "tool_name": tool_name,
+                "message": f"{_w0_mock_tool_title(tool_name)} started.",
+            }
+        )
+
+        if scenario == "issue_path" and idx == issue_index:
+            cursor_time += 0.6
+            entries.append(
+                {
+                    "at": round(cursor_time, 2),
+                    "event_type": "issue_found",
+                    "status": "failed",
+                    "tool_name": tool_name,
+                    "message": "Mock issue detected and recovered by workflow.",
+                }
+            )
+            cursor_time += 0.5
+            entries.append(
+                {
+                    "at": round(cursor_time, 2),
+                    "event_type": "human_review_required",
+                    "status": "running",
+                    "tool_name": tool_name,
+                    "message": "Mock human review requested.",
+                }
+            )
+            cursor_time += 0.5
+            entries.append(
+                {
+                    "at": round(cursor_time, 2),
+                    "event_type": "human_review_completed",
+                    "status": "completed",
+                    "tool_name": tool_name,
+                    "message": "Mock human review completed.",
+                }
+            )
+
+        cursor_time += 0.7
+        entries.append(
+            {
+                "at": round(cursor_time, 2),
+                "event_type": "step_completed",
+                "status": "completed",
+                "tool_name": tool_name,
+                "message": f"{_w0_mock_tool_title(tool_name)} completed.",
+            }
+        )
+
+    cursor_time += 0.6
+    entries.append(
+        {
+            "at": round(cursor_time, 2),
+            "event_type": "writeback_completed",
+            "status": "completed",
+            "tool_name": "generate_medgemma_report",
+            "message": "Mock writeback completed.",
+        }
+    )
+    return entries
+
+
+def _w0_mock_set_step_status(run, tool_name, status, message=""):
+    token = str(tool_name or "").strip()
+    if not token:
+        return
+    for step in run.get("steps", []):
+        if step.get("key") != token:
+            continue
+        step["status"] = str(status or step.get("status") or "pending")
+        if message:
+            step["message"] = str(message)
+        step["attempt"] = max(int(step.get("attempt") or 0), 1)
+        break
+
+
+def _w0_mock_apply_event_to_run(run, event):
+    event_type = str((event or {}).get("event_type") or "").strip()
+    tool_name = str((event or {}).get("tool_name") or "").strip()
+    message = str((event or {}).get("message") or "").strip()
+
+    if event_type == "plan_created":
+        run["status"] = "running"
+        run["stage"] = "triage"
+        run["current_tool"] = "triage_planner"
+    elif event_type == "step_started":
+        run["status"] = "running"
+        run["stage"] = _stage_for_tool(tool_name)
+        run["current_tool"] = tool_name
+        _w0_mock_set_step_status(run, tool_name, "running", message)
+    elif event_type == "issue_found":
+        run["status"] = "running"
+        run["stage"] = _stage_for_tool(tool_name)
+        run["current_tool"] = tool_name
+        run["last_issue"] = {
+            "tool_name": tool_name,
+            "message": message or "Mock issue found",
+            "timestamp": _w0_mock_now(),
+        }
+        _w0_mock_set_step_status(run, tool_name, "failed", message)
+    elif event_type == "human_review_required":
+        run["status"] = "running"
+        run["human_checkpoint"] = {
+            "required": True,
+            "reason": message or "Mock human review required",
+            "risk_level": "medium",
+            "pending_items": [tool_name] if tool_name else [],
+        }
+    elif event_type == "human_review_completed":
+        run["status"] = "running"
+        run["human_checkpoint"] = None
+    elif event_type == "step_completed":
+        run["status"] = "running"
+        run["stage"] = _stage_for_tool(tool_name)
+        run["current_tool"] = ""
+        _w0_mock_set_step_status(run, tool_name, "completed", message)
+    elif event_type == "writeback_completed":
+        run["status"] = "succeeded"
+        run["stage"] = "done"
+        run["current_tool"] = ""
+        run["human_checkpoint"] = None
+        run["finalization"] = {
+            "status": "archived",
+            "writeback_status": "completed",
+            "signed": True,
+            "version": "w0-mock-v1",
+        }
+        run["result"] = {
+            "summary": "W0 mock run completed",
+            "execution_mode": "w0_mock",
+            "scenario": run.get("scenario"),
+            "tool_sequence": ((run.get("planner_output") or {}).get("tool_sequence") or []),
+        }
+
+    run["termination_reason"] = _infer_w0_termination_reason(run)
+    run["updated_at"] = _w0_mock_now()
+
+
+def _w0_mock_append_event(run, event_spec):
+    run_id = str((run or {}).get("run_id") or "").strip()
+    if not run_id:
+        return None
+    event_list = W0_MOCK_EVENTS.setdefault(run_id, [])
+    seq = len(event_list) + 1
+    event_type = str((event_spec or {}).get("event_type") or "").strip()
+    status = str((event_spec or {}).get("status") or "").strip() or "completed"
+    tool_name = str((event_spec or {}).get("tool_name") or "").strip()
+    message = str((event_spec or {}).get("message") or "").strip()
+
+    event = {
+        "event_seq": seq,
+        "event_type": event_type,
+        "status": status,
+        "agent_name": "W0 Mock Runtime",
+        "tool_name": tool_name,
+        "phase": str((event_spec or {}).get("phase") or _stage_for_tool(tool_name) or ""),
+        "node_name": str((event_spec or {}).get("node_name") or tool_name or ""),
+        "timestamp": _w0_mock_now(),
+        "latency_ms": 0,
+        "attempt": 1,
+        "input_ref": {"run_id": run_id, "tool_name": tool_name},
+        "output_ref": {"message": message} if message else None,
+        "error_code": "MOCK_ISSUE_FOUND" if event_type == "issue_found" else None,
+        "retryable": False,
+    }
+    event_list.append(event)
+    _w0_mock_apply_event_to_run(run, event)
+    return event
+
+
+def _w0_mock_public_run(run):
+    payload = copy.deepcopy(run or {})
+    payload.pop("created_epoch", None)
+    payload.pop("script", None)
+    payload.pop("script_cursor", None)
+    return _ensure_w0_run_fields(payload)
+
+
+def _w0_mock_refresh_run(run_id):
+    with W0_MOCK_LOCK:
+        _w0_mock_prune_expired_locked()
+        run = W0_MOCK_RUNS.get(run_id)
+        if not run:
+            return None, None
+
+        elapsed_s = max(0.0, time.time() - float(run.get("created_epoch") or 0))
+        script = run.get("script") or []
+        cursor = int(run.get("script_cursor") or 0)
+
+        while cursor < len(script):
+            item = script[cursor] or {}
+            if elapsed_s < float(item.get("at") or 0):
+                break
+            _w0_mock_append_event(run, item)
+            cursor += 1
+            run["script_cursor"] = cursor
+
+        if cursor >= len(script) and str(run.get("status") or "").strip().lower() not in {
+            "succeeded",
+            "failed",
+            "cancelled",
+            "paused_review_required",
+        }:
+            run["status"] = "succeeded"
+            run["stage"] = "done"
+            run["current_tool"] = ""
+            run["termination_reason"] = _infer_w0_termination_reason(run)
+            run["updated_at"] = _w0_mock_now()
+
+        return _w0_mock_public_run(run), copy.deepcopy(W0_MOCK_EVENTS.get(run_id) or [])
+
+
+def _w0_mock_create_run(
+    *,
+    patient_id,
+    file_id,
+    available_modalities,
+    goal_question="",
+    scenario="happy_path",
+):
+    normalized_modalities = _normalize_uploaded_modalities(available_modalities or [])
+    path_decision = _build_path_decision(normalized_modalities)
+
+    imaging_path = path_decision.get("imaging_path") if path_decision.get("valid") else "ncct_only"
+    tool_sequence = _agent_tool_sequence(imaging_path)
+    if not tool_sequence:
+        tool_sequence = AGENT_TOOL_SEQUENCE_MAP.get("ncct_only", [])
+
+    run_id = _w0_mock_run_id()
+    now_text = _w0_mock_now()
+    planner_output = {
+        "imaging_path": imaging_path,
+        "path_decision": path_decision,
+        "tool_sequence": list(tool_sequence),
+    }
+    run = {
+        "run_id": run_id,
+        "patient_id": int(patient_id),
+        "file_id": str(file_id),
+        "status": "queued",
+        "stage": "triage",
+        "current_tool": "",
+        "created_at": now_text,
+        "updated_at": now_text,
+        "planner_input": {
+            "patient_id": int(patient_id),
+            "file_id": str(file_id),
+            "available_modalities": normalized_modalities,
+            "question": str(goal_question or ""),
+        },
+        "planner_output": planner_output,
+        "steps": _w0_mock_build_steps(tool_sequence),
+        "tool_results": [],
+        "result": None,
+        "error": None,
+        "plan_frames": [
+            _build_w0_plan_frame(
+                tool_sequence=tool_sequence,
+                imaging_path=imaging_path,
+                source="w0_mock",
+                revision=1,
+            )
+        ],
+        "replan_count": 0,
+        "termination_reason": "running",
+        "human_checkpoint": None,
+        "finalization": None,
+        "scenario": str(scenario),
+        "execution_mode": "w0_mock",
+        "source": "w0_mock",
+        "trigger_source": "strokeclaw_w0_page",
+        "created_epoch": time.time(),
+        "script_cursor": 0,
+        "script": _w0_mock_build_script(tool_sequence=tool_sequence, scenario=scenario),
+    }
+
+    with W0_MOCK_LOCK:
+        _w0_mock_prune_expired_locked()
+        W0_MOCK_RUNS[run_id] = run
+        W0_MOCK_EVENTS[run_id] = []
+
+    return _w0_mock_public_run(run)
+
 
 def _agent_now():
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1416,6 +1789,137 @@ def _agent_now():
 
 def _safe_agent_copy(obj):
     return copy.deepcopy(obj) if obj is not None else None
+
+
+def _build_w0_plan_frame(
+    tool_sequence,
+    imaging_path="",
+    *,
+    source="triage_planner",
+    revision=1,
+):
+    normalized_tools = [
+        str(item).strip() for item in (tool_sequence or []) if str(item).strip()
+    ]
+    path_token = str(imaging_path or "").strip()
+    objective = "StrokeClaw W0 orchestration"
+    if path_token:
+        objective = f"StrokeClaw W0 orchestration ({path_token})"
+    return {
+        "revision": int(revision),
+        "source": str(source or "triage_planner"),
+        "objective": objective,
+        "reasoning_summary": "Rule-based plan derived from modality path",
+        "next_tools": normalized_tools,
+        "confidence": 1.0,
+    }
+
+
+def _infer_w0_termination_reason(run):
+    status = str((run or {}).get("status") or "").strip().lower()
+    if status == "succeeded":
+        return "normal_completion"
+    if status == "failed":
+        err = (run or {}).get("error")
+        if isinstance(err, dict):
+            return str(
+                err.get("error_code") or err.get("error_message") or "run_failed"
+            )
+        if err:
+            return str(err)
+        return "run_failed"
+    if status == "cancelled":
+        return "cancelled_by_user"
+    if status == "paused_review_required":
+        return "human_review_required"
+    if status in {"queued", "running"}:
+        return "running"
+    return "unknown"
+
+
+def _ensure_w0_run_fields(run):
+    if not isinstance(run, dict):
+        return run
+
+    if not isinstance(run.get("plan_frames"), list):
+        run["plan_frames"] = []
+
+    if not run.get("plan_frames"):
+        planner_output = run.get("planner_output") or {}
+        tool_sequence = planner_output.get("tool_sequence") or []
+        if isinstance(tool_sequence, list) and tool_sequence:
+            run["plan_frames"] = [
+                _build_w0_plan_frame(
+                    tool_sequence=tool_sequence,
+                    imaging_path=planner_output.get("imaging_path") or "",
+                    source="triage_planner",
+                    revision=1,
+                )
+            ]
+
+    if run.get("replan_count") is None:
+        run["replan_count"] = max(0, len(run.get("plan_frames") or []) - 1)
+    else:
+        try:
+            run["replan_count"] = max(
+                int(run.get("replan_count", 0)),
+                max(0, len(run.get("plan_frames") or []) - 1),
+            )
+        except Exception:
+            run["replan_count"] = max(0, len(run.get("plan_frames") or []) - 1)
+
+    if not run.get("termination_reason"):
+        run["termination_reason"] = _infer_w0_termination_reason(run)
+
+    if run.get("human_checkpoint") is None:
+        if str(run.get("status") or "").strip().lower() == "paused_review_required":
+            err = run.get("error") if isinstance(run.get("error"), dict) else {}
+            run["human_checkpoint"] = {
+                "required": True,
+                "reason": err.get("error_message") or "manual_review_required",
+                "risk_level": "high",
+                "pending_items": err.get("pending_items") or [],
+            }
+        else:
+            run["human_checkpoint"] = None
+
+    if run.get("finalization") is None:
+        if str(run.get("status") or "").strip().lower() == "succeeded":
+            run["finalization"] = {
+                "status": "pending_archive",
+                "writeback_status": "not_started",
+                "signed": False,
+                "version": "w0-draft",
+            }
+        else:
+            run["finalization"] = None
+
+    return run
+
+
+def _classify_agent_event_type(event):
+    tool_name = str((event or {}).get("tool_name") or "").strip().lower()
+    status = str((event or {}).get("status") or "").strip().lower()
+
+    if tool_name == "triage_planner" and status == "completed":
+        return "plan_created"
+    if status == "running":
+        return "step_started"
+    if status in {"paused_review_required", "review_required", "await_review"}:
+        return "human_review_required"
+    if status in {"failed", "warn", "warning"}:
+        if "human_review" in tool_name or "human_confirm" in tool_name:
+            return "human_review_required"
+        return "issue_found"
+    if status in {"completed", "skipped"}:
+        if "writeback" in tool_name or tool_name in {"emr_sync", "emr_sync_writeback"}:
+            return "writeback_completed"
+        if "human_review" in tool_name or "human_confirm" in tool_name:
+            return "human_review_completed"
+        return "step_completed"
+    if status == "retry_queued":
+        return "issue_found"
+    return "step_completed"
 
 
 def _agent_log(
@@ -1512,6 +2016,11 @@ def _create_agent_run(
         "error": None,
         "warnings": [warning] if warning else [],
         "result": None,
+        "plan_frames": [],
+        "replan_count": 0,
+        "termination_reason": "queued",
+        "human_checkpoint": None,
+        "finalization": None,
     }
     with AGENT_RUNTIME_LOCK:
         AGENT_RUNS[run_id] = run
@@ -1616,6 +2125,9 @@ def _append_agent_event(
         "output_ref": output_ref,
         "latency_ms": int(latency_ms or 0),
         "status": status,
+        "event_type": _classify_agent_event_type(
+            {"tool_name": tool_name, "status": status}
+        ),
         "error_code": error_code,
         "retryable": bool(retryable),
         "attempt": int(attempt),
@@ -1778,6 +2290,15 @@ def _run_triage_planner(run_id):
     def _mut_state(state):
         state["stage"] = "tooling"
         state["planner_output"] = planner_output
+        state["plan_frames"] = [
+            _build_w0_plan_frame(
+                tool_sequence=tool_sequence,
+                imaging_path=decision.get("imaging_path") or "",
+                source="triage_planner",
+                revision=1,
+            )
+        ]
+        state["replan_count"] = 0
         state["steps"] = [
             {
                 "key": tool_name,
@@ -2591,6 +3112,18 @@ def _execute_agent_tool(run_id, tool_name):
 
     attempt = _tool_attempts(run, tool_name) + 1
     _upsert_agent_step(run_id, tool_name, "running", "Tool is running", attempt=attempt)
+    _append_agent_event(
+        run_id=run_id,
+        agent_name="Runtime",
+        tool_name=tool_name,
+        status="running",
+        input_ref={"run_id": run_id, "tool_name": tool_name},
+        output_ref=None,
+        latency_ms=0,
+        error_code=None,
+        retryable=False,
+        attempt=attempt,
+    )
 
     started = time.time()
     input_ref = {"run_id": run_id, "tool_name": tool_name}
@@ -2771,6 +3304,7 @@ def _run_agent_pipeline(run_id, start_tool=None):
             run["stage"] = "triage"
         run["error"] = None
         run["result"] = None
+        run["termination_reason"] = "running"
 
     run = _update_agent_run(run_id, _start_mut)
     if not run:
@@ -2793,6 +3327,7 @@ def _run_agent_pipeline(run_id, start_tool=None):
                 state["status"] = "failed"
                 state["stage"] = "triage"
                 state["error"] = planner_out
+                state["termination_reason"] = _infer_w0_termination_reason(state)
 
             _update_agent_run(run_id, _fail_triage)
             _agent_log(
@@ -2817,6 +3352,7 @@ def _run_agent_pipeline(run_id, start_tool=None):
             state["status"] = "failed"
             state["stage"] = "triage"
             state["error"] = err
+            state["termination_reason"] = _infer_w0_termination_reason(state)
 
         _update_agent_run(run_id, _fail_empty)
         _agent_log(
@@ -2842,6 +3378,7 @@ def _run_agent_pipeline(run_id, start_tool=None):
                 state["status"] = "failed"
                 state["stage"] = _stage_for_tool(start_tool)
                 state["error"] = err
+                state["termination_reason"] = _infer_w0_termination_reason(state)
 
             _update_agent_run(run_id, _fail_retry_step)
             _agent_log(
@@ -2887,6 +3424,7 @@ def _run_agent_pipeline(run_id, start_tool=None):
                 state["status"] = "failed"
                 state["stage"] = _stage_for_tool(tool_name)
                 state["error"] = fail_contract
+                state["termination_reason"] = _infer_w0_termination_reason(state)
 
             _update_agent_run(run_id, _fail_tool)
             _agent_log(
@@ -2924,6 +3462,13 @@ def _run_agent_pipeline(run_id, start_tool=None):
         state["current_tool"] = None
         state["error"] = None
         state["result"] = final_result
+        state["termination_reason"] = "normal_completion"
+        state["finalization"] = {
+            "status": "pending_archive",
+            "writeback_status": "not_started",
+            "signed": False,
+            "version": "w0-draft",
+        }
 
     _update_agent_run(run_id, _complete)
     _agent_log(
@@ -6891,6 +7436,11 @@ def cockpit_page():
     return render_template("patient/upload/cockpit/index.html")
 
 
+@app.route("/strokeclaw/w0")
+def strokeclaw_w0_page():
+    return render_template("patient/upload/strokeclaw_w0/index.html")
+
+
 @app.route("/processing")
 def processing_page():
     return render_template("patient/upload/processing/index.html")
@@ -7063,6 +7613,74 @@ def api_upload_progress(job_id):
     return jsonify({"success": True, "job": job})
 
 
+@app.route("/api/strokeclaw/w0/mock-runs", methods=["POST"])
+def api_create_w0_mock_run():
+    data = request.get_json(silent=True) or {}
+
+    patient_id_raw = data.get("patient_id")
+    try:
+        patient_id = int(patient_id_raw)
+    except Exception:
+        return jsonify({"success": False, "error": "Invalid patient_id"}), 400
+
+    file_id = str(data.get("file_id") or "").strip()
+    if not file_id:
+        return jsonify({"success": False, "error": "Missing file_id"}), 400
+
+    available_modalities = data.get("available_modalities")
+    if not isinstance(available_modalities, list) or len(available_modalities) == 0:
+        return jsonify({"success": False, "error": "available_modalities is required"}), 400
+
+    goal_question = str(data.get("goal_question") or data.get("question") or "").strip()
+    scenario = str(data.get("scenario") or "happy_path").strip().lower()
+    if scenario not in W0_MOCK_SCENARIOS:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": f"Invalid scenario: {scenario}",
+                    "allowed_scenarios": sorted(W0_MOCK_SCENARIOS),
+                }
+            ),
+            400,
+        )
+
+    run = _w0_mock_create_run(
+        patient_id=patient_id,
+        file_id=file_id,
+        available_modalities=available_modalities,
+        goal_question=goal_question,
+        scenario=scenario,
+    )
+    run_id = str(run.get("run_id") or "").strip()
+
+    return jsonify(
+        {
+            "success": True,
+            "run_id": run_id,
+            "run_state": run,
+            "status_url": f"/api/strokeclaw/w0/mock-runs/{run_id}",
+            "events_url": f"/api/strokeclaw/w0/mock-runs/{run_id}/events",
+        }
+    )
+
+
+@app.route("/api/strokeclaw/w0/mock-runs/<run_id>", methods=["GET"])
+def api_get_w0_mock_run(run_id):
+    run, _events = _w0_mock_refresh_run(str(run_id or "").strip())
+    if not run:
+        return jsonify({"success": False, "error": "Mock run not found"}), 404
+    return jsonify({"success": True, "run": run})
+
+
+@app.route("/api/strokeclaw/w0/mock-runs/<run_id>/events", methods=["GET"])
+def api_get_w0_mock_run_events(run_id):
+    run, events = _w0_mock_refresh_run(str(run_id or "").strip())
+    if not run:
+        return jsonify({"success": False, "error": "Mock run not found"}), 404
+    return jsonify({"success": True, "run_id": run_id, "events": events})
+
+
 @app.route("/api/agent/runs", methods=["POST"])
 def api_create_agent_run():
     data = request.get_json(silent=True) or {}
@@ -7118,6 +7736,8 @@ def api_create_agent_run():
     worker = threading.Thread(target=_run_agent_pipeline, args=(run_id,), daemon=True)
     worker.start()
 
+    run = _ensure_w0_run_fields(run)
+
     return jsonify(
         {
             "success": True,
@@ -7135,6 +7755,7 @@ def api_get_agent_run(run_id):
     run = _get_agent_run(run_id)
     if not run:
         return jsonify({"success": False, "error": "Run not found"}), 404
+    run = _ensure_w0_run_fields(run)
     return jsonify({"success": True, "run": run})
 
 
@@ -7144,7 +7765,16 @@ def api_get_agent_events(run_id):
     if not run:
         return jsonify({"success": False, "error": "Run not found"}), 404
     events = _get_agent_events(run_id)
-    return jsonify({"success": True, "run_id": run_id, "events": events})
+    normalized = []
+    for item in sorted(events, key=lambda x: int((x or {}).get("event_seq") or 0)):
+        event = dict(item or {})
+        event["event_type"] = str(
+            event.get("event_type") or _classify_agent_event_type(event)
+        )
+        event["phase"] = str(event.get("phase") or event.get("stage") or "")
+        event["node_name"] = str(event.get("node_name") or event.get("tool_name") or "")
+        normalized.append(event)
+    return jsonify({"success": True, "run_id": run_id, "events": normalized})
 
 
 @app.route("/api/agent/runs/<run_id>/result", methods=["GET"])
@@ -7176,6 +7806,45 @@ def api_get_agent_result(run_id):
             "stage": run.get("stage"),
             "result": run.get("result"),
         }
+    )
+
+
+@app.route("/api/agent/runs/<run_id>/review", methods=["POST"])
+def api_review_agent_run(run_id):
+    run = _get_agent_run(run_id)
+    if not run:
+        return jsonify({"success": False, "error": "Run not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    action = str(data.get("action") or "").strip().lower()
+    allowed_actions = ["accept", "edit", "reject", "sign", "handoff"]
+    if action and action not in allowed_actions:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": f"Invalid action: {action}",
+                    "allowed_actions": allowed_actions,
+                }
+            ),
+            400,
+        )
+
+    return (
+        jsonify(
+            {
+                "success": False,
+                "run_id": run_id,
+                "error": "W0 contract frozen: review action will be implemented in W1",
+                "error_code": "NOT_IMPLEMENTED_IN_W0",
+                "contract": {
+                    "allowed_actions": allowed_actions,
+                    "required_fields": ["action"],
+                    "optional_fields": ["patch", "signature", "note", "actor_id"],
+                },
+            }
+        ),
+        501,
     )
 
 
