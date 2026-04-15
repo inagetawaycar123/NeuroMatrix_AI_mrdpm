@@ -739,8 +739,10 @@ function renderReviewPanel() {
         </button>`;
     }).join("");
 
-    const evidenceList = Array.isArray(currentSection.evidence_refs) && currentSection.evidence_refs.length
-        ? `<ul>${currentSection.evidence_refs.map((e) => `<li>${t(e)}</li>`).join("")}</ul>`
+    const evidenceRefs = Array.isArray(currentSection.evidence_refs) ? currentSection.evidence_refs.filter(Boolean) : [];
+    const evidenceCount = evidenceRefs.length;
+    const evidenceList = evidenceCount
+        ? `<ul>${evidenceRefs.map((e) => `<li>${t(e)}</li>`).join("")}</ul>`
         : "<div>暂无结构化证据引用，建议在确认前补充。</div>";
 
     const suggestion = state.review.rewriteSuggestion
@@ -758,6 +760,8 @@ function renderReviewPanel() {
     if (state.review.error) noteLines.push(state.review.error);
     if (state.review.info) noteLines.push(state.review.info);
     const noteText = noteLines.join(" ");
+    const currentRisk = reviewReadableRisk(currentSection.risk_level);
+    const riskClass = token(currentSection.risk_level || "low");
 
     body.innerHTML = `
         <div class="runtime-review-progress">
@@ -767,42 +771,53 @@ function renderReviewPanel() {
             </div>
             <div class="runtime-review-progress-bar"><span style="width:${percent}%;"></span></div>
             <div class="runtime-review-progress-meta">完成度 ${percent}% · 未全部确认前禁止跳转 Viewer</div>
+            <div class="runtime-review-progress-tags">
+                <span class="runtime-review-tag ${riskClass}">当前风险：${currentRisk}</span>
+                <span class="runtime-review-tag ${state.review.offlineMode ? "offline" : "online"}">${state.review.offlineMode ? "离线兜底中" : "在线同步中"}</span>
+            </div>
         </div>
         <div class="runtime-review-grid">
             <aside class="runtime-review-sidebar">${side}</aside>
             <section class="runtime-review-main">
-                <div class="runtime-review-title-row">
-                    <div>
-                        <h3>${t(currentSection.title, currentSection.section_id)}</h3>
-                        <p>${t(currentSection.lead, "请确认本章节内容后继续。")}</p>
+                <div class="runtime-review-main-scroll">
+                    <div class="runtime-review-title-row">
+                        <div>
+                            <h3>${t(currentSection.title, currentSection.section_id)}</h3>
+                            <p>${t(currentSection.lead, "请确认本章节内容后继续。")}</p>
+                        </div>
+                        <span class="runtime-status-pill ${token(currentSection.review_status || "pending")}">${STATUS_TEXT[token(currentSection.review_status || "pending")] || STATUS_TEXT.pending}</span>
                     </div>
-                    <span class="runtime-status-pill ${token(currentSection.review_status || "pending")}">${STATUS_TEXT[token(currentSection.review_status || "pending")] || STATUS_TEXT.pending}</span>
+                    <div class="runtime-review-guide">${t(currentSection.guide, "请逐段确认并补充必要备注。")}</div>
+                    <details class="runtime-review-evidence" ${evidenceCount ? "" : "open"}>
+                        <summary>
+                            <span class="runtime-review-field-label">证据摘要（${currentRisk}）</span>
+                            <span class="runtime-review-evidence-count">${evidenceCount} 条</span>
+                        </summary>
+                        <div class="runtime-review-evidence-body">
+                            ${evidenceList}
+                        </div>
+                    </details>
+                    <div class="runtime-review-field">
+                        <label for="runtimeReviewRewriteIntent">改写意图（可选）</label>
+                        <input id="runtimeReviewRewriteIntent" type="text" placeholder="例如：更简洁、更偏临床决策语气">
+                    </div>
+                    <div class="runtime-review-field runtime-review-field-draft">
+                        <label for="runtimeReviewDraft">当前草稿</label>
+                        <textarea id="runtimeReviewDraft">${t(currentSection.draft_text, "")}</textarea>
+                    </div>
+                    <div class="runtime-review-field runtime-review-field-note">
+                        <label for="runtimeReviewNote">医生备注</label>
+                        <textarea id="runtimeReviewNote" placeholder="可填写补充说明与修订原因">${t(currentSection.doctor_note, "")}</textarea>
+                    </div>
+                    ${suggestion}
+                    <div class="runtime-review-note">${noteText || "提示：高风险章节需显式确认后才可进入下一段。"} </div>
                 </div>
-                <div class="runtime-review-guide">${t(currentSection.guide, "请逐段确认并补充必要备注。")}</div>
-                <div class="runtime-review-evidence">
-                    <div class="runtime-review-field-label">证据摘要（${reviewReadableRisk(currentSection.risk_level)})</div>
-                    ${evidenceList}
-                </div>
-                <div class="runtime-review-field">
-                    <label for="runtimeReviewRewriteIntent">改写意图（可选）</label>
-                    <input id="runtimeReviewRewriteIntent" type="text" placeholder="例如：更简洁、更偏临床决策语气">
-                </div>
-                <div class="runtime-review-field">
-                    <label for="runtimeReviewDraft">当前草稿</label>
-                    <textarea id="runtimeReviewDraft">${t(currentSection.draft_text, "")}</textarea>
-                </div>
-                <div class="runtime-review-field">
-                    <label for="runtimeReviewNote">医生备注</label>
-                    <textarea id="runtimeReviewNote" placeholder="可填写补充说明与修订原因">${t(currentSection.doctor_note, "")}</textarea>
-                </div>
-                ${suggestion}
-                <div class="runtime-review-actions">
+                <div class="runtime-review-actions runtime-review-actions-sticky">
                     <button type="button" class="runtime-review-btn" data-review-action="rewrite_section"${state.review.saving ? " disabled" : ""}>AI改写此段</button>
                     <button type="button" class="runtime-review-btn" data-review-action="save_section"${state.review.saving ? " disabled" : ""}>保存编辑</button>
                     <button type="button" class="runtime-review-btn primary" data-review-action="confirm_section"${state.review.saving ? " disabled" : ""}>确认本段并继续</button>
                     <button type="button" class="runtime-review-btn warn" data-review-action="finalize_review"${(!canFinalize || state.review.saving) ? " disabled" : ""}>全部确认后进入 Viewer</button>
                 </div>
-                <div class="runtime-review-note">${noteText || "提示：高风险章节需显式确认后才可进入下一段。"} </div>
             </section>
         </div>
     `;

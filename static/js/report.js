@@ -414,11 +414,11 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
                         } 
                     }),
                     React.createElement("h3", { style: { color: '#fff', fontSize: '18px', marginBottom: '8px' } }, "正在生成 AI 报告..."),
-                    React.createElement("p", { style: { color: 'rgba(255,255,255,0.8)', fontSize: '14px' } }, "NeuroMatrix AI 正在分析影像数据，请稍候")
+                    React.createElement("p", { style: { color: 'rgba(255,255,255,0.8)', fontSize: '14px' } }, "StrokeClaw 正在分析影像数据，请稍候")
                 )
             : aiReport ?
                 React.createElement("div", { className: "report-module" },
-                    React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "NeuroMatrix AI 诊断意见"),
+                    React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "StrokeClaw 诊断意见"),
                     React.createElement("div", {
                         className: "ai-report-content",
                         style: {
