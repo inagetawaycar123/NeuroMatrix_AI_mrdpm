@@ -1,1268 +1,1229 @@
-let processingJobId = '';
-let processingPatientId = '';
-let processingFileId = '';
-let processingAgentRunId = '';
+﻿"use strict";
 
-let processingPollTimer = null;
-let agentPollTimer = null;
-let processingStartedAt = Date.now();
-
-let uploadWorkflowCompleted = false;
-let viewerRedirectScheduled = false;
-let agentResultFetched = false;
-let retrySubmitting = false;
-
-let latestJobSnapshot = null;
-let latestAgentRun = null;
-let latestRetryTarget = null;
-
-const PROCESSING_STEP_ORDER = [
-    'archive_ready',
-    'modality_detect',
-    'ctp_generate',
-    'stroke_analysis',
-    'pseudocolor',
-    'ai_report',
+const UPLOAD_NODES = [
+    { key: "archive_ready", title: "Case_Intake.parse()", subtitle: "病例接收与归档准备", chip: "Case_Intake", delegated: "" },
+    { key: "modality_detect", title: "Modality_Detect.route()", subtitle: "模态识别与路径判定", chip: "Modality", delegated: "" },
+    { key: "ctp_generate", title: "CTP_Generate.run()", subtitle: "灌注图谱生成", chip: "CTP_Gen", delegated: "generate_ctp_maps" },
+    { key: "stroke_analysis", title: "Stroke_Analysis.segment()", subtitle: "卒中病灶分析", chip: "Analysis", delegated: "run_stroke_analysis" },
+    { key: "pseudocolor", title: "Pseudocolor_Render.compose()", subtitle: "伪彩可视化生成", chip: "Pseudocolor", delegated: "generate_pseudocolor" },
+    { key: "ai_report", title: "Report_Generate.compose()", subtitle: "结构化报告草拟", chip: "Report", delegated: "generate_medgemma_report" },
 ];
 
-const AGENT_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'cancelled', 'paused_review_required']);
-
-const AGENT_DELEGATED_STEP_MAP = Object.freeze({
-    ctp_generate: 'generate_ctp_maps',
-    stroke_analysis: 'run_stroke_analysis',
-    pseudocolor: 'generate_pseudocolor',
-    ai_report: 'generate_medgemma_report',
+const TOOL_META = Object.freeze({
+    triage_planner: ["Triage_Planner.plan()", "任务编排生成", "Plan"],
+    detect_modalities: ["ClinicalNER.extract()", "结构化提取与复核", "NER_Extract"],
+    load_patient_context: ["Patient_Context.load()", "患者上下文加载", "Context"],
+    generate_ctp_maps: ["MRDPM_Generate.run()", "灌注图谱生成", "CTP_Gen"],
+    run_stroke_analysis: ["Stroke_Analysis.segment()", "卒中区域分析", "Analysis"],
+    icv: ["Evidence_Check.icv()", "院内指标核验", "ICV"],
+    ekv: ["Evidence_Check.ekv()", "指南证据核验", "EKV"],
+    consensus_lite: ["Consensus_Lite.resolve()", "证据裁决", "Consensus"],
+    generate_medgemma_report: ["Final_Report.compose()", "报告生成", "Report"],
+    human_confirm: ["Human_Confirm.await_action()", "人工确认节点", "Human_Confirm"],
+    emr_sync_writeback: ["EMR_Sync.writeback()", "回写归档", "EMR_Sync"],
 });
 
-function setTextIfPresent(id, value) {
-    const el = document.getElementById(id);
-    if (el) {
-        el.textContent = value;
-    }
+const TEMPLATES = Object.freeze({
+    default: ["系统正在执行当前节点。", "处理节点输入并推进流程。", "形成可解释的临床链路。"],
+    archive_ready: ["系统已接收病例并创建会话。", "归集 patient_id 与 file_id。", "确保全流程同一病例上下文。"],
+    modality_detect: ["系统正在识别可用模态。", "判断可执行分析路径。", "避免输入缺失导致误判。"],
+    ctp_generate: ["系统正在生成 CBF/CBV/Tmax 图谱。", "输出灌注核心参数。", "支撑缺血核心与半暗带判断。"],
+    stroke_analysis: ["系统正在做病灶分割与体积评估。", "计算病灶侧别与关键指标。", "形成治疗决策依据。"],
+    ai_report: ["系统正在组装结构化报告。", "汇总推理证据与关键结论。", "减少医生重复录入负担。"],
+    icv: ["系统正在执行 ICV 核验。", "检查关键指标一致性。", "降低指标冲突风险。"],
+    ekv: ["系统正在执行 EKV 核验。", "对照循证与指南规则。", "提升结论可信度。"],
+    consensus_lite: ["系统正在做证据共识裁决。", "融合多路结论并去冲突。", "输出可落地的一致建议。"],
+    emr_sync_writeback: ["系统正在回写归档。", "同步结构化结果到下游系统。", "形成闭环与可追溯记录。"],
+});
+
+const TERMINAL = new Set(["succeeded", "failed", "cancelled", "paused_review_required"]);
+const REVEAL_ELIGIBLE = new Set(["running", "completed", "issue", "waiting"]);
+const STATUS_TEXT = { pending: "Pending", running: "Running", completed: "Completed", issue: "Issue Found", waiting: "Await Human", needs_edit: "Needs Edit", confirmed: "Confirmed" };
+const RUN_RESULT_FETCH_MAX_WAIT_MS = 30000;
+const REVIEW_FALLBACK_SECTIONS = [
+    { section_id: "patient_context", title: "患者基本信息与时窗", lead: "确认人口学与时间窗信息是否可支持后续决策。", guide: "请核对年龄、性别、起病至入院时间及 NIHSS。", risk_level: "low" },
+    { section_id: "imaging_summary", title: "影像摘要（NCCT/CTA）", lead: "确认影像核心发现是否准确可读。", guide: "请确认 NCCT 与 CTA 的关键发现是否完整。", risk_level: "medium" },
+    { section_id: "ctp_quant", title: "CTP 量化分析", lead: "确认核心梗死、半暗带与不匹配比值。", guide: "请核对体积数值及临床意义解释。", risk_level: "medium" },
+    { section_id: "question_answer", title: "问题驱动结论", lead: "确认问题回答与临床建议是否一致。", guide: "请检查问题回答、置信度与关键要点。", risk_level: "medium" },
+    { section_id: "risk_uncertainty", title: "风险与不确定项", lead: "高风险与不确定项需要显式确认。", guide: "请确认风险提示和建议复核项。", risk_level: "high" },
+    { section_id: "next_steps", title: "下一步建议", lead: "确认下一步检查或治疗动作。", guide: "请确认建议是否可执行且顺序合理。", risk_level: "medium" },
+    { section_id: "evidence_trace", title: "证据追溯", lead: "核对结论与证据映射关系。", guide: "请确认关键结论均有证据支撑。", risk_level: "low" },
+];
+
+const state = {
+    jobId: "", patientId: "", fileId: "", runId: "", startedAt: "",
+    uploadTimer: null, runTimer: null, uploadDone: false, runResultFetched: false,
+    latestJob: null, latestRun: null, events: [], hints: {}, nodes: [],
+    error: "", redirecting: false, awaitingReport: false,
+    runTerminalAt: 0, reportResultRetryUntil: 0, lastManualScrollAt: 0, lastFocusNode: "",
+    expanded: Object.create(null),
+    revealedNodeIds: [],
+    revealPendingIds: [],
+    revealTimer: null,
+    revealPaceMs: 900,
+    revealCatchupMs: 220,
+    revealCurrentPace: 900,
+    revealAt: Object.create(null),
+    renderedFeedIds: Object.create(null),
+    review: {
+        required: false,
+        visible: false,
+        loading: false,
+        saving: false,
+        offlineMode: false,
+        error: "",
+        info: "",
+        state: null,
+        currentSectionId: "",
+        rewriteSuggestion: null,
+        pendingOps: [],
+        flushInFlight: false,
+        inited: false,
+    },
+};
+
+const $ = (id) => document.getElementById(id);
+const t = (v, d = "-") => (v === null || v === undefined || String(v).trim() === "" ? d : String(v).trim());
+const token = (v) => String(v || "").trim().toLowerCase();
+
+function normStatus(v) {
+    const s = token(v);
+    if (!s || ["queued", "pending", "idle"].includes(s)) return "pending";
+    if (["running", "processing", "in_progress"].includes(s)) return "running";
+    if (["completed", "succeeded", "done", "skipped"].includes(s)) return "completed";
+    if (["paused_review_required", "review_required", "await_review", "waiting"].includes(s)) return "waiting";
+    if (["failed", "cancelled", "error", "warn", "warning"].includes(s)) return "issue";
+    return "pending";
 }
 
-function updateReusableFileHint() {
-    const hintEl = document.getElementById('processingReusableFileHint');
-    if (!hintEl) return;
-    if (!processingFileId) {
-        hintEl.textContent = '可复用 file_id（用于 W0 联调）：-';
-        return;
+function statusIcon(s) { return s === "running" ? "◉" : s === "completed" ? "✓" : s === "issue" ? "!" : s === "waiting" ? "⏸" : "○"; }
+function summarize(v) {
+    if (v === null || v === undefined) return "-";
+    if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") return String(v);
+    if (Array.isArray(v)) return `[${v.slice(0, 5).map((x) => summarize(x)).join(", ")}${v.length > 5 ? ", ..." : ""}]`;
+    if (typeof v === "object") {
+        if (v.error_message) return String(v.error_message);
+        if (v.message) return String(v.message);
+        const keys = Object.keys(v);
+        return keys.slice(0, 8).map((k) => `${k}: ${summarize(v[k])}`).join("\n");
     }
-    hintEl.textContent = `可复用 file_id（用于 W0 联调）：${processingFileId}`;
+    return String(v);
+}
+function pretty(v) { try { return typeof v === "object" ? JSON.stringify(v, null, 2) : String(v); } catch (_e) { return summarize(v); } }
+function modalities() { return Array.isArray(state.latestJob?.modalities) && state.latestJob.modalities.length ? state.latestJob.modalities : (Array.isArray(state.latestRun?.planner_input?.available_modalities) ? state.latestRun.planner_input.available_modalities : []); }
+function getMeta(tool) { const m = TOOL_META[tool] || [`${tool}.run()`, "智能体节点", tool || "Node"]; return { title: m[0], subtitle: m[1], chip: m[2] }; }
+function setPill(elm, s) { if (!elm) return; const k = normStatus(s); elm.className = `runtime-status-pill ${k}`; elm.textContent = STATUS_TEXT[k] || STATUS_TEXT.pending; }
+
+function reportKeys(fileId) {
+    return { report: `ai_report_${fileId}`, payload: `ai_report_payload_${fileId}`, generating: `ai_report_generating_${fileId}`, error: `ai_report_error_${fileId}`, legacyGenerating: "ai_report_generating", legacyError: "ai_report_error" };
+}
+function clearReportTransient(fileId) {
+    if (!fileId) return;
+    const k = reportKeys(fileId);
+    [k.generating, k.error, `${k.generating}_ts`, k.legacyGenerating, k.legacyError].forEach((x) => localStorage.removeItem(x));
+}
+function persistReport(fileId, reportResult) {
+    if (!fileId || !reportResult || typeof reportResult !== "object") return false;
+    const k = reportKeys(fileId);
+    let ok = false;
+    if (typeof reportResult.report === "string" && reportResult.report.trim()) { localStorage.setItem(k.report, reportResult.report); localStorage.setItem("ai_report", reportResult.report); ok = true; }
+    if (reportResult.report_payload && typeof reportResult.report_payload === "object") { localStorage.setItem(k.payload, JSON.stringify(reportResult.report_payload)); ok = true; }
+    if (ok) clearReportTransient(fileId);
+    return ok;
+}
+function runReport(run) { const r = (run || {}).result || {}; return r.report_result && typeof r.report_result === "object" ? r.report_result : null; }
+function hasReport(fileId) { const k = reportKeys(fileId); const v = localStorage.getItem(k.report); return typeof v === "string" && v.trim().length > 0; }
+function reportReady() { return !!state.fileId && (hasReport(state.fileId) || persistReport(state.fileId, runReport(state.latestRun)) || hasReport(state.fileId)); }
+
+function reviewLocalKey() {
+    return state.runId ? `strokeclaw_review_state_${state.runId}` : "";
 }
 
-async function copyProcessingFileId() {
-    if (!processingFileId) {
-        return;
-    }
+function cloneJson(v, fallback = null) {
+    try { return JSON.parse(JSON.stringify(v)); } catch (_e) { return fallback; }
+}
+
+function reviewPersistLocal() {
+    const key = reviewLocalKey();
+    if (!key) return;
+    const payload = {
+        review_state: cloneJson(state.review.state, null),
+        pending_ops: cloneJson(state.review.pendingOps, []),
+        saved_at: Date.now(),
+    };
+    try { localStorage.setItem(key, JSON.stringify(payload)); } catch (_e) {}
+}
+
+function reviewLoadLocal() {
+    const key = reviewLocalKey();
+    if (!key) return null;
     try {
-        await navigator.clipboard.writeText(processingFileId);
-        const hintEl = document.getElementById('processingReusableFileHint');
-        if (hintEl) {
-            hintEl.textContent = `已复制 file_id：${processingFileId}`;
-        }
-    } catch (err) {
-        const hintEl = document.getElementById('processingReusableFileHint');
-        if (hintEl) {
-            hintEl.textContent = `复制 file_id 失败：${err.message}`;
-        }
+        const raw = localStorage.getItem(key);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === "object" ? parsed : null;
+    } catch (_e) {
+        return null;
     }
 }
 
-function goToW0WithContext() {
-    const params = new URLSearchParams();
-    if (processingPatientId) params.set('patient_id', processingPatientId);
-    if (processingFileId) params.set('file_id', processingFileId);
-    if (processingAgentRunId) params.set('run_id', processingAgentRunId);
-    const query = params.toString();
-    window.location.href = query ? `/strokeclaw/w0?${query}` : '/strokeclaw/w0';
+function reviewClearLocalOps() {
+    state.review.pendingOps = [];
+    reviewPersistLocal();
 }
 
-function getAgentPanelElements() {
+function reviewSectionIndexMap(sections) {
+    const map = Object.create(null);
+    (sections || []).forEach((s, i) => { map[String(s?.section_id || "")] = i; });
+    return map;
+}
+
+function reviewRecomputeLocal(reviewState) {
+    const next = cloneJson(reviewState, {}) || {};
+    const sections = Array.isArray(next.sections) ? next.sections : [];
+    let confirmed = 0;
+    let current = "";
+    sections.forEach((sec) => {
+        const st = token(sec?.review_status || "pending");
+        if (st === "confirmed") confirmed += 1;
+        if (!current && st !== "confirmed") current = t(sec?.section_id, "");
+    });
+    next.total_sections = sections.length;
+    next.confirmed_count = confirmed;
+    next.pending_count = Math.max(sections.length - confirmed, 0);
+    next.all_confirmed = sections.length > 0 && confirmed === sections.length;
+    next.current_section_id = next.all_confirmed ? "" : current;
+    next.updated_at = new Date().toISOString();
+    return next;
+}
+
+function reviewFallbackEvidenceRefs(run, sectionId) {
+    const base = ((run || {}).result || {}).traceability || {};
+    const refs = [];
+    if (Array.isArray(base.key_findings)) {
+        base.key_findings.slice(0, 3).forEach((x, i) => {
+            const ref = t(x?.evidence_ref || x?.source_ref || "", "");
+            if (ref) refs.push(`${sectionId}:${i + 1}:${ref}`);
+        });
+    }
+    return refs;
+}
+
+function reviewFallbackDraftForSection(run, sectionSpec) {
+    const payload = ((run || {}).result || {}).report_result?.report_payload || {};
+    const reportText = t(((run || {}).result || {}).report_result?.report, "");
+    const qa = payload.question_answer || {};
+    const summary = payload.summary || payload.imaging_summary || {};
+    const ctp = payload.ctp || payload.ctp_quant || {};
+    const trace = ((run || {}).result || {}).traceability || payload.traceability || {};
+    const sectionId = sectionSpec.section_id;
+    if (sectionId === "patient_context") {
+        return [t(payload.patient_name, ""), t(payload.patient_age, ""), t(payload.patient_sex, ""), t(payload.onset_to_admission_hours, "")].filter(Boolean).join(" | ") || "请确认患者基本信息与时间窗。";
+    }
+    if (sectionId === "imaging_summary") {
+        return t(summary.impression || summary.text || payload.imaging_summary_text, "") || "请确认 NCCT/CTA 的关键影像发现。";
+    }
+    if (sectionId === "ctp_quant") {
+        return [t(ctp.core_infarct_volume, ""), t(ctp.penumbra_volume, ""), t(ctp.mismatch_ratio, "")].filter(Boolean).join(" | ") || "请确认 CTP 量化结果与临床解释。";
+    }
+    if (sectionId === "question_answer") {
+        return t(qa.answer || qa.text || payload.question_answer_text, "") || "请确认问题驱动结论。";
+    }
+    if (sectionId === "risk_uncertainty") {
+        return t(payload.risk_uncertainty || payload.risk_summary, "") || "请确认风险项与不确定性条目。";
+    }
+    if (sectionId === "next_steps") {
+        return t(payload.next_steps || payload.next_step_suggestion, "") || "请确认下一步建议。";
+    }
+    if (sectionId === "evidence_trace") {
+        return t(trace.summary || payload.evidence_trace, "") || "请确认证据映射覆盖情况。";
+    }
+    return reportText ? reportText.slice(0, 220) : "请确认本章节内容。";
+}
+
+function reviewBuildLocalFromRun(run) {
+    const sections = REVIEW_FALLBACK_SECTIONS.map((spec) => ({
+        section_id: spec.section_id,
+        title: spec.title,
+        lead: spec.lead,
+        guide: spec.guide,
+        draft_text: reviewFallbackDraftForSection(run, spec),
+        evidence_refs: reviewFallbackEvidenceRefs(run, spec.section_id),
+        risk_level: spec.risk_level,
+        review_status: "pending",
+        doctor_note: "",
+        updated_at: new Date().toISOString(),
+    }));
+    return reviewRecomputeLocal({
+        run_id: state.runId,
+        current_section_id: sections[0]?.section_id || "",
+        sections,
+        all_confirmed: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+    });
+}
+
+function reviewNormalize(reviewState) {
+    const base = cloneJson(reviewState, {}) || {};
+    if (!Array.isArray(base.sections)) base.sections = [];
+    base.sections = base.sections.map((sec, idx) => {
+        const fallback = REVIEW_FALLBACK_SECTIONS[idx] || {};
+        return {
+            section_id: t(sec?.section_id, fallback.section_id || `section_${idx + 1}`),
+            title: t(sec?.title, fallback.title || `章节 ${idx + 1}`),
+            lead: t(sec?.lead, fallback.lead || ""),
+            guide: t(sec?.guide, fallback.guide || ""),
+            draft_text: t(sec?.draft_text, ""),
+            evidence_refs: Array.isArray(sec?.evidence_refs) ? sec.evidence_refs.filter(Boolean) : [],
+            risk_level: token(sec?.risk_level || fallback.risk_level || "low"),
+            review_status: token(sec?.review_status || "pending"),
+            doctor_note: t(sec?.doctor_note, ""),
+            updated_at: t(sec?.updated_at, ""),
+        };
+    });
+    return reviewRecomputeLocal(base);
+}
+
+function reviewSetState(reviewState, opts = {}) {
+    state.review.state = reviewNormalize(reviewState);
+    state.review.visible = true;
+    state.review.required = true;
+    state.review.inited = true;
+    if (!opts.keepSuggestion) state.review.rewriteSuggestion = null;
+    if (!opts.keepCurrent) state.review.currentSectionId = t(state.review.state.current_section_id, state.review.currentSectionId);
+    if (!state.review.currentSectionId && Array.isArray(state.review.state.sections) && state.review.state.sections.length) {
+        state.review.currentSectionId = t(state.review.state.sections[0].section_id, "");
+    }
+    reviewPersistLocal();
+}
+
+function reviewCanEnterViewer() {
+    if (!state.review.required) return true;
+    return !!state.review.state?.all_confirmed;
+}
+
+async function reviewApiGet() {
+    if (!state.runId) throw new Error("missing run_id");
+    const resp = await fetch(`/api/agent/runs/${encodeURIComponent(state.runId)}/review`);
+    const data = await resp.json();
+    if (!resp.ok || !data?.success) throw new Error(data?.error || `review get failed (${resp.status})`);
+    return data;
+}
+
+async function reviewApiPost(action, payload = {}) {
+    if (!state.runId) throw new Error("missing run_id");
+    const resp = await fetch(`/api/agent/runs/${encodeURIComponent(state.runId)}/review`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...payload }),
+    });
+    const data = await resp.json();
+    if (!resp.ok || !data?.success) throw new Error(data?.error || `review ${action} failed (${resp.status})`);
+    return data;
+}
+
+function reviewPushPending(action, payload = {}) {
+    state.review.pendingOps.push({ action, payload, ts: Date.now() });
+    reviewPersistLocal();
+}
+
+async function reviewFlushPendingOps() {
+    if (!state.review.pendingOps.length || state.review.flushInFlight || !state.runId) return;
+    state.review.flushInFlight = true;
+    try {
+        while (state.review.pendingOps.length) {
+            const item = state.review.pendingOps[0];
+            const data = await reviewApiPost(item.action, item.payload);
+            if (data?.review_state) reviewSetState(data.review_state, { keepSuggestion: true });
+            state.review.pendingOps.shift();
+            reviewPersistLocal();
+        }
+        state.review.offlineMode = false;
+        state.review.info = "离线修改已同步到后端。";
+        state.review.error = "";
+    } catch (err) {
+        state.review.offlineMode = true;
+        state.review.error = `网络波动：离线修改待同步（${err.message}）`;
+    } finally {
+        state.review.flushInFlight = false;
+    }
+}
+
+function reviewGetCurrentSection() {
+    const sections = state.review.state?.sections || [];
+    if (!sections.length) return null;
+    const map = reviewSectionIndexMap(sections);
+    const idx = map[state.review.currentSectionId];
+    if (Number.isInteger(idx)) return sections[idx] || null;
+    return sections[0] || null;
+}
+
+function reviewLocalRewrite(section, draftText, intentText) {
+    const draft = t(draftText, t(section?.draft_text, ""));
+    const intent = t(intentText, "");
+    const first = draft ? draft.replace(/\s+/g, " ").trim() : "请补充当前章节核心结论。";
+    const polished = `${first}${first.endsWith("。") ? "" : "。"}${intent ? ` 已按“${intent}”方向做临床语句润色。` : " 建议补充关键证据编号并保持结论可追溯。"}`
+        .replace(/\s+/g, " ")
+        .trim();
     return {
-        panel: document.getElementById('agentPanel'),
-        runId: document.getElementById('processingAgentRunId'),
-        status: document.getElementById('agentRunStatus'),
-        stage: document.getElementById('agentRunStage'),
-        currentTool: document.getElementById('agentCurrentTool'),
-        eventCount: document.getElementById('agentEventCount'),
-        planRevision: document.getElementById('agentPlanRevision'),
-        replanCount: document.getElementById('agentReplanCount'),
-        planObjective: document.getElementById('agentPlanObjective'),
-        goalQuestion: document.getElementById('agentGoalQuestion'),
-        answerStatus: document.getElementById('agentAnswerStatus'),
-        terminationReason: document.getElementById('agentTerminationReason'),
-        reportStatus: document.getElementById('agentReportStatus'),
-        lastError: document.getElementById('agentLastError'),
-        icvStatus: document.getElementById('agentIcvStatus'),
-        icvFindings: document.getElementById('agentIcvFindings'),
-        ekvStatus: document.getElementById('agentEkvStatus'),
-        ekvFindings: document.getElementById('agentEkvFindings'),
-        ekvSupportRate: document.getElementById('agentEkvSupportRate'),
-        consensusDecision: document.getElementById('agentConsensusDecision'),
-        consensusConflicts: document.getElementById('agentConsensusConflicts'),
-        message: document.getElementById('agentRunMessage'),
-        retryStep: document.getElementById('agentRetryStep'),
-        retryHint: document.getElementById('agentRetryHint'),
-        retryActions: document.getElementById('agentRetryActions'),
-        retryBtn: document.getElementById('agentRetryActionBtn'),
+        text: polished,
+        reason: "规则化润色（AI服务不可用时兜底）：保留原意，提升临床表达清晰度。",
+        evidence_refs: Array.isArray(section?.evidence_refs) ? section.evidence_refs : [],
     };
 }
 
-function startAgentPollingIfNeeded() {
-    if (!processingAgentRunId) {
-        return;
-    }
-    ensureCockpitEntryButton();
-    const els = getAgentPanelElements();
-    if (els.runId) {
-        els.runId.textContent = processingAgentRunId;
-    }
-    if (els.panel) {
-        els.panel.style.display = 'block';
-    }
-    if (!agentPollTimer) {
-        pollAgentStatus();
-        agentPollTimer = setInterval(pollAgentStatus, 1500);
-    }
+function reviewLocalSave(sectionId, draftText, doctorNote) {
+    const next = reviewNormalize(state.review.state);
+    const sec = (next.sections || []).find((x) => x.section_id === sectionId);
+    if (!sec) return next;
+    const prev = t(sec.draft_text, "");
+    sec.draft_text = t(draftText, sec.draft_text);
+    sec.doctor_note = t(doctorNote, "");
+    if (token(sec.review_status) === "confirmed" && sec.draft_text !== prev) sec.review_status = "needs_edit";
+    sec.updated_at = new Date().toISOString();
+    return reviewRecomputeLocal(next);
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    document.body.classList.add('processing-page-body');
-
-    const params = new URLSearchParams(window.location.search);
-    processingJobId = params.get('job_id') || '';
-    processingPatientId = params.get('patient_id') || '';
-    processingFileId = params.get('file_id') || '';
-    processingAgentRunId = params.get('agent_run_id') || '';
-
-    if (!processingAgentRunId && processingFileId) {
-        processingAgentRunId = localStorage.getItem(`latest_agent_run_${processingFileId}`) || '';
-    }
-
-    if (processingPatientId) {
-        setCurrentPatientId(processingPatientId);
-        setPatientInfoVisible(true);
-        updatePatientHeader(processingPatientId);
-    }
-
-    setTextIfPresent('processingPatientId', processingPatientId || '-');
-    setTextIfPresent('processingFileId', processingFileId || '-');
-    setTextIfPresent('processingJobId', processingJobId || '-');
-    updateReusableFileHint();
-
-    const agentEls = getAgentPanelElements();
-    if (agentEls.runId) {
-        agentEls.runId.textContent = processingAgentRunId || '-';
-    }
-    ensureCockpitEntryButton();
-    persistAgentRunContext();
-    if (processingAgentRunId) {
-        if (agentEls.message) {
-            agentEls.message.textContent = 'Agent 后置汇总运行中...';
-        }
-        startAgentPollingIfNeeded();
-    } else if (agentEls.message) {
-        agentEls.message.textContent = '本次上传未启用 Agent 后置汇总。';
-    }
-
-    if (!processingJobId) {
-        showProcessingError('缺少 job_id，无法轮询上传处理流程。');
-        return;
-    }
-
-    renderUploadSteps([]);
-    pollProcessingStatus();
-    processingPollTimer = setInterval(pollProcessingStatus, 1000);
-});
-
-function backToUpload() {
-    if (processingPatientId) {
-        window.location.href = `/upload?patient_id=${encodeURIComponent(processingPatientId)}`;
-    } else {
-        window.location.href = '/upload';
-    }
+function reviewLocalConfirm(sectionId, draftText, doctorNote) {
+    const next = reviewLocalSave(sectionId, draftText, doctorNote);
+    const sec = (next.sections || []).find((x) => x.section_id === sectionId);
+    if (!sec) return next;
+    sec.review_status = "confirmed";
+    sec.updated_at = new Date().toISOString();
+    return reviewRecomputeLocal(next);
 }
 
-function goToViewerNow() {
-    if (!processingFileId) {
-        return;
+async function ensureReviewState(force = false) {
+    if (!state.runId) return false;
+    if (state.review.loading) return false;
+    if (state.review.state && !force) {
+        state.review.visible = true;
+        if (state.review.pendingOps.length) await reviewFlushPendingOps();
+        return true;
     }
-    window.location.href = getViewerUrlWithContext();
-}
-
-function getViewerUrlWithContext() {
-    if (!processingFileId) {
-        return '/viewer';
-    }
-    const params = new URLSearchParams();
-    params.set('file_id', processingFileId);
-    if (processingAgentRunId) {
-        params.set('run_id', processingAgentRunId);
-    }
-    return `/viewer?${params.toString()}`;
-}
-
-function getCockpitUrlWithContext() {
-    const params = new URLSearchParams();
-    if (processingAgentRunId) {
-        params.set('run_id', processingAgentRunId);
-    }
-    if (processingFileId) {
-        params.set('file_id', processingFileId);
-    }
-    if (processingPatientId) {
-        params.set('patient_id', processingPatientId);
-    }
-    const query = params.toString();
-    return query ? `/cockpit?${query}` : '/cockpit';
-}
-
-function ensureCockpitEntryButton() {
-    const panel = document.getElementById('agentPanel');
-    if (!panel) return;
-
-    let actions = document.getElementById('agentCockpitActions');
-    if (!actions) {
-        actions = document.createElement('div');
-        actions.id = 'agentCockpitActions';
-        actions.className = 'processing-actions';
-        actions.style.marginTop = '8px';
-        panel.appendChild(actions);
-    }
-
-    let button = document.getElementById('processingCockpitBtn');
-    if (!button) {
-        button = document.createElement('button');
-        button.id = 'processingCockpitBtn';
-        button.className = 'tool-btn';
-        button.textContent = '打开 Cockpit';
-        button.addEventListener('click', () => {
-            window.location.href = getCockpitUrlWithContext();
-        });
-        actions.appendChild(button);
-    }
-}
-
-function persistAgentRunContext() {
-    if (!processingFileId || !processingAgentRunId) {
-        return;
-    }
-    localStorage.setItem(`latest_agent_run_${processingFileId}`, processingAgentRunId);
-}
-
-function showProcessingError(message) {
-    const errorEl = document.getElementById('processingError');
-    errorEl.textContent = message || '上传流程失败';
-    errorEl.style.display = 'block';
-    document.getElementById('processingRetryBtn').style.display = 'inline-block';
-    clearUploadPolling();
-}
-
-function clearUploadPolling() {
-    if (processingPollTimer) {
-        clearInterval(processingPollTimer);
-        processingPollTimer = null;
-    }
-}
-
-function clearAgentPolling() {
-    if (agentPollTimer) {
-        clearInterval(agentPollTimer);
-        agentPollTimer = null;
-    }
-}
-
-function formatElapsed() {
-    const sec = Math.max(0, Math.floor((Date.now() - processingStartedAt) / 1000));
-    return `${sec}s`;
-}
-
-function defaultStepMessage(status) {
-    if (status === 'pending') return '等待执行';
-    if (status === 'running') return '执行中';
-    if (status === 'completed') return '已完成';
-    if (status === 'skipped') return '已跳过';
-    if (status === 'failed') return '执行失败';
-    return '-';
-}
-
-function statusText(status) {
-    if (status === 'pending') return '待执行';
-    if (status === 'running') return '执行中';
-    if (status === 'completed') return '已完成';
-    if (status === 'skipped') return '已跳过';
-    if (status === 'failed') return '失败';
-    return status || '-';
-}
-
-function stringifyRunError(errorValue) {
-    if (!errorValue) {
-        return '-';
-    }
-    if (typeof errorValue === 'string') {
-        return errorValue;
-    }
-    if (typeof errorValue === 'object') {
-        return errorValue.error_message || errorValue.error_code || JSON.stringify(errorValue);
-    }
-    return String(errorValue);
-}
-
-function getDisplayStepsForTimeline(job, run) {
-    const originalSteps = Array.isArray(job?.steps) ? job.steps : [];
-    const steps = originalSteps.map((step) => ({ ...step }));
-    const aiStep = steps.find((step) => step.key === 'ai_report');
-    if (!aiStep) {
-        return steps;
-    }
-
-    aiStep.title = '自动生成结构化报告';
-
-    const agentEnabled = Boolean(job?.agent_run_id || processingAgentRunId);
-    if (!agentEnabled || aiStep.status !== 'skipped') {
-        return steps;
-    }
-
-    if (!run || !run.status) {
-        aiStep.status = 'running';
-        aiStep.message = '等待 Agent 状态同步';
-        return steps;
-    }
-
-    if (run.status === 'queued' || run.status === 'running') {
-        aiStep.status = 'running';
-        aiStep.message = 'Agent 后置汇总正在生成结构化报告...';
-        return steps;
-    }
-
-    if (run.status === 'succeeded') {
-        aiStep.status = 'completed';
-        aiStep.message = '结构化报告已由 Agent 生成完成';
-        return steps;
-    }
-
-    if (run.status === 'failed' || run.status === 'cancelled') {
-        aiStep.status = 'failed';
-        aiStep.message = `结构化报告生成失败: ${stringifyRunError(run.error)}`;
-        return steps;
-    }
-
-    aiStep.status = 'running';
-    aiStep.message = '等待 Agent 状态同步';
-    return steps;
-}
-
-function getDisplayStepsForTimelineAgentAware(job, run) {
-    const steps = getDisplayStepsForTimeline(job, run);
-    const agentEnabled = Boolean(job?.agent_run_id || processingAgentRunId);
-    if (!agentEnabled) {
-        return steps;
-    }
-
-    const runStatus = String(run?.status || '').toLowerCase();
-    const runSteps = Array.isArray(run?.steps) ? run.steps : [];
-    const terminalReason = stringifyRunError(run?.error || run?.termination_reason);
-
-    Object.entries(AGENT_DELEGATED_STEP_MAP).forEach(([uploadStepKey, agentStepKey]) => {
-        const uploadStep = steps.find((step) => step.key === uploadStepKey);
-        if (!uploadStep) {
-            return;
-        }
-
-        const agentStep = runSteps.find((step) => step && step.key === agentStepKey);
-        if (agentStep) {
-            const agentStepStatus = String(agentStep.status || '').toLowerCase();
-            if (agentStepStatus === 'completed') {
-                uploadStep.status = 'completed';
-            } else if (agentStepStatus === 'failed') {
-                uploadStep.status = 'failed';
-            } else if (agentStepStatus === 'skipped') {
-                uploadStep.status = 'skipped';
-            } else if (agentStepStatus === 'pending' || agentStepStatus === 'queued') {
-                uploadStep.status = 'pending';
-            } else {
-                uploadStep.status = 'running';
-            }
-            if (agentStep.message) {
-                uploadStep.message = agentStep.message;
-            }
-            return;
-        }
-
-        if (runStatus === 'failed' || runStatus === 'cancelled' || runStatus === 'paused_review_required') {
-            uploadStep.status = 'failed';
-            uploadStep.message = terminalReason && terminalReason !== '-'
-                ? `Agent failed before ${agentStepKey}: ${terminalReason}`
-                : `Agent failed before ${agentStepKey}.`;
-            return;
-        }
-
-        if (runStatus === 'succeeded') {
-            if (uploadStepKey === 'ai_report') {
-                uploadStep.status = 'completed';
-            } else {
-                uploadStep.status = 'skipped';
-            }
-            return;
-        }
-
-        if (!runStatus || runStatus === 'queued' || runStatus === 'running') {
-            if (uploadStep.status === 'pending' || uploadStep.status === 'skipped') {
-                uploadStep.status = 'running';
-            }
-        }
-    });
-
-    return steps;
-}
-
-function renderUploadSteps(steps) {
-    const container = document.getElementById('processingSteps');
-    if (!container) {
-        return;
-    }
-    container.innerHTML = '';
-
-    const stepMap = {};
-    (steps || []).forEach((step) => {
-        stepMap[step.key] = step;
-    });
-
-    PROCESSING_STEP_ORDER.forEach((key, index) => {
-        const step = stepMap[key] || { key, title: key, status: 'pending', message: '' };
-        const card = document.createElement('div');
-        card.className = `processing-step step-${step.status || 'pending'}`;
-        card.innerHTML = `
-            <div class="processing-step-head">
-                <span class="processing-step-index">${index + 1}</span>
-                <span class="processing-step-title">${step.title || key}</span>
-                <span class="processing-step-status">${statusText(step.status)}</span>
-            </div>
-            <div class="processing-step-msg">${step.message || defaultStepMessage(step.status)}</div>
-        `;
-        container.appendChild(card);
-    });
-}
-
-function rerenderTimelineFromSnapshot() {
-    if (!latestJobSnapshot) {
-        return;
-    }
-    const displaySteps = getDisplayStepsForTimelineAgentAware(latestJobSnapshot, latestAgentRun);
-    renderUploadSteps(displaySteps);
-}
-
-function updateUploadMeta(job) {
-    const modalities = (job.modalities || []).length ? job.modalities.join(', ') : '-';
-    setTextIfPresent('processingModalities', modalities);
-    setTextIfPresent('processingStatus', job.status || '-');
-    setTextIfPresent('processingStepName', job.current_step || '-');
-    setTextIfPresent('processingElapsed', formatElapsed());
-    if (!processingAgentRunId && job.agent_run_id) {
-        processingAgentRunId = job.agent_run_id;
-        setTextIfPresent('processingAgentRunId', processingAgentRunId);
-        persistAgentRunContext();
-        ensureCockpitEntryButton();
-        startAgentPollingIfNeeded();
-    }
-    if (job.file_id && !processingFileId) {
-        processingFileId = String(job.file_id);
-        setTextIfPresent('processingFileId', processingFileId);
-        updateReusableFileHint();
-    }
-}
-
-function updateProgress(progress) {
-    const percent = Math.max(0, Math.min(100, Number(progress || 0)));
-    document.getElementById('processingProgressFill').style.width = `${percent}%`;
-    document.getElementById('processingPercent').textContent = `${percent}%`;
-}
-
-function updateCurrentText(job) {
-    const currentEl = document.getElementById('processingCurrent');
-    const runningStep = (job.steps || []).find((step) => step.status === 'running');
-    if (runningStep) {
-        currentEl.textContent = `正在执行 ${runningStep.title}: ${runningStep.message || ''}`;
-        return;
-    }
-
-    if (job.status === 'completed') {
-        const warnings = job.warnings || [];
-        currentEl.textContent = warnings.length
-            ? `上传完成（含告警）: ${warnings.join(' | ')}`
-            : '上传主流程已完成。';
-        return;
-    }
-
-    if (job.status === 'failed') {
-        currentEl.textContent = `上传失败: ${job.error || '未知错误'}`;
-        return;
-    }
-
-    currentEl.textContent = '正在等待上传处理流程...';
-}
-
-function persistResultToStorage(job) {
-    const result = job.result || {};
-    const fileId = result.file_id || processingFileId || job.file_id;
-    if (!fileId) {
-        return;
-    }
-
-    processingFileId = fileId;
-    setTextIfPresent('processingFileId', processingFileId);
-    updateReusableFileHint();
-    persistAgentRunContext();
-
-    const viewerData = {
-        file_id: fileId,
-        rgb_files: result.rgb_files || [],
-        total_slices: result.total_slices || 0,
-        has_ai: result.has_ai || false,
-        available_models: result.available_models || [],
-        model_configs: result.model_configs || {},
-        skip_ai: result.skip_ai || false,
-    };
-
-    setViewerData(viewerData);
-    sessionStorage.setItem('current_file_id', fileId);
-    localStorage.setItem('current_file_id', fileId);
-
-    if (result.report) {
-        localStorage.setItem(`ai_report_${fileId}`, result.report);
-        localStorage.setItem('ai_report', result.report);
-    }
-    if (result.report_payload) {
-        localStorage.setItem(`ai_report_payload_${fileId}`, JSON.stringify(result.report_payload));
-    }
-    if (result.json_path) {
-        localStorage.setItem(`ai_report_json_path_${fileId}`, result.json_path);
-    }
-
-    localStorage.removeItem(`ai_report_generating_${fileId}`);
-    localStorage.removeItem(`ai_report_error_${fileId}`);
-}
-
-function maybeAutoRedirectToViewer() {
-    if (viewerRedirectScheduled) {
-        return;
-    }
-    viewerRedirectScheduled = true;
-    setTimeout(() => {
-        if (!processingFileId) {
-            return;
-        }
-        window.location.href = getViewerUrlWithContext();
-    }, 1200);
-}
-
-function handleJobCompleted(job) {
-    if (uploadWorkflowCompleted) {
-        return;
-    }
-
-    uploadWorkflowCompleted = true;
-    clearUploadPolling();
-    persistResultToStorage(job);
-
-    document.getElementById('processingViewerBtn').style.display = 'inline-block';
-
-    if (processingAgentRunId) {
-        document.getElementById('processingCurrent').textContent =
-            '上传主流程已完成，正在等待 Agent 后置汇总...';
-        return;
-    }
-
-    document.getElementById('processingCurrent').textContent =
-        '上传主流程已完成，正在跳转到 Viewer...';
-    maybeAutoRedirectToViewer();
-}
-
-async function pollProcessingStatus() {
+    state.review.loading = true;
+    state.review.required = true;
+    state.review.visible = true;
     try {
-        const resp = await fetch(`/api/upload/progress/${encodeURIComponent(processingJobId)}`);
-        const data = await resp.json();
-        if (!resp.ok || !data.success) {
-            showProcessingError(data.error || `无法获取上传进度: ${resp.status}`);
-            return;
-        }
-
-        const job = data.job || {};
-        latestJobSnapshot = job;
-        updateProgress(job.progress || 0);
-        updateUploadMeta(job);
-        rerenderTimelineFromSnapshot();
-        updateCurrentText(job);
-
-        if (job.status === 'failed') {
-            showProcessingError(job.error || '上传流程失败');
-            return;
-        }
-
-        if (job.status === 'completed') {
-            handleJobCompleted(job);
-        }
-    } catch (err) {
-        showProcessingError(`上传轮询失败: ${err.message}`);
-    }
-}
-
-function getStepByKey(run, stepKey) {
-    return (run.steps || []).find((step) => step.key === stepKey) || null;
-}
-
-function getReportStatusText(run) {
-    const reportStep = getStepByKey(run, 'generate_medgemma_report');
-    const status = reportStep ? reportStep.status : '';
-    if (status === 'completed') return '已完成';
-    if (status === 'running') return '生成中';
-    if (status === 'failed') return '失败';
-    if (status === 'skipped') return '已跳过';
-    if (run.status === 'succeeded') return '已完成';
-    if (run.status === 'failed') return '失败';
-    return '未开始';
-}
-
-function getCurrentPlanFrame(run) {
-    if (!run || !Array.isArray(run.plan_frames) || run.plan_frames.length === 0) {
-        return null;
-    }
-    const frames = [...run.plan_frames]
-        .filter((x) => x && typeof x === 'object')
-        .sort((a, b) => Number(a.revision || 0) - Number(b.revision || 0));
-    if (frames.length === 0) {
-        return null;
-    }
-    return frames[frames.length - 1];
-}
-
-function getAnswerStatusText(run) {
-    const token = String(run?.answer_status || '').toLowerCase();
-    if (token === 'pending') return '待生成';
-    if (token === 'running') return '生成中';
-    if (token === 'ready') return '已生成';
-    if (token === 'failed') return '失败';
-    if (token === 'unavailable') return '不可用';
-    return '-';
-}
-
-function getLastErrorText(run) {
-    if (run.error) {
-        return stringifyRunError(run.error);
-    }
-    const failedStep = [...(run.steps || [])].reverse().find((step) => step.status === 'failed');
-    if (failedStep && failedStep.message) {
-        return failedStep.message;
-    }
-    const runStatus = String(run?.status || '').toLowerCase();
-    if (['queued', 'running', 'succeeded', 'cancelled'].includes(runStatus)) {
-        return '无';
-    }
-    return '-';
-}
-
-function parseIcvPayload(raw) {
-    if (!raw || typeof raw !== 'object') {
-        return null;
-    }
-    if (raw.icv && typeof raw.icv === 'object') return raw.icv;
-    if (raw.success && raw.icv && typeof raw.icv === 'object') return raw.icv;
-    if (raw.result && raw.result.icv && typeof raw.result.icv === 'object') return raw.result.icv;
-    if (raw.status && (Array.isArray(raw.findings) || typeof raw.finding_count === 'number')) return raw;
-    return null;
-}
-
-function resolveIcvFromRun(run) {
-    if (!run || typeof run !== 'object') {
-        return null;
-    }
-
-    const toolResults = Array.isArray(run.tool_results) ? run.tool_results : [];
-    const completedIcv = [...toolResults]
-        .reverse()
-        .find((item) => item && item.tool_name === 'icv' && item.status === 'completed');
-    if (completedIcv) {
-        const parsed = parseIcvPayload(completedIcv.structured_output || completedIcv.raw_ref || null);
-        if (parsed) {
-            return { ...parsed, __source: 'tool_results_completed' };
-        }
-    }
-
-    const reportIcv = parseIcvPayload(
-        (((run.result || {}).report_result || {}).report_payload || {}).icv || null
-    );
-    if (reportIcv) {
-        return { ...reportIcv, __source: 'run_result_report_payload' };
-    }
-
-    const failedIcv = [...toolResults]
-        .reverse()
-        .find((item) => item && item.tool_name === 'icv' && item.status === 'failed');
-    if (failedIcv) {
-        return {
-            status: 'unavailable',
-            findings: [],
-            finding_count: null,
-            score: null,
-            confidence_delta: null,
-            error_code: failedIcv.error_code || '',
-            error_message: failedIcv.error_message || '',
-            suggested_action: failedIcv.suggested_action || '',
-            __source: 'tool_results_failed',
-        };
-    }
-
-    return null;
-}
-
-function getIcvFindingCount(icvObj) {
-    if (!icvObj || typeof icvObj !== 'object') return 0;
-    if (typeof icvObj.finding_count === 'number') return icvObj.finding_count;
-    if (Array.isArray(icvObj.findings)) return icvObj.findings.length;
-    if (Array.isArray(icvObj.findings_list)) return icvObj.findings_list.length;
-    return 0;
-}
-
-function parseEkvPayload(raw) {
-    if (!raw || typeof raw !== 'object') {
-        return null;
-    }
-    if (raw.ekv && typeof raw.ekv === 'object') return raw.ekv;
-    if (raw.success && raw.ekv && typeof raw.ekv === 'object') return raw.ekv;
-    if (raw.result && raw.result.ekv && typeof raw.result.ekv === 'object') return raw.result.ekv;
-    if (raw.status && (Array.isArray(raw.claims) || Array.isArray(raw.findings))) return raw;
-    return null;
-}
-
-function resolveEkvFromRun(run) {
-    if (!run || typeof run !== 'object') {
-        return null;
-    }
-
-    const toolResults = Array.isArray(run.tool_results) ? run.tool_results : [];
-    const completed = [...toolResults]
-        .reverse()
-        .find((item) => item && item.tool_name === 'ekv' && item.status === 'completed');
-    if (completed) {
-        const parsed = parseEkvPayload(completed.structured_output || completed.raw_ref || null);
-        if (parsed) return { ...parsed, __source: 'tool_results_completed' };
-    }
-
-    const fromReport = parseEkvPayload(
-        (((run.result || {}).report_result || {}).report_payload || {}).ekv || null
-    );
-    if (fromReport) {
-        return { ...fromReport, __source: 'run_result_report_payload' };
-    }
-
-    const failed = [...toolResults]
-        .reverse()
-        .find((item) => item && item.tool_name === 'ekv' && item.status === 'failed');
-    if (failed) {
-        return {
-            status: 'unavailable',
-            finding_count: null,
-            score: null,
-            confidence_delta: null,
-            support_rate: null,
-            claims: [],
-            findings: [],
-            citations: [],
-            error_code: failed.error_code || '',
-            error_message: failed.error_message || '',
-            suggested_action: failed.suggested_action || '',
-            __source: 'tool_results_failed',
-        };
-    }
-    return null;
-}
-
-function getEkvFindingCount(ekvObj) {
-    if (!ekvObj || typeof ekvObj !== 'object') return 0;
-    if (typeof ekvObj.finding_count === 'number') return ekvObj.finding_count;
-    if (Array.isArray(ekvObj.findings)) return ekvObj.findings.length;
-    return 0;
-}
-
-function getEkvSupportRateText(ekvObj) {
-    if (!ekvObj || typeof ekvObj !== 'object') return '-';
-    const status = String(ekvObj.status || '').toLowerCase();
-    if (status === 'unavailable') {
-        return '-';
-    }
-    const val = Number(ekvObj.support_rate);
-    if (Number.isFinite(val)) {
-        return `${Math.round(val * 10000) / 100}%`;
-    }
-    if (Array.isArray(ekvObj.claims) && ekvObj.claims.length > 0) {
-        const supported = ekvObj.claims.filter((c) => String(c?.verdict || '').toLowerCase() === 'supported').length;
-        const ratio = supported / ekvObj.claims.length;
-        return `${Math.round(ratio * 10000) / 100}%`;
-    }
-    return '-';
-}
-
-function getUnavailableAwareCountDisplay(obj, countValue, listKeys = []) {
-    if (!obj || typeof obj !== 'object') {
-        return '-';
-    }
-    const status = String(obj.status || '').toLowerCase();
-    if (status !== 'unavailable') {
-        return String(countValue ?? 0);
-    }
-
-    const hasItems = listKeys.some((key) => Array.isArray(obj[key]) && obj[key].length > 0);
-    if (hasItems) {
-        return String(countValue ?? 0);
-    }
-
-    const countNum = Number(countValue);
-    if (!Number.isFinite(countNum) || countNum <= 0) {
-        return '-';
-    }
-    return String(countNum);
-}
-
-function parseConsensusPayload(raw) {
-    if (!raw || typeof raw !== 'object') {
-        return null;
-    }
-    if (raw.consensus && typeof raw.consensus === 'object') return raw.consensus;
-    if (raw.success && raw.consensus && typeof raw.consensus === 'object') return raw.consensus;
-    if (raw.result && raw.result.consensus && typeof raw.result.consensus === 'object') return raw.result.consensus;
-    if (raw.status && (typeof raw.decision === 'string' || Array.isArray(raw.conflicts))) return raw;
-    return null;
-}
-
-function resolveConsensusFromRun(run) {
-    if (!run || typeof run !== 'object') {
-        return null;
-    }
-
-    const toolResults = Array.isArray(run.tool_results) ? run.tool_results : [];
-    const completed = [...toolResults]
-        .reverse()
-        .find((item) => item && item.tool_name === 'consensus_lite' && ['completed', 'skipped'].includes(item.status));
-    if (completed) {
-        const parsed = parseConsensusPayload(completed.structured_output || completed.raw_ref || null);
-        if (parsed) return { ...parsed, __source: 'tool_results_completed' };
-    }
-
-    const fromReport = parseConsensusPayload(
-        (((run.result || {}).report_result || {}).report_payload || {}).consensus || null
-    );
-    if (fromReport) {
-        return { ...fromReport, __source: 'run_result_report_payload' };
-    }
-
-    const failed = [...toolResults]
-        .reverse()
-        .find((item) => item && item.tool_name === 'consensus_lite' && item.status === 'failed');
-    if (failed) {
-        return {
-            status: 'unavailable',
-            decision: 'unavailable',
-            conflict_count: null,
-            summary: failed.error_message || '',
-            conflicts: [],
-            next_actions: [],
-            error_code: failed.error_code || '',
-            error_message: failed.error_message || '',
-            suggested_action: failed.suggested_action || '',
-            __source: 'tool_results_failed',
-        };
-    }
-    return null;
-}
-
-function getConsensusConflictCount(consensusObj) {
-    if (!consensusObj || typeof consensusObj !== 'object') return 0;
-    if (typeof consensusObj.conflict_count === 'number') return consensusObj.conflict_count;
-    if (Array.isArray(consensusObj.conflicts)) return consensusObj.conflicts.length;
-    return 0;
-}
-
-function getConsensusDecisionText(consensusObj) {
-    if (!consensusObj || typeof consensusObj !== 'object') {
-        return '-';
-    }
-    const status = String(consensusObj.status || '').toLowerCase();
-    const decision = String(consensusObj.decision || '').toLowerCase();
-
-    if (status === 'unavailable') {
-        const reason = consensusObj.error_message || consensusObj.error_code || '';
-        return reason ? `unavailable (${reason})` : 'unavailable';
-    }
-    if (decision) {
-        return decision;
-    }
-    if (status === 'skipped') {
-        return 'accept';
-    }
-    return '-';
-}
-
-function getLatestRetryableFailedStep(run) {
-    if (!run || !Array.isArray(run.steps)) {
-        return null;
-    }
-    for (let i = run.steps.length - 1; i >= 0; i -= 1) {
-        const step = run.steps[i];
-        if (step && step.status === 'failed' && step.retryable === true) {
-            return step;
-        }
-    }
-    return null;
-}
-
-function updateRetryControls(run) {
-    const els = getAgentPanelElements();
-    if (!els.retryStep || !els.retryHint || !els.retryActions || !els.retryBtn) {
-        return;
-    }
-
-    latestRetryTarget = getLatestRetryableFailedStep(run);
-    const canRetryNow = Boolean(run && run.status === 'failed' && latestRetryTarget);
-
-    if (!canRetryNow) {
-        els.retryStep.textContent = '-';
-        if (run && run.status === 'failed') {
-            els.retryHint.textContent = '当前失败步骤不可重试。';
+        const data = await reviewApiGet();
+        reviewSetState(data.review_state);
+        state.review.offlineMode = false;
+        state.review.error = "";
+        state.review.info = "";
+        const local = reviewLoadLocal();
+        if (local && Array.isArray(local.pending_ops) && local.pending_ops.length) {
+            state.review.pendingOps = local.pending_ops;
+            await reviewFlushPendingOps();
         } else {
-            els.retryHint.textContent = '当前无需重试。';
+            reviewClearLocalOps();
         }
-        els.retryActions.style.display = 'none';
-        els.retryBtn.disabled = false;
-        els.retryBtn.textContent = '重试失败步骤';
-        return;
+        return true;
+    } catch (err) {
+        const local = reviewLoadLocal();
+        if (local?.review_state) {
+            reviewSetState(local.review_state, { keepSuggestion: true });
+            state.review.pendingOps = Array.isArray(local.pending_ops) ? local.pending_ops : [];
+            state.review.offlineMode = true;
+            state.review.error = `后端暂不可用，已切换本地兜底（${err.message}）`;
+            return true;
+        }
+        if (state.latestRun) {
+            reviewSetState(reviewBuildLocalFromRun(state.latestRun));
+            state.review.offlineMode = true;
+            state.review.error = `后端暂不可用，已初始化本地审阅（${err.message}）`;
+            return true;
+        }
+        state.review.error = `无法初始化报告分段审阅：${err.message}`;
+        return false;
+    } finally {
+        state.review.loading = false;
     }
-
-    const attempts = Number(latestRetryTarget.attempts || 0);
-    const title = latestRetryTarget.title || latestRetryTarget.key || '-';
-    els.retryStep.textContent = `${title} (${latestRetryTarget.key || '-'})`;
-    els.retryHint.textContent = `可重试失败步骤（当前 attempt=${attempts}）。`;
-    els.retryActions.style.display = 'flex';
-    els.retryBtn.disabled = retrySubmitting;
-    els.retryBtn.textContent = retrySubmitting ? '重试提交中...' : '重试失败步骤';
 }
 
-async function retryAgentFailedStep() {
-    if (retrySubmitting || !processingAgentRunId) {
+function clearRevealTimer() {
+    if (!state.revealTimer) return;
+    clearInterval(state.revealTimer);
+    state.revealTimer = null;
+}
+
+function nodeById(id) {
+    return state.nodes.find((n) => n.id === id) || null;
+}
+
+function isNodeEligible(node) {
+    if (!node) return false;
+    const status = normStatus(node.status);
+    return REVEAL_ELIGIBLE.has(status);
+}
+
+function revealOneNode() {
+    if (!state.revealPendingIds.length) {
+        clearRevealTimer();
         return;
     }
+    const nextId = state.revealPendingIds.shift();
+    if (!nextId) return;
+    if (!state.revealedNodeIds.includes(nextId)) {
+        state.revealedNodeIds.push(nextId);
+        state.revealAt[nextId] = Date.now();
+    }
+    render();
+}
 
-    const run = latestAgentRun || {};
-    const target = getLatestRetryableFailedStep(run);
-    const els = getAgentPanelElements();
-    if (!target || run.status !== 'failed') {
-        if (els.retryHint) {
-            els.retryHint.textContent = '当前没有可重试的失败步骤。';
+function syncRevealQueue() {
+    const order = state.nodes.map((n) => n.id);
+    const keep = new Set(order);
+    const eligibleOrder = state.nodes.filter((n) => isNodeEligible(n)).map((n) => n.id);
+    const eligibleSet = new Set(eligibleOrder);
+
+    state.revealedNodeIds = state.revealedNodeIds.filter((id) => keep.has(id));
+    state.revealPendingIds = state.revealPendingIds.filter(
+        (id) => keep.has(id) && eligibleSet.has(id) && !state.revealedNodeIds.includes(id)
+    );
+
+    eligibleOrder.forEach((id) => {
+        if (!state.revealedNodeIds.includes(id) && !state.revealPendingIds.includes(id)) {
+            state.revealPendingIds.push(id);
         }
-        updateRetryControls(run);
+    });
+
+    if (!state.revealedNodeIds.length && state.revealPendingIds.length) {
+        const first = state.revealPendingIds.shift();
+        state.revealedNodeIds.push(first);
+        state.revealAt[first] = Date.now();
+    }
+
+    const terminal = TERMINAL.has(token(state.latestRun?.status));
+    const nextPace = terminal && state.revealPendingIds.length >= 3
+        ? state.revealCatchupMs
+        : state.revealPaceMs;
+
+    if (state.revealCurrentPace !== nextPace) {
+        state.revealCurrentPace = nextPace;
+        clearRevealTimer();
+    }
+
+    if (!state.revealPendingIds.length) {
+        clearRevealTimer();
+        return;
+    }
+    if (!state.revealTimer) {
+        state.revealTimer = setInterval(revealOneNode, state.revealCurrentPace);
+    }
+}
+
+function viewerUrl() { if (!state.fileId) return "/viewer"; const p = new URLSearchParams({ file_id: state.fileId }); if (state.runId) p.set("run_id", state.runId); return `/viewer?${p.toString()}`; }
+function cockpitUrl() { const p = new URLSearchParams(); if (state.runId) p.set("run_id", state.runId); if (state.fileId) p.set("file_id", state.fileId); if (state.patientId) p.set("patient_id", state.patientId); return `/cockpit?${p.toString()}`; }
+function w0Url() { const p = new URLSearchParams(); if (state.runId) p.set("run_id", state.runId); if (state.fileId) p.set("file_id", state.fileId); if (state.patientId) p.set("patient_id", state.patientId); return `/strokeclaw/w0?${p.toString()}`; }
+function backToUpload() { window.location.href = state.patientId ? `/upload?patient_id=${encodeURIComponent(state.patientId)}` : "/upload"; }
+
+function hintIndex(events) {
+    const map = {};
+    (events || []).slice().sort((a, b) => Number(a?.event_seq || 0) - Number(b?.event_seq || 0)).forEach((e) => {
+        const tool = t(e?.tool_name, ""); if (!tool) return;
+        const h = map[tool] || { status: "pending", input: null, output: null, ts: "", inputSummary: "", resultSummary: "", clinicalImpact: "", riskLevel: "none", riskItems: [], actionRequired: "", actionLog: "", narrativeHint: "", eventType: "" };
+        h.ts = t(e?.timestamp, h.ts); h.eventType = token(e?.event_type || h.eventType);
+        if (e?.input_ref !== undefined) h.input = e.input_ref;
+        if (e?.output_ref !== undefined) h.output = e.output_ref;
+        if (typeof e?.input_summary === "string" && e.input_summary.trim()) h.inputSummary = e.input_summary.trim();
+        if (typeof e?.result_summary === "string" && e.result_summary.trim()) h.resultSummary = e.result_summary.trim();
+        if (typeof e?.clinical_impact === "string" && e.clinical_impact.trim()) h.clinicalImpact = e.clinical_impact.trim();
+        if (typeof e?.risk_level === "string" && e.risk_level.trim()) h.riskLevel = e.risk_level.trim().toLowerCase();
+        if (Array.isArray(e?.risk_items)) h.riskItems = [...new Set([...h.riskItems, ...e.risk_items.map((x) => String(x || "").trim()).filter(Boolean)])];
+        if (typeof e?.action_required === "string" && e.action_required.trim()) h.actionRequired = e.action_required.trim();
+        if (typeof e?.action_log === "string" && e.action_log.trim()) h.actionLog = e.action_log.trim();
+        if (typeof e?.narrative_hint === "string" && e.narrative_hint.trim()) h.narrativeHint = e.narrative_hint.trim();
+        const et = token(e?.event_type); const s = normStatus(e?.status);
+        if (et === "issue_found" || s === "issue") h.status = "issue";
+        else if (et === "human_review_required" || s === "waiting") h.status = "waiting";
+        else if (et === "step_started" || s === "running") { if (!["issue", "waiting"].includes(h.status)) h.status = "running"; }
+        else if (["step_completed", "human_review_completed", "writeback_completed"].includes(et) || s === "completed") { if (h.status !== "issue") h.status = "completed"; }
+        map[tool] = h;
+    });
+    return map;
+}
+
+function templateFor(key) { return TEMPLATES[key] || TEMPLATES.default; }
+function summaryTriplet(key, status, hint, fallback) {
+    const tpl = templateFor(key);
+    return {
+        doing: hint?.inputSummary || `${status === "running" ? "正在执行" : status === "completed" ? "已完成" : status === "issue" ? "风险中断" : status === "waiting" ? "等待人工" : "等待执行"}：${tpl[1]}`,
+        meaning: hint?.clinicalImpact || tpl[2],
+        conclusion: hint?.resultSummary || `当前结论：${fallback}`,
+    };
+}
+
+function buildNodes() {
+    const nodes = [];
+    const jobSteps = Object.create(null); (state.latestJob?.steps || []).forEach((s) => { if (s?.key) jobSteps[s.key] = s; });
+    const runSteps = Object.create(null); (state.latestRun?.steps || []).forEach((s) => { if (s?.key) runSteps[s.key] = s; });
+    UPLOAD_NODES.forEach((cfg, idx) => {
+        const h = cfg.delegated ? state.hints[cfg.delegated] : null;
+        const runStep = cfg.delegated ? runSteps[cfg.delegated] : null;
+        const jobStep = jobSteps[cfg.key] || null;
+        const status = normStatus(h?.status || runStep?.status || jobStep?.status || "pending");
+        const fallback = t((runStep && runStep.message) || (jobStep && jobStep.message), status === "pending" ? "节点未开始" : status === "running" ? "节点处理中" : status === "waiting" ? "等待人工确认" : status === "completed" ? "节点已完成" : "节点执行异常");
+        const inputDefault = cfg.key === "archive_ready" ? { patient_id: state.patientId || "-", file_id: state.fileId || "-" } : cfg.key === "modality_detect" ? { available_modalities: modalities() } : cfg.key === "ai_report" ? { goal_question: t(state.latestRun?.planner_input?.goal_question || state.latestRun?.planner_input?.question) } : { run_id: state.runId, tool_name: cfg.delegated || cfg.key };
+        nodes.push({
+            id: `upload_${cfg.key}`, key: cfg.key, title: cfg.title, subtitle: cfg.subtitle, chip: cfg.chip, status, group: "upload", order: idx + 1,
+            guide: templateFor(cfg.key)[0], summary: summaryTriplet(cfg.key, status, h, fallback),
+            detailInput: h?.input ?? inputDefault, detailResult: h?.output ?? fallback,
+            riskLevel: token(h?.riskLevel || (status === "issue" ? "high" : "none")), riskItems: Array.isArray(h?.riskItems) ? h.riskItems : (status === "issue" ? [fallback] : []),
+            actionRequired: t(h?.actionRequired, status === "waiting" ? "请医生确认该节点后继续。" : ""), actionLog: t(h?.actionLog, ""),
+            meta: [runStep?.attempts ? `attempt ${runStep.attempts}` : "", t(runStep?.ended_at || runStep?.started_at || h?.ts, "")].filter(Boolean),
+            narrativeHint: h?.narrativeHint || "",
+        });
+    });
+    const skip = new Set(UPLOAD_NODES.map((x) => x.delegated).filter(Boolean));
+    let order = 30;
+    if (state.latestRun?.planner_output || state.hints.triage_planner) {
+        const h = state.hints.triage_planner || {};
+        const st = normStatus(h.status || (state.latestRun?.planner_output ? "completed" : "running"));
+        const fallback = summarize(state.latestRun?.planner_output || "计划生成中");
+        nodes.push({ id: "agent_triage_planner", key: "triage_planner", ...getMeta("triage_planner"), status: st, group: "agent", order: order++, guide: templateFor("triage_planner")[0], summary: summaryTriplet("triage_planner", st, h, fallback), detailInput: h.input ?? (state.latestRun?.planner_input || { run_id: state.runId }), detailResult: h.output ?? fallback, riskLevel: token(h?.riskLevel || "none"), riskItems: Array.isArray(h?.riskItems) ? h.riskItems : [], actionRequired: t(h?.actionRequired, ""), actionLog: t(h?.actionLog, ""), meta: [t(h.ts, "")].filter(Boolean), narrativeHint: h?.narrativeHint || "" });
+    }
+    (state.latestRun?.steps || []).forEach((s) => {
+        const key = t(s?.key, ""); if (!key || skip.has(key) || key === "triage_planner") return;
+        const h = state.hints[key] || null; const st = normStatus(h?.status || s.status || "pending");
+        const fallback = t(s.message, st === "pending" ? "节点未开始" : st === "running" ? "节点处理中" : st === "waiting" ? "等待人工确认" : st === "completed" ? "节点已完成" : "节点执行异常");
+        const meta = getMeta(key);
+        nodes.push({ id: `agent_${key}`, key, title: meta.title, subtitle: meta.subtitle, chip: meta.chip, status: st, group: "agent", order: order++, guide: templateFor(key)[0], summary: summaryTriplet(key, st, h, fallback), detailInput: h?.input ?? { run_id: state.runId, tool_name: key }, detailResult: h?.output ?? fallback, riskLevel: token(h?.riskLevel || (st === "issue" ? "high" : "none")), riskItems: Array.isArray(h?.riskItems) ? h.riskItems : (st === "issue" ? [fallback] : []), actionRequired: t(h?.actionRequired, st === "waiting" ? "请医生确认该节点后继续。" : ""), actionLog: t(h?.actionLog, ""), meta: [s.attempts ? `attempt ${s.attempts}` : "", t(s.ended_at || s.started_at || h?.ts, "")].filter(Boolean), narrativeHint: h?.narrativeHint || "" });
+    });
+    return nodes.sort((a, b) => a.order - b.order);
+}
+
+function tableRows(data) { if (data === null || data === undefined) return [{ k: "value", v: "-" }]; if (typeof data !== "object" || Array.isArray(data)) return [{ k: "value", v: summarize(data) }]; const keys = Object.keys(data); return (keys.length ? keys : ["value"]).slice(0, 16).map((k) => ({ k, v: summarize(keys.length ? data[k] : data) })); }
+
+function nodeCard(node, ctx = {}) {
+    const card = document.createElement("article");
+    const classes = [`runtime-node-card`, `status-${node.status}`];
+    if (ctx.isActive) classes.push("is-active");
+    if (ctx.isHistory) classes.push("is-history");
+    if (ctx.isNew) classes.push("is-enter");
+    card.className = classes.join(" ");
+    card.dataset.nodeId = node.id;
+    card.dataset.nodeOrder = String(node.order || 0);
+    const expanded = Boolean(state.expanded[node.id]);
+    const riskClass = node.riskLevel || "medium";
+    const detail = `
+      <div class="runtime-node-detail${expanded ? " expanded" : ""}">
+        <div class="runtime-node-block"><div class="runtime-node-block-label">INPUT</div><table class="runtime-detail-table"><tbody>${tableRows(node.detailInput).map((x) => `<tr><th>${x.k}</th><td>${x.v}</td></tr>`).join("")}</tbody></table><pre class="runtime-node-pre">${pretty(node.detailInput)}</pre></div>
+        <div class="runtime-node-block result-${node.status}"><div class="runtime-node-block-label">RESULT</div><table class="runtime-detail-table"><tbody>${tableRows(node.detailResult).map((x) => `<tr><th>${x.k}</th><td>${x.v}</td></tr>`).join("")}</tbody></table><pre class="runtime-node-pre">${pretty(node.detailResult)}</pre></div>
+      </div>`;
+    card.innerHTML = `
+      <div class="runtime-node-head"><div class="runtime-node-head-left"><span class="runtime-node-icon status-${node.status}">${statusIcon(node.status)}</span><div class="runtime-node-title-wrap"><div class="runtime-node-title">${node.title}</div><div class="runtime-node-subtitle">${node.subtitle}</div></div></div><span class="runtime-status-pill ${node.status}">${STATUS_TEXT[node.status] || STATUS_TEXT.pending}</span></div>
+      <div class="runtime-node-guide">${t(node.guide)}</div>
+      <div class="runtime-node-summary">
+        <div class="runtime-summary-row"><span class="runtime-summary-key">正在做</span><span class="runtime-summary-value">${t(node.summary.doing)}</span></div>
+        <div class="runtime-summary-row"><span class="runtime-summary-key">临床意义</span><span class="runtime-summary-value">${t(node.summary.meaning)}</span></div>
+        <div class="runtime-summary-row"><span class="runtime-summary-key">当前结论</span><span class="runtime-summary-value">${t(node.summary.conclusion)}</span></div>
+      </div>
+      ${node.riskItems.length ? `<div class="runtime-risk-box level-${riskClass}"><div class="runtime-risk-head">风险提示（${riskClass.toUpperCase()}）</div><ul class="runtime-risk-list">${node.riskItems.map((x) => `<li>${x}</li>`).join("")}</ul></div>` : ""}
+      ${node.actionRequired ? `<div class="runtime-human-box"><div class="runtime-human-head">人工操作节点</div><div class="runtime-human-line">待执行动作：${node.actionRequired}</div>${node.actionLog ? `<div class="runtime-human-line">操作记录：${node.actionLog}</div>` : ""}</div>` : ""}
+      <button class="runtime-detail-toggle" type="button" data-toggle-node="${node.id}">${expanded ? "收起详情" : "展开详情"}</button>
+      ${detail}
+      <div class="runtime-node-meta">${(node.meta.length ? node.meta : [node.group === "upload" ? "upload_chain" : "agent_network"]).map((m) => `<span class="runtime-node-meta-item">${m}</span>`).join("")}</div>`;
+    return card;
+}
+
+function pickActiveNode(nodes) {
+    if (!Array.isArray(nodes) || !nodes.length) return null;
+    return nodes.find((n) => n.status === "running")
+        || nodes.find((n) => n.status === "waiting")
+        || nodes.find((n) => n.status === "issue")
+        || nodes[nodes.length - 1];
+}
+
+function maybeFocus(nodeId) {
+    if (Date.now() - state.lastManualScrollAt < 8000) return;
+    if (!nodeId || nodeId === state.lastFocusNode) return;
+    const elm = document.querySelector(`[data-node-id="${nodeId}"]`); if (!elm) return;
+    state.lastFocusNode = nodeId;
+    elm.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function addNarrative(feed, title, text) { const n = document.createElement("article"); n.className = "runtime-narrative-card"; n.innerHTML = `<h3>${title}</h3><p>${text}</p>`; feed.appendChild(n); }
+
+function renderFinalization(run) {
+    const card = $("runtimeFinalizationCard"); const body = $("runtimeFinalizationBody"); const title = $("runtimeFinalizationTitle");
+    const status = normStatus(run?.status || (state.uploadDone ? "completed" : "pending"));
+    card.hidden = !(state.uploadDone || TERMINAL.has(token(run?.status))); if (card.hidden) return;
+    const done = state.nodes.filter((n) => n.status === "completed").length;
+    const riskCount = state.nodes.filter((n) => n.riskItems.length).length;
+    body.innerHTML = "";
+    const lines = status === "completed" ? [
+        "闭环状态：流程已完成并可归档。",
+        `完成步骤：${done}/${state.nodes.length || done}`,
+        `风险处置：${riskCount ? `识别 ${riskCount} 项风险并已纳入处置` : "未发现阻断风险"}`,
+        "下一步建议：进入 Viewer 复核影像与报告并签发。",
+    ] : status === "waiting" ? [
+        "闭环状态：等待人工确认。",
+        `待确认事项：${t(run?.error?.error_message || run?.termination_reason, "请医生复核关键节点。")}`,
+        "建议：完成人工复核后继续推进。",
+    ] : [
+        "闭环状态：流程失败。",
+        `失败原因：${t(run?.error?.error_message || run?.termination_reason || state.error, "未知错误")}`,
+        `已完成步骤：${done}/${state.nodes.length || done}`,
+        "建议：检查数据完整性与依赖后重试。",
+    ];
+    title.textContent = status === "completed" ? "质控闭环完成：临床归档摘要" : status === "waiting" ? "等待人工确认" : "流程异常：请处理后重试";
+    [`病例编号：${t(state.fileId)}`, ...lines].forEach((line) => { const p = document.createElement("p"); p.textContent = line; body.appendChild(p); });
+}
+
+function reviewProgressPercent(reviewState) {
+    const total = Number(reviewState?.total_sections || 0);
+    const done = Number(reviewState?.confirmed_count || 0);
+    if (!total) return 0;
+    return Math.min(100, Math.max(0, Math.round((done / total) * 100)));
+}
+
+function reviewReadableRisk(level) {
+    const v = token(level);
+    if (v === "high") return "高风险";
+    if (v === "medium") return "中风险";
+    return "低风险";
+}
+
+function reviewIsLocked(sectionId) {
+    const st = state.review.state;
+    if (!st || !Array.isArray(st.sections)) return false;
+    if (st.all_confirmed) return false;
+    const map = reviewSectionIndexMap(st.sections);
+    const idx = map[String(sectionId || "")];
+    const currentIdx = map[String(st.current_section_id || "")];
+    if (!Number.isInteger(idx) || !Number.isInteger(currentIdx)) return false;
+    const sec = st.sections[idx] || {};
+    if (token(sec.review_status) === "confirmed") return false;
+    return idx > currentIdx;
+}
+
+function renderReviewPanel() {
+    const card = $("runtimeReviewCard");
+    const body = $("runtimeReviewBody");
+    if (!card || !body) return;
+
+    const shouldShow = !!(state.review.visible && state.review.required);
+    card.hidden = !shouldShow;
+    if (!shouldShow) {
+        body.innerHTML = "";
         return;
     }
 
-    retrySubmitting = true;
-    updateRetryControls(run);
+    if (state.review.loading) {
+        body.innerHTML = '<div class="runtime-review-note">正在初始化章节审阅器...</div>';
+        return;
+    }
 
-    try {
-        const resp = await fetch(`/api/agent/runs/${encodeURIComponent(processingAgentRunId)}/retry`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                step_key: target.key,
-                reason: 'processing_page_manual_retry',
-            }),
-        });
-        const data = await resp.json();
-        if (!resp.ok || !data.success) {
-            const errText = data.error || `重试提交失败 (${resp.status})`;
-            if (els.retryHint) {
-                els.retryHint.textContent = errText;
+    const reviewState = state.review.state;
+    if (!reviewState || !Array.isArray(reviewState.sections) || !reviewState.sections.length) {
+        body.innerHTML = `<div class="runtime-review-note">${t(state.review.error, "暂未获取到可审阅章节。")}</div>`;
+        return;
+    }
+
+    const sections = reviewState.sections;
+    const currentSection = reviewGetCurrentSection() || sections[0];
+    const percent = reviewProgressPercent(reviewState);
+    const canFinalize = !!reviewState.all_confirmed;
+    const side = sections.map((sec, idx) => {
+        const sid = t(sec.section_id, `section_${idx + 1}`);
+        const st = token(sec.review_status || "pending");
+        const active = sid === t(state.review.currentSectionId, sid);
+        const locked = reviewIsLocked(sid);
+        return `<button type="button" class="runtime-review-section-btn ${active ? "active" : ""} ${st} ${locked ? "locked" : ""}" data-review-section="${sid}" ${locked ? "disabled" : ""}>
+            <span class="runtime-review-section-index">${idx + 1}</span>
+            <span class="runtime-review-section-main">
+                <strong>${t(sec.title, sid)}</strong>
+                <small>${st === "confirmed" ? "已确认" : st === "needs_edit" ? "待复核" : "待确认"}</small>
+            </span>
+        </button>`;
+    }).join("");
+
+    const evidenceList = Array.isArray(currentSection.evidence_refs) && currentSection.evidence_refs.length
+        ? `<ul>${currentSection.evidence_refs.map((e) => `<li>${t(e)}</li>`).join("")}</ul>`
+        : "<div>暂无结构化证据引用，建议在确认前补充。</div>";
+
+    const suggestion = state.review.rewriteSuggestion
+        ? `<div class="runtime-review-suggestion">
+            <div class="runtime-review-field-label">AI改写建议</div>
+            <div>${t(state.review.rewriteSuggestion.text, "-")}</div>
+            <div class="runtime-review-note">${t(state.review.rewriteSuggestion.reason, "")}</div>
+            <button type="button" class="runtime-review-btn" data-review-action="apply_suggestion">一键采纳建议</button>
+        </div>`
+        : "";
+
+    const noteLines = [];
+    if (state.review.offlineMode) noteLines.push("当前为本地兜底模式，修改会在网络恢复后自动回写。");
+    if (state.review.pendingOps.length) noteLines.push(`待同步操作：${state.review.pendingOps.length} 条。`);
+    if (state.review.error) noteLines.push(state.review.error);
+    if (state.review.info) noteLines.push(state.review.info);
+    const noteText = noteLines.join(" ");
+
+    body.innerHTML = `
+        <div class="runtime-review-progress">
+            <div class="runtime-review-progress-head">
+                <strong>报告分段确认闭环</strong>
+                <span>${reviewState.confirmed_count || 0}/${reviewState.total_sections || sections.length} 已确认</span>
+            </div>
+            <div class="runtime-review-progress-bar"><span style="width:${percent}%;"></span></div>
+            <div class="runtime-review-progress-meta">完成度 ${percent}% · 未全部确认前禁止跳转 Viewer</div>
+        </div>
+        <div class="runtime-review-grid">
+            <aside class="runtime-review-sidebar">${side}</aside>
+            <section class="runtime-review-main">
+                <div class="runtime-review-title-row">
+                    <div>
+                        <h3>${t(currentSection.title, currentSection.section_id)}</h3>
+                        <p>${t(currentSection.lead, "请确认本章节内容后继续。")}</p>
+                    </div>
+                    <span class="runtime-status-pill ${token(currentSection.review_status || "pending")}">${STATUS_TEXT[token(currentSection.review_status || "pending")] || STATUS_TEXT.pending}</span>
+                </div>
+                <div class="runtime-review-guide">${t(currentSection.guide, "请逐段确认并补充必要备注。")}</div>
+                <div class="runtime-review-evidence">
+                    <div class="runtime-review-field-label">证据摘要（${reviewReadableRisk(currentSection.risk_level)})</div>
+                    ${evidenceList}
+                </div>
+                <div class="runtime-review-field">
+                    <label for="runtimeReviewRewriteIntent">改写意图（可选）</label>
+                    <input id="runtimeReviewRewriteIntent" type="text" placeholder="例如：更简洁、更偏临床决策语气">
+                </div>
+                <div class="runtime-review-field">
+                    <label for="runtimeReviewDraft">当前草稿</label>
+                    <textarea id="runtimeReviewDraft">${t(currentSection.draft_text, "")}</textarea>
+                </div>
+                <div class="runtime-review-field">
+                    <label for="runtimeReviewNote">医生备注</label>
+                    <textarea id="runtimeReviewNote" placeholder="可填写补充说明与修订原因">${t(currentSection.doctor_note, "")}</textarea>
+                </div>
+                ${suggestion}
+                <div class="runtime-review-actions">
+                    <button type="button" class="runtime-review-btn" data-review-action="rewrite_section"${state.review.saving ? " disabled" : ""}>AI改写此段</button>
+                    <button type="button" class="runtime-review-btn" data-review-action="save_section"${state.review.saving ? " disabled" : ""}>保存编辑</button>
+                    <button type="button" class="runtime-review-btn primary" data-review-action="confirm_section"${state.review.saving ? " disabled" : ""}>确认本段并继续</button>
+                    <button type="button" class="runtime-review-btn warn" data-review-action="finalize_review"${(!canFinalize || state.review.saving) ? " disabled" : ""}>全部确认后进入 Viewer</button>
+                </div>
+                <div class="runtime-review-note">${noteText || "提示：高风险章节需显式确认后才可进入下一段。"} </div>
+            </section>
+        </div>
+    `;
+}
+
+function reviewReadEditorValues() {
+    const sectionId = t(state.review.currentSectionId, t(state.review.state?.current_section_id, ""));
+    return {
+        sectionId,
+        draftText: t($("runtimeReviewDraft")?.value, ""),
+        doctorNote: t($("runtimeReviewNote")?.value, ""),
+        rewriteIntent: t($("runtimeReviewRewriteIntent")?.value, ""),
+    };
+}
+
+function render() {
+    const run = state.latestRun || {};
+    const job = state.latestJob || {};
+    state.nodes = buildNodes();
+
+    const currentNodeIds = new Set(state.nodes.map((n) => n.id));
+    Object.keys(state.revealAt).forEach((id) => { if (!currentNodeIds.has(id)) delete state.revealAt[id]; });
+    Object.keys(state.renderedFeedIds).forEach((id) => { if (!currentNodeIds.has(id)) delete state.renderedFeedIds[id]; });
+
+    syncRevealQueue();
+    const visibleSet = new Set(state.revealedNodeIds);
+    const visibleNodes = state.nodes.filter((n) => visibleSet.has(n.id));
+    const activeNode = pickActiveNode(visibleNodes);
+
+    $("runtimeSessionToken").textContent = t((state.runId || state.jobId || "session").slice(0, 18));
+    $("runtimeJobId").textContent = t(state.jobId);
+    $("runtimeRunId").textContent = t(state.runId);
+    $("runtimePatientId").textContent = t(state.patientId);
+    $("runtimeStartAt").textContent = t(state.startedAt);
+    $("runtimeFileId").textContent = t(state.fileId);
+    $("runtimeModalities").textContent = modalities().join(" + ") || "-";
+    $("runtimeGoalQuestion").textContent = t(run?.planner_input?.goal_question || run?.planner_input?.question);
+    $("runtimeCurrentStage").textContent = t(run.stage || job.current_step);
+    $("runtimeCurrentTool").textContent = t(run.current_tool);
+    $("runtimeTerminationReason").textContent = t(run.termination_reason);
+    setPill($("runtimeOverallStatus"), run.status || job.status || "pending");
+
+    const plan = run?.plan_frames?.length ? run.plan_frames[run.plan_frames.length - 1] : null;
+    $("runtimeOrchestrationText").textContent = plan?.objective
+        ? `${plan.objective}。系统会在每个节点展示“正在做 / 临床意义 / 当前结论”。`
+        : "上传完成后，系统将依次执行影像处理与多智能体协作，并持续展示临床可读解释。";
+    $("runtimeOrchestrationPath").textContent = Array.isArray(plan?.next_tools)
+        ? plan.next_tools.map((x) => getMeta(x).chip).join(" → ")
+        : "Case_Intake → Modality_Detect → CTP_Generate → Stroke_Analysis → Report → Agent_Network";
+
+    const note = $("runtimeCaseNote");
+    note.classList.toggle("error", !!state.error);
+    note.textContent = state.error
+        ? state.error
+        : (state.review.required && !reviewCanEnterViewer())
+            ? `报告分段确认进行中：${t(state.review.currentSectionId || state.review.state?.current_section_id, "请从首段开始确认")}。`
+        : state.awaitingReport
+            ? "运行已完成，等待报告就绪后自动跳转 Viewer。"
+            : normStatus(run.status) === "running"
+                ? `当前节点：${t(run.current_tool || run.stage, "处理中")}`
+                : normStatus(run.status) === "completed"
+                    ? "流程完成，即将进入 Viewer。"
+                    : normStatus(run.status) === "waiting"
+                        ? "流程进入人工确认阶段。"
+                        : normStatus(job.status) === "running"
+                            ? "上传主链处理中，完成后进入 Agent 协作。"
+                            : normStatus(job.status) === "completed"
+                                ? "上传完成，等待 Agent 节点执行。"
+                                : "正在等待任务启动...";
+
+    const feed = $("runtimeFeed");
+    feed.innerHTML = "";
+    if (!state.nodes.length) {
+        clearRevealTimer();
+        feed.innerHTML = '<div class="runtime-empty">等待流程节点...</div>';
+    } else if (!visibleNodes.length) {
+        feed.innerHTML = '<div class="runtime-empty">等待流程节点...</div>';
+    } else {
+        addNarrative(feed, "AGENT ORCHESTRATION", "系统已接收病例，开始执行“上传主链 + 多智能体协作链路”。");
+        let moved = false;
+        let risked = false;
+        let waited = false;
+        visibleNodes.forEach((node) => {
+            if (!moved && node.group === "agent") {
+                addNarrative(feed, "AGENT ORCHESTRATION", "上传主链完成，进入智能体协作阶段。");
+                moved = true;
             }
+            if (!risked && node.riskItems.length) {
+                addNarrative(feed, "AGENT ORCHESTRATION", "检测到风险：系统已给出风险级别与影响说明。");
+                risked = true;
+            }
+            if (!waited && node.actionRequired) {
+                addNarrative(feed, "AGENT ORCHESTRATION", "流程进入人工确认节点，等待医生复核。");
+                waited = true;
+            }
+            const isNew = !state.renderedFeedIds[node.id];
+            feed.appendChild(nodeCard(node, {
+                isActive: activeNode?.id === node.id,
+                isHistory: !!activeNode && activeNode.id !== node.id,
+                isNew,
+            }));
+            if (isNew) state.renderedFeedIds[node.id] = Date.now();
+        });
+        maybeFocus(activeNode?.id || "");
+    }
+
+    const chips = $("runtimeRailChips");
+    chips.innerHTML = "";
+    if (!state.nodes.length) {
+        chips.innerHTML = '<span class="runtime-chip empty">No nodes</span>';
+        $("runtimeRailSteps").textContent = "Steps 0/0";
+        $("runtimeRailPercent").textContent = "0%";
+    } else {
+        const done = state.nodes.filter((n) => n.status === "completed").length;
+        state.nodes.forEach((n) => {
+            const c = document.createElement("span");
+            c.className = `runtime-chip ${n.status}`;
+            if (activeNode?.id === n.id) c.classList.add("current");
+            if (!visibleSet.has(n.id)) c.classList.add("pending-reveal");
+            c.textContent = n.chip;
+            chips.appendChild(c);
+        });
+        $("runtimeRailSteps").textContent = `Steps ${done}/${state.nodes.length}`;
+        $("runtimeRailPercent").textContent = `${Math.round((done / state.nodes.length) * 100)}%`;
+    }
+
+    renderFinalization(run);
+    renderReviewPanel();
+    $("runtimeErrorBanner").hidden = !state.error;
+    $("runtimeErrorBanner").textContent = state.error || "";
+}
+
+function persistUpload(job) {
+    const result = job?.result || {}; const fileId = result.file_id || state.fileId || job.file_id; if (!fileId) return;
+    state.fileId = String(fileId);
+    if (typeof setViewerData === "function") setViewerData({ file_id: fileId, rgb_files: result.rgb_files || [], total_slices: result.total_slices || 0, has_ai: result.has_ai || false, available_models: result.available_models || [], model_configs: result.model_configs || {}, skip_ai: result.skip_ai || false });
+    sessionStorage.setItem("current_file_id", fileId); localStorage.setItem("current_file_id", fileId);
+    persistReport(fileId, { report: result.report, report_payload: result.report_payload });
+}
+function showViewerBtns(show) { const display = show ? "inline-block" : "none"; $("runtimeOpenViewerBtn").style.display = display; $("runtimeTopViewerBtn").style.display = display; }
+function canNavigateViewer(requireReport = false) {
+    if (!state.fileId) return false;
+    if (requireReport && !reportReady()) return false;
+    if (!reviewCanEnterViewer()) return false;
+    return true;
+}
+
+function scheduleViewer(requireReport = false) {
+    if (state.redirecting || !canNavigateViewer(requireReport)) return;
+    state.redirecting = true;
+    setTimeout(() => { window.location.href = viewerUrl(); }, 1400);
+}
+
+function openViewerWithGate() {
+    if (!canNavigateViewer(true)) {
+        state.error = "请先在当前页完成报告分段确认，再进入 Viewer。";
+        state.review.visible = state.review.required || state.review.visible;
+        render();
+        return;
+    }
+    window.location.href = viewerUrl();
+}
+
+async function reviewHandleAction(action) {
+    if (!state.review.state || state.review.saving) return;
+    const { sectionId, draftText, doctorNote, rewriteIntent } = reviewReadEditorValues();
+    if (!sectionId && action !== "finalize_review") return;
+    const section = reviewGetCurrentSection();
+    state.review.saving = true;
+    state.review.error = "";
+    state.review.info = "";
+    try {
+        if (state.review.pendingOps.length) {
+            await reviewFlushPendingOps();
+        }
+        if (action === "rewrite_section") {
+            try {
+                const data = await reviewApiPost("rewrite_section", {
+                    section_id: sectionId,
+                    draft_text: draftText,
+                    rewrite_intent: rewriteIntent,
+                });
+                state.review.rewriteSuggestion = data?.rewrite_suggestion || null;
+                state.review.offlineMode = false;
+            } catch (err) {
+                state.review.rewriteSuggestion = reviewLocalRewrite(section, draftText, rewriteIntent);
+                state.review.offlineMode = true;
+                state.review.error = `AI改写服务不可用，已使用规则化润色：${err.message}`;
+            }
+            render();
             return;
         }
 
-        if (els.retryHint) {
-            els.retryHint.textContent = `已提交重试：${target.key}`;
+        if (action === "apply_suggestion") {
+            if (!state.review.rewriteSuggestion?.text) return;
+            const next = reviewLocalSave(sectionId, state.review.rewriteSuggestion.text, doctorNote);
+            reviewSetState(next, { keepSuggestion: true, keepCurrent: true });
+            reviewPushPending("save_section", {
+                section_id: sectionId,
+                draft_text: state.review.rewriteSuggestion.text,
+                doctor_note: doctorNote,
+                review_status: "needs_edit",
+            });
+            state.review.info = "已采纳改写建议，请确认后继续。";
+            render();
+            return;
         }
 
-        if (latestAgentRun) {
-            latestAgentRun.status = 'running';
-            latestAgentRun.stage = 'tooling';
-            latestAgentRun.current_tool = target.key;
+        if (action === "save_section") {
+            try {
+                const data = await reviewApiPost("save_section", {
+                    section_id: sectionId,
+                    draft_text: draftText,
+                    doctor_note: doctorNote,
+                    review_status: "needs_edit",
+                });
+                reviewSetState(data.review_state, { keepCurrent: true });
+                state.review.offlineMode = false;
+                reviewClearLocalOps();
+                state.review.info = "章节已保存。";
+            } catch (err) {
+                const next = reviewLocalSave(sectionId, draftText, doctorNote);
+                reviewSetState(next, { keepCurrent: true, keepSuggestion: true });
+                reviewPushPending("save_section", {
+                    section_id: sectionId,
+                    draft_text: draftText,
+                    doctor_note: doctorNote,
+                    review_status: "needs_edit",
+                });
+                state.review.offlineMode = true;
+                state.review.error = `保存已转本地兜底：${err.message}`;
+            }
+            render();
+            return;
         }
-        startAgentPollingIfNeeded();
-        await pollAgentStatus();
-    } catch (err) {
-        if (els.retryHint) {
-            els.retryHint.textContent = `重试提交异常: ${err.message}`;
+
+        if (action === "confirm_section") {
+            try {
+                const data = await reviewApiPost("confirm_section", {
+                    section_id: sectionId,
+                    draft_text: draftText,
+                    doctor_note: doctorNote,
+                    auto_finalize: true,
+                });
+                reviewSetState(data.review_state);
+                if (typeof data?.final_report === "string" && data.final_report.trim()) {
+                    persistReport(state.fileId, {
+                        report: data.final_report,
+                        report_payload: runReport(state.latestRun)?.report_payload || null,
+                    });
+                }
+                state.review.offlineMode = false;
+                reviewClearLocalOps();
+                state.review.info = data?.all_confirmed ? "全部章节确认完成，准备进入 Viewer。" : "章节确认成功，已解锁下一段。";
+            } catch (err) {
+                const next = reviewLocalConfirm(sectionId, draftText, doctorNote);
+                reviewSetState(next);
+                reviewPushPending("confirm_section", {
+                    section_id: sectionId,
+                    draft_text: draftText,
+                    doctor_note: doctorNote,
+                    auto_finalize: true,
+                });
+                state.review.offlineMode = true;
+                state.review.error = `确认已转本地兜底：${err.message}`;
+            }
+            if (reviewCanEnterViewer()) {
+                render();
+                scheduleViewer(true);
+                return;
+            }
+            render();
+            return;
+        }
+
+        if (action === "finalize_review") {
+            try {
+                const data = await reviewApiPost("finalize_review", {});
+                reviewSetState(data.review_state, { keepCurrent: true });
+                if (typeof data?.final_report === "string" && data.final_report.trim()) {
+                    persistReport(state.fileId, {
+                        report: data.final_report,
+                        report_payload: runReport(state.latestRun)?.report_payload || null,
+                    });
+                }
+                state.review.offlineMode = false;
+                reviewClearLocalOps();
+                state.review.info = "最终确认版报告已生成。";
+                render();
+                scheduleViewer(true);
+                return;
+            } catch (err) {
+                state.review.error = `最终归档失败：${err.message}`;
+                render();
+                return;
+            }
         }
     } finally {
-        retrySubmitting = false;
-        updateRetryControls(latestAgentRun || run);
+        state.review.saving = false;
+        render();
     }
 }
 
-function updateAgentPanel(run, events) {
-    const els = getAgentPanelElements();
-    if (els.status) els.status.textContent = run.status || '-';
-    if (els.stage) els.stage.textContent = run.stage || '-';
-    if (els.currentTool) els.currentTool.textContent = run.current_tool || '-';
-    if (els.eventCount) els.eventCount.textContent = String((events || []).length);
-    const planFrame = getCurrentPlanFrame(run);
-    if (els.planRevision) {
-        els.planRevision.textContent = planFrame ? String(planFrame.revision || '-') : '-';
-    }
-    if (els.replanCount) {
-        const frames = Array.isArray(run.plan_frames) ? run.plan_frames.length : 0;
-        const fallback = Number.isFinite(Number(run.replan_count)) ? Number(run.replan_count) : 0;
-        const count = frames > 0 ? Math.max(0, frames - 1) : fallback;
-        els.replanCount.textContent = String(count);
-    }
-    if (els.planObjective) {
-        els.planObjective.textContent = planFrame?.objective || run.plan_objective || '-';
-    }
-    if (els.goalQuestion) {
-        const q = String(run.goal_question || (run.planner_input || {}).question || '').trim();
-        els.goalQuestion.textContent = q || '-';
-    }
-    if (els.answerStatus) {
-        els.answerStatus.textContent = getAnswerStatusText(run);
-    }
-    if (els.terminationReason) {
-        const reason = run.termination_reason || (run.result || {}).termination_reason || '';
-        els.terminationReason.textContent = reason ? String(reason) : '-';
-    }
-    if (els.reportStatus) els.reportStatus.textContent = getReportStatusText(run);
-    if (els.lastError) els.lastError.textContent = getLastErrorText(run);
-
-    let icvObj = null;
-    let ekvObj = null;
-    let consensusObj = null;
-
+async function pollUpload() {
+    if (!state.jobId) return;
     try {
-        icvObj = resolveIcvFromRun(run);
-        ekvObj = resolveEkvFromRun(run);
-        consensusObj = resolveConsensusFromRun(run);
-
-        if (processingFileId) {
-            const key = `ai_report_payload_${processingFileId}`;
-            let existing = null;
-            try {
-                existing = JSON.parse(localStorage.getItem(key) || 'null');
-            } catch (e) {
-                existing = null;
-            }
-            const payloadToStore = existing && typeof existing === 'object' ? existing : {};
-            if (icvObj && !payloadToStore.icv) payloadToStore.icv = icvObj;
-            if (ekvObj && !payloadToStore.ekv) payloadToStore.ekv = ekvObj;
-            if (consensusObj && !payloadToStore.consensus) payloadToStore.consensus = consensusObj;
-            localStorage.setItem(key, JSON.stringify(payloadToStore));
-        }
-
-        if (els.icvStatus) {
-            if (icvObj && icvObj.status) {
-                const statusText = String(icvObj.status);
-                const unavailableReason = statusText.toLowerCase() === 'unavailable'
-                    ? (icvObj.error_message || icvObj.error_code || '')
-                    : '';
-                els.icvStatus.textContent = unavailableReason
-                    ? `${statusText} (${unavailableReason})`
-                    : statusText;
-            } else {
-                els.icvStatus.textContent = '-';
-            }
-        }
-        if (els.icvFindings) {
-            const icvCount = getIcvFindingCount(icvObj);
-            els.icvFindings.textContent = getUnavailableAwareCountDisplay(
-                icvObj,
-                icvCount,
-                ['findings', 'findings_list']
-            );
-        }
-
-        if (els.ekvStatus) {
-            if (ekvObj && ekvObj.status) {
-                const statusText = String(ekvObj.status);
-                const unavailableReason = statusText.toLowerCase() === 'unavailable'
-                    ? (ekvObj.error_message || ekvObj.error_code || '')
-                    : '';
-                els.ekvStatus.textContent = unavailableReason
-                    ? `${statusText} (${unavailableReason})`
-                    : statusText;
-            } else {
-                els.ekvStatus.textContent = '-';
-            }
-        }
-        if (els.ekvFindings) {
-            const ekvCount = getEkvFindingCount(ekvObj);
-            els.ekvFindings.textContent = getUnavailableAwareCountDisplay(
-                ekvObj,
-                ekvCount,
-                ['findings', 'claims']
-            );
-        }
-        if (els.ekvSupportRate) {
-            els.ekvSupportRate.textContent = getEkvSupportRateText(ekvObj);
-        }
-
-        if (els.consensusDecision) {
-            els.consensusDecision.textContent = getConsensusDecisionText(consensusObj);
-        }
-        if (els.consensusConflicts) {
-            const consensusCount = getConsensusConflictCount(consensusObj);
-            els.consensusConflicts.textContent = getUnavailableAwareCountDisplay(
-                consensusObj,
-                consensusCount,
-                ['conflicts']
-            );
-        }
-    } catch (e) {
-        if (els.icvStatus) els.icvStatus.textContent = '-';
-        if (els.icvFindings) els.icvFindings.textContent = '-';
-        if (els.ekvStatus) els.ekvStatus.textContent = '-';
-        if (els.ekvFindings) els.ekvFindings.textContent = '-';
-        if (els.ekvSupportRate) els.ekvSupportRate.textContent = '-';
-        if (els.consensusDecision) els.consensusDecision.textContent = '-';
-        if (els.consensusConflicts) els.consensusConflicts.textContent = '-';
-    }
-
-    updateRetryControls(run);
-
-    if (!els.message) {
-        return;
-    }
-    if (run.status === 'running' || run.status === 'queued') {
-        els.message.textContent = `Agent post-upload chain running: ${run.current_tool || run.stage || '-'}`;
-        return;
-    }
-    if (run.status === 'succeeded') {
-        const ekvStatus = String((ekvObj || {}).status || '').toLowerCase();
-        const consensusDecision = String((consensusObj || {}).decision || '').toLowerCase();
-        if (ekvStatus === 'unavailable') {
-            const reason = (ekvObj || {}).error_message || (ekvObj || {}).error_code || 'unknown';
-            els.message.textContent = `Agent completed (EKV unavailable: ${reason}).`;
-            return;
-        }
-        if (consensusDecision && consensusDecision !== 'accept') {
-            els.message.textContent = `Agent completed with consensus decision: ${consensusDecision}.`;
-            return;
-        }
-        els.message.textContent = 'Agent post-upload chain completed.';
-        return;
-    }
-    if (run.status === 'failed') {
-        els.message.textContent = `Agent post-upload chain failed (upload chain unaffected): ${getLastErrorText(run)}`;
-        return;
-    }
-    if (run.status === 'cancelled') {
-        els.message.textContent = 'Agent post-upload chain cancelled.';
-        return;
-    }
-    els.message.textContent = `Agent status: ${run.status || '-'}`;
+        const resp = await fetch(`/api/upload/progress/${encodeURIComponent(state.jobId)}`); const data = await resp.json();
+        if (!resp.ok || !data.success) throw new Error(data.error || `上传状态获取失败 (${resp.status})`);
+        state.error = ""; state.latestJob = data.job || {};
+        if (!state.fileId && state.latestJob.file_id) state.fileId = String(state.latestJob.file_id);
+        if (!state.runId && state.latestJob.agent_run_id) { state.runId = String(state.latestJob.agent_run_id); if (!state.runTimer) state.runTimer = setInterval(pollRun, 1400); pollRun(); }
+        const st = normStatus(state.latestJob.status);
+        if (st === "issue") { state.error = t(state.latestJob.error, "上传流程失败"); clearInterval(state.uploadTimer); state.uploadTimer = null; }
+        else if (st === "completed") { if (!state.uploadDone) { state.uploadDone = true; persistUpload(state.latestJob); showViewerBtns(true); } clearInterval(state.uploadTimer); state.uploadTimer = null; if (!state.runId) scheduleViewer(false); }
+        render();
+    } catch (err) { state.error = `上传链路异常: ${err.message}`; clearInterval(state.uploadTimer); state.uploadTimer = null; render(); }
 }
-async function pollAgentStatus() {
-    if (!processingAgentRunId) {
-        return;
-    }
 
-    const els = getAgentPanelElements();
-
+async function fetchRunResultOnce() {
+    if (state.runResultFetched || !state.runId) return;
     try {
-        console.info(`[UI][RUN_POLL] run_id=${processingAgentRunId} status=requesting`);
-        const [runResp, eventsResp] = await Promise.all([
-            fetch(`/api/agent/runs/${encodeURIComponent(processingAgentRunId)}`),
-            fetch(`/api/agent/runs/${encodeURIComponent(processingAgentRunId)}/events`),
-        ]);
+        const resp = await fetch(`/api/agent/runs/${encodeURIComponent(state.runId)}/result`); if (!resp.ok) return;
+        const data = await resp.json(); if (!data.success) return;
+        if (persistReport(state.fileId, ((data || {}).result || {}).report_result || null)) state.runResultFetched = true;
+    } catch (_e) {}
+}
 
-        console.info(
-            `[UI][RUN_POLL] run_id=${processingAgentRunId} run_http=${runResp.status} events_http=${eventsResp.status}`
-        );
-        if (runResp.status === 404 || eventsResp.status === 404) {
-            clearAgentPolling();
-            const notFoundError = 'run not found or expired';
-            latestAgentRun = {
-                run_id: processingAgentRunId,
-                status: 'failed',
-                stage: 'tooling',
-                steps: [],
-                error: notFoundError,
-                termination_reason: notFoundError,
-            };
-            rerenderTimelineFromSnapshot();
-            updateAgentPanel(latestAgentRun, []);
-            if (els.message) {
-                els.message.textContent = 'Agent run not found or expired. Please restart from upload.';
+async function pollRun() {
+    if (!state.runId) return;
+    try {
+        const [runResp, evResp] = await Promise.all([fetch(`/api/agent/runs/${encodeURIComponent(state.runId)}`), fetch(`/api/agent/runs/${encodeURIComponent(state.runId)}/events`)]);
+        if (runResp.status === 404 || evResp.status === 404) throw new Error("Agent run 不存在");
+        const runData = await runResp.json(); const evData = await evResp.json();
+        if (!runResp.ok || !runData.success) throw new Error(runData.error || `run 获取失败 (${runResp.status})`);
+        if (!evResp.ok || !evData.success) throw new Error(evData.error || `events 获取失败 (${evResp.status})`);
+        state.error = ""; state.latestRun = runData.run || {};
+        if (!state.fileId && state.latestRun.file_id) state.fileId = String(state.latestRun.file_id);
+        if (!state.patientId && state.latestRun.patient_id !== undefined && state.latestRun.patient_id !== null) state.patientId = String(state.latestRun.patient_id);
+        if (state.fileId && state.runId) localStorage.setItem(`latest_agent_run_${state.fileId}`, state.runId);
+        persistReport(state.fileId, runReport(state.latestRun)); state.events = Array.isArray(evData.events) ? evData.events : []; state.hints = hintIndex(state.events);
+        const s = token(state.latestRun.status);
+        if (!TERMINAL.has(s)) { state.awaitingReport = false; state.runTerminalAt = 0; state.reportResultRetryUntil = 0; }
+        if (TERMINAL.has(s)) {
+            if (s !== "succeeded") {
+                clearInterval(state.runTimer); state.runTimer = null; state.awaitingReport = false;
+                state.review.required = false; state.review.visible = false;
             }
-            return;
-        }
-
-        const runData = await runResp.json();
-        const eventsData = await eventsResp.json();
-
-        if (!runResp.ok || !runData.success) {
-            if (els.message) {
-                els.message.textContent = runData.error || `获取 run 状态失败 (${runResp.status})`;
-            }
-            return;
-        }
-        if (!eventsResp.ok || !eventsData.success) {
-            if (els.message) {
-                els.message.textContent = eventsData.error || `获取 events 失败 (${eventsResp.status})`;
-            }
-            return;
-        }
-
-        const run = runData.run || {};
-        const events = eventsData.events || [];
-        latestAgentRun = run;
-        persistAgentRunContext();
-        updateAgentPanel(run, events);
-        rerenderTimelineFromSnapshot();
-
-        if (run.status === 'succeeded' && !agentResultFetched) {
-            const resultResp = await fetch(`/api/agent/runs/${encodeURIComponent(processingAgentRunId)}/result`);
-            if (resultResp.ok) {
-                const resultData = await resultResp.json();
-                const reportResult = (((resultData || {}).result || {}).report_result || {});
-                if (resultData.success && processingFileId && (reportResult.report || reportResult.report_payload)) {
-                    // 保存结构化报告文本，供 Viewer 显示
-                    if (reportResult.report) {
-                        localStorage.setItem(`ai_report_${processingFileId}`, reportResult.report);
-                        localStorage.setItem('ai_report', reportResult.report);
-                    }
-                    // 关键：保存 report_payload（包含 icv 字段），供 Viewer 读取 ICV 具体问题
-                    if (reportResult.report_payload) {
-                        localStorage.setItem(
-                            `ai_report_payload_${processingFileId}`,
-                            JSON.stringify(reportResult.report_payload)
-                        );
+            else {
+                if (!state.runTerminalAt) { state.runTerminalAt = Date.now(); state.reportResultRetryUntil = state.runTerminalAt + RUN_RESULT_FETCH_MAX_WAIT_MS; }
+                await fetchRunResultOnce(); const ready = reportReady(); state.awaitingReport = !ready;
+                if (state.uploadDone) {
+                    showViewerBtns(true);
+                    if (ready) {
+                        state.awaitingReport = false;
+                        const ok = await ensureReviewState(false);
+                        if (ok) {
+                            if (state.runTimer) { clearInterval(state.runTimer); state.runTimer = null; }
+                            if (reviewCanEnterViewer()) scheduleViewer(true);
+                        }
+                    } else if (Date.now() >= state.reportResultRetryUntil) {
+                        clearInterval(state.runTimer); state.runTimer = null; state.awaitingReport = false; state.error = "报告尚未就绪，已暂停自动跳转。请稍后手动进入 Viewer。";
                     }
                 }
             }
-            agentResultFetched = true;
         }
-
-        if (AGENT_TERMINAL_STATUSES.has(run.status)) {
-            clearAgentPolling();
-            if (run.status === 'succeeded' && uploadWorkflowCompleted) {
-                document.getElementById('processingCurrent').textContent =
-                    '上传主流程 + Agent 后置汇总已完成，正在跳转到 Viewer...';
-                maybeAutoRedirectToViewer();
-            }
-            if (run.status === 'failed' && uploadWorkflowCompleted) {
-                document.getElementById('processingCurrent').textContent =
-                    '上传主流程已完成，但 Agent 后置汇总失败。可直接进入 Viewer。';
-                document.getElementById('processingViewerBtn').style.display = 'inline-block';
-            }
-        }
-    } catch (err) {
-        console.warn(`[UI][RUN_POLL] run_id=${processingAgentRunId} status=exception error=${err.message}`);
-        if (els.message) {
-            els.message.textContent = `Agent 轮询失败: ${err.message}`;
-        }
-    }
+        render();
+    } catch (err) { state.error = `Agent runtime error: ${err.message}`; state.awaitingReport = false; clearInterval(state.runTimer); state.runTimer = null; render(); }
 }
+
+function bind() {
+    $("runtimeBackUploadBtn").addEventListener("click", backToUpload);
+    $("runtimeOpenViewerBtn").addEventListener("click", () => { openViewerWithGate(); });
+    $("runtimeTopViewerBtn").addEventListener("click", () => { openViewerWithGate(); });
+    $("runtimeOpenCockpitBtn").addEventListener("click", () => { window.location.href = cockpitUrl(); });
+    $("runtimeGoW0Btn").addEventListener("click", () => { window.location.href = w0Url(); });
+    $("runtimeCopyFileBtn").addEventListener("click", async () => { if (!state.fileId) return; try { await navigator.clipboard.writeText(state.fileId); $("runtimeCaseNote").textContent = `已复制 file_id：${state.fileId}`; } catch (err) { state.error = `复制 file_id 失败: ${err.message}`; render(); } });
+    $("runtimeRailToggle").addEventListener("click", () => { const rail = $("runtimeAgentRail"); rail.classList.toggle("collapsed"); $("runtimeRailToggle").textContent = rail.classList.contains("collapsed") ? "Agent Network ▸" : "Agent Network ▾"; });
+    $("runtimeFeed").addEventListener("wheel", () => { state.lastManualScrollAt = Date.now(); }, { passive: true });
+    $("runtimeFeed").addEventListener("touchstart", () => { state.lastManualScrollAt = Date.now(); }, { passive: true });
+    $("runtimeFeed").addEventListener("click", (ev) => { const btn = ev.target.closest("[data-toggle-node]"); if (!btn) return; const id = btn.getAttribute("data-toggle-node"); if (!id) return; state.expanded[id] = !state.expanded[id]; render(); });
+    document.addEventListener("click", (ev) => {
+        const actionBtn = ev.target.closest("[data-review-action]");
+        if (actionBtn) {
+            const action = t(actionBtn.getAttribute("data-review-action"), "");
+            if (action) {
+                reviewHandleAction(action);
+                return;
+            }
+        }
+        const sectionBtn = ev.target.closest("[data-review-section]");
+        if (!sectionBtn) return;
+        const sid = t(sectionBtn.getAttribute("data-review-section"), "");
+        if (!sid || reviewIsLocked(sid)) return;
+        state.review.currentSectionId = sid;
+        state.review.rewriteSuggestion = null;
+        render();
+    });
+}
+
+function init() {
+    document.body.classList.add("processing-page-body");
+    const params = new URLSearchParams(window.location.search);
+    state.jobId = t(params.get("job_id"), ""); state.patientId = t(params.get("patient_id"), ""); state.fileId = t(params.get("file_id"), "");
+    state.runId = t(params.get("run_id") || params.get("agent_run_id"), "");
+    if (!state.runId && state.fileId) state.runId = t(localStorage.getItem(`latest_agent_run_${state.fileId}`), "");
+    if (typeof setCurrentPatientId === "function" && state.patientId) setCurrentPatientId(state.patientId);
+    if (typeof setPatientInfoVisible === "function" && state.patientId) setPatientInfoVisible(true);
+    if (typeof updatePatientHeader === "function" && state.patientId) updatePatientHeader(state.patientId);
+    state.startedAt = new Date().toLocaleString();
+    if (window.innerWidth <= 960) { $("runtimeAgentRail").classList.add("collapsed"); $("runtimeRailToggle").textContent = "Agent Network ▸"; }
+    bind();
+    render();
+    if (!state.jobId && !state.runId) { state.error = "缺少 job_id 或 run_id，无法加载处理页。"; render(); return; }
+    if (state.jobId) {
+        pollUpload(); state.uploadTimer = setInterval(pollUpload, 1000);
+    } else {
+        state.uploadDone = true;
+        showViewerBtns(true);
+    }
+    if (state.runId) { pollRun(); state.runTimer = setInterval(pollRun, 1400); }
+}
+
+document.addEventListener("DOMContentLoaded", init);
+

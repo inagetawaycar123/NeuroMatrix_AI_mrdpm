@@ -1,6 +1,12 @@
 ﻿const DEFAULT_UPLOAD_MODE = 'ncct_3phase_cta';
 
 document.addEventListener('DOMContentLoaded', function () {
+    const uploadInfo = document.querySelector('.upload-info');
+    if (uploadInfo && !uploadInfo.dataset.runtimeHint) {
+        uploadInfo.dataset.runtimeHint = '1';
+        uploadInfo.innerHTML += '<br>上传成功后将自动进入 StrokeClaw 运行等待页，查看多节点协作过程。';
+    }
+
     const uploadModeSelect = document.getElementById('uploadModeSelect');
     const ctaPhaseSelect = document.getElementById('ctaPhaseSelect');
     const ctaPhaseRow = document.getElementById('ctaPhaseRow');

@@ -1,4 +1,4 @@
-let currentPatientId = '';
+﻿let currentPatientId = '';
 let currentFileId = null;
 let currentSlice = 0;
 let totalSlices = 0;
@@ -17,8 +17,10 @@ let reportStatusDismissed = false;
 let autoReportBootstrapped = false;
 let viewerLayoutMode = 'full';
 let currentRunId = '';
+let reportGeneratingWatcher = null;
+const REPORT_GENERATING_TIMEOUT_MS = 90000;
 
-// Markdown 杞?HTML 瑙ｆ瀽鍑芥暟
+// Markdown �?HTML 瑙ｆ瀽鍑芥暟
 function parseMarkdown(text) {
     if (!text) return '';
     let html = text
@@ -26,9 +28,9 @@ function parseMarkdown(text) {
         .replace(/^## (.+)$/gm, '<div style="margin: 16px 0 12px 0;"><span style="display: inline-flex; align-items: center; gap: 6px; background: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%); color: white; padding: 8px 16px; border-radius: 6px; font-size: 14px; font-weight: 600;">$1</span></div>')
         // 澶勭悊浜岀骇鏍囬
         .replace(/^## (.+)$/gm, '<h2 style="color: #3b82f6; font-size: 16px; font-weight: 700; margin: 16px 0 10px 0; padding-bottom: 6px; border-bottom: 2px solid #60a5fa;">$1</h2>')
-        // 澶勭悊绮椾綋鏍囪 - 鐩存帴绉婚櫎
+        // 澶勭悊绮椾綋鏍囪�?- 鐩存帴绉婚櫎
         .replace(/\*\*(.+?)\*\*/g, '$1')
-        // 澶勭悊鍒楄〃
+        // 澶勭悊鍒楄�?
         .replace(/^\d+\. (.+)$/gm, '<div style="margin-left: 16px; margin-bottom: 4px; font-size: 12px; line-height: 1.6;">$1</div>')
         .replace(/^- (.+)$/gm, '<div style="margin-left: 16px; margin-bottom: 4px; font-size: 12px; line-height: 1.6;">$1</div>')
         // 澶勭悊鎹㈣
@@ -122,7 +124,34 @@ function applyDynamicViewerLayout(data) {
     Object.values(cellIds).forEach((id) => setCellVisible(id, true));
 }
 
-document.addEventListener('DOMContentLoaded', function() {
+function buildProcessingReviewUrl() {
+    const params = new URLSearchParams();
+    if (currentRunId) params.set('run_id', String(currentRunId));
+    if (currentFileId) params.set('file_id', String(currentFileId));
+    if (currentPatientId) params.set('patient_id', String(currentPatientId));
+    const query = params.toString();
+    return query ? `/processing?${query}` : '/processing';
+}
+
+async function enforceReviewGateBeforeViewer() {
+    if (!currentRunId) return true;
+    try {
+        const resp = await fetch(`/api/agent/runs/${encodeURIComponent(currentRunId)}/review`);
+        if (!resp.ok) return true;
+        const data = await resp.json();
+        if (!data || !data.success) return true;
+        if (data.all_confirmed) return true;
+        showMsg('Report review is not finished. Redirecting to Processing.', 'warning');
+        setTimeout(() => {
+            window.location.href = buildProcessingReviewUrl();
+        }, 900);
+        return false;
+    } catch (_e) {
+        return true;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', async function() {
     const urlParams = new URLSearchParams(window.location.search);
     const fileIdParam = urlParams.get('file_id');
     const runIdParam = urlParams.get('run_id') || urlParams.get('agent_run_id');
@@ -142,15 +171,20 @@ document.addEventListener('DOMContentLoaded', function() {
     const viewerData = getViewerData();
 
     if (!currentPatientId || !currentFileId || !viewerData) {
-        showMsg('缺少必要的查看数据，请重新上传', 'error');
+        showMsg('Missing required viewer context. Please re-upload.', 'error');
         setTimeout(() => window.location.href = '/upload', 1000);
+        return;
+    }
+
+    const gatePass = await enforceReviewGateBeforeViewer();
+    if (!gatePass) {
         return;
     }
 
     setPatientInfoVisible(true);
     updatePatientHeader(currentPatientId);
     injectValidationEntryButtons();
-    // hemisphere 鐢卞悗绔彁渚涳紝閬垮厤鍓嶇鎵嬪姩閫夋嫨
+    // hemisphere 鐢卞悗绔彁渚涳紝閬垮厤鍓嶇鎵嬪姩閫夋�?
     initializeContrastController();
 
     initializeViewer(viewerData);
@@ -168,8 +202,9 @@ function initializeViewer(data) {
     pseudocolorGenerated = false;
     isPseudocolorActive = false;
     pseudocolorLutStats = {};
+    updatePseudocolorButtonLabel();
 
-    // 浠庡悗绔暟鎹簱鑾峰彇 hemisphere锛坧atient_imaging 琛級
+    // 浠庡悗绔暟鎹簱鑾峰彇 hemisphere锛坧atient_imaging 琛�?
     currentHemisphere = 'both';
     if (currentFileId) {
         fetch(`/api/get_imaging/${currentFileId}`)
@@ -177,16 +212,16 @@ function initializeViewer(data) {
             .then(resp => {
                 if (resp && resp.success && resp.data && resp.data.hemisphere) {
                     currentHemisphere = resp.data.hemisphere;
-                    console.log('浠庡悗绔幏鍙栧埌 hemisphere:', currentHemisphere);
+                    console.log('浠庡悗绔幏鍙栧�?hemisphere:', currentHemisphere);
                 } else {
-                    console.warn('鏈粠鍚庣鎵惧埌 hemisphere锛屼娇鐢ㄩ粯璁?both');
+                    console.warn('鏈粠鍚庣鎵惧�?hemisphere锛屼娇鐢ㄩ粯�?both');
                 }
             }).catch(err => {
-                console.warn('鑾峰彇 hemisphere 澶辫触锛屼娇鐢ㄩ粯璁?both:', err);
+                console.warn('鑾峰�?hemisphere 澶辫触锛屼娇鐢ㄩ粯璁?both:', err);
             });
     }
 
-    // 淇濆瓨褰撳墠鏂囦欢ID渚涙姤鍛婇〉闈娇鐢紙localStorage 璺ㄦ爣绛鹃〉鍏变韩锛?
+    // 淇濆瓨褰撳墠鏂囦欢ID渚涙姤鍛婇〉闈娇鐢紙localStorage 璺ㄦ爣绛鹃〉鍏变韩�?
     sessionStorage.setItem('current_file_id', currentFileId);
     localStorage.setItem('current_file_id', currentFileId);
 
@@ -203,7 +238,7 @@ function initializeViewer(data) {
                     localStorage.removeItem(`stroke_analysis_${currentFileId}`);
                 }
             } catch (e) {
-                console.error('鍔犺浇鍒嗘瀽缁撴灉澶辫触:', e);
+                console.error('鍔犺浇鍒嗘瀽缁撴灉澶辫�?', e);
             }
         }
         
@@ -229,34 +264,34 @@ function initializeViewer(data) {
         contrastController.enableDragAdjust('cta-venous');
         contrastController.enableDragAdjust('cta-delayed');
     }
-    // 鏍规嵁 skip_ai 鍔ㄦ€佷慨鏀?CBF/CBV/Tmax 鏍囩
+    // 鏍规�?skip_ai 鍔ㄦ€佷慨鏀?CBF/CBV/Tmax 鏍囩�?
     if (typeof data.skip_ai !== 'undefined') {
         const labelMap = {
             cbf: document.querySelector('#cell-cbf .cell-label'),
             cbv: document.querySelector('#cell-cbv .cell-label'),
             tmax: document.querySelector('#cell-tmax .cell-label')
         };
-        const suffix = data.skip_ai ? '（跳过AI）' : '（推测图）';
+        const suffix = data.skip_ai ? ' (AI Skipped)' : ' (Inference)';
         Object.keys(labelMap).forEach(key => {
             if (labelMap[key]) {
-                labelMap[key].textContent = labelMap[key].textContent.replace(/（.*）$/, '') + suffix;
+                labelMap[key].textContent = labelMap[key].textContent.replace(/\s*\([^)]*\)\s*$/, '') + suffix;
             }
         });
     }
 
-    // 鏍规嵁褰卞儚妯℃€佹暟閲忓姩鎬佸垏鎹㈠竷灞€锛?1 鏍?2 鏍?/8 鏍?
+    // 鏍规嵁褰卞儚妯℃€佹暟閲忓姩鎬佸垏鎹㈠竷灞€�?1 �?2 �?/8 �?
     applyDynamicViewerLayout(data);
 
     // 鏍规嵁褰撳墠妗ｄ綅浼樺寲缃戞牸甯冨眬
     optimizeGridLayout();
     ensureLutScaleElements();
     refreshAllLutScales();
-    // 1 鏍?/2 鏍煎竷灞€涓嶅啀鏄剧ず stroke 鍗犱綅鎻愮ず
+    // 1 �?/2 鏍煎竷灞€涓嶅啀鏄剧�?stroke 鍗犱綅鎻愮ず
     if (viewerLayoutMode === 'full' && (!analysisResults || !analysisResults.visualizations || !analysisResults.visualizations.combined)) {
-        setStrokePlaceholder('暂无脑卒中分析结果');
+        setStrokePlaceholder('No stroke analysis yet');
     }
 
-    // 鑷姩灞曠ず浼僵鍥撅紙濡傛灉瀛樺湪CTP鐏屾敞鍥炬暟鎹級
+    // 鑷姩灞曠ず浼僵鍥撅紙濡傛灉瀛樺湪CTP鐏屾敞鍥炬暟鎹�?
     if (hasCTPData() && !pseudocolorGenerated) {
         console.log('检测到CTP数据，自动生成伪彩图');
         togglePseudocolor();
@@ -379,7 +414,7 @@ function buildIcvSummaryHtml(icv) {
             <div style="background:#fff7ed;border:1px solid rgba(0,0,0,0.04);padding:12px;border-radius:8px;margin-bottom:10px;">
                 <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
                     <div style="font-weight:700;color:#f59e0b;">ICV 检查：UNAVAILABLE</div>
-                    <div style="font-size:12px;color:#666">自动质量门检测</div>
+                    <div style="font-size:12px;color:#666">自动质量门检�?/div>
                 </div>
                 <div style="font-size:13px;color:#333;">ICV result unavailable: ${reason}</div>
             </div>
@@ -412,9 +447,9 @@ function buildIcvSummaryHtml(icv) {
         <div style="background:#fff7ed;border:1px solid rgba(0,0,0,0.04);padding:12px;border-radius:8px;margin-bottom:10px;">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
                 <div style="font-weight:700;color:${color};">ICV 检查：${(icv.status||'').toUpperCase()}</div>
-                <div style="font-size:12px;color:#666">自动质量门检测</div>
+                <div style="font-size:12px;color:#666">自动质量门检�?/div>
             </div>
-            <div style="font-size:13px;color:#333">${findingsListHtml || '<div style="color:#666">无详细发现</div>'}</div>
+            <div style="font-size:13px;color:#333">${findingsListHtml || '<div style="color:#666">无详细发�?/div>'}</div>
             ${warningCount > 0 ? `
                 <div style="margin-top:10px;border-top:1px solid rgba(0,0,0,0.03);padding-top:8px;">
                     <div id="icvDetails" style="display:block;margin-top:8px;padding:8px;border-radius:6px;background:#fff;border:1px solid #fee2e2;">
@@ -422,12 +457,12 @@ function buildIcvSummaryHtml(icv) {
                         ${warningDetailsHtml}
                     </div>
                 </div>
-            ` : `<div style="margin-top:10px;padding-top:8px;color:#10b981;font-weight:600;">未发现 ICV 问题</div>`}
+            ` : `<div style="margin-top:10px;padding-top:8px;color:#10b981;font-weight:600;">未发�?ICV 问题</div>`}
         </div>
     `;
 }
 
-// 如果存在 `ai_report_payload_<fileId>`，且没有完整报告文本，直接渲染 ICV 区块
+// 如果存在 `ai_report_payload_<fileId>`，且没有完整报告文本，直接渲�?ICV 区块
 function tryRenderIcvFromStoredPayload() {
     try {
         if (!currentFileId) return;
@@ -442,8 +477,7 @@ function tryRenderIcvFromStoredPayload() {
         const consensus = extractConsensusPayload(payload);
         renderIcvStaticFields(icv, ekv, consensus);
 
-        // 如果已经有全文报告，避免覆盖由 displayAIReport 渲染的报告正文
-        if (reportText) return;
+        // 如果已经有全文报告，避免覆盖�?displayAIReport 渲染的报告正�?        if (reportText) return;
         if (!icv) return;
 
         const aiReportSection = document.getElementById('aiReportSection');
@@ -453,7 +487,7 @@ function tryRenderIcvFromStoredPayload() {
 
         const icvHtml = buildIcvSummaryHtml(icv);
 
-        aiReportContent.innerHTML = icvHtml + `<div style="color:#666;margin-top:8px">报告文本尚未生成。</div>`;
+        aiReportContent.innerHTML = icvHtml + `<div style="color:#666;margin-top:8px">报告文本尚未生成�?/div>`;
     } catch (e) {
         console.warn('tryRenderIcvFromStoredPayload failed', e);
     }
@@ -500,7 +534,7 @@ function renderIcvStaticFields(icv, ekv = null, consensus = null) {
         const findings = Array.isArray(icv && icv.findings) ? icv.findings : [];
         const problems = findings.filter(f => String((f && f.status) || '').toLowerCase() !== 'pass');
         if (!problems.length) {
-            issuesEl.innerHTML = `${validationSummaryHtml}<div style="color:#10b981;font-weight:600;">未发现 ICV 问题</div>`;
+            issuesEl.innerHTML = `${validationSummaryHtml}<div style="color:#10b981;font-weight:600;">未发�?ICV 问题</div>`;
             return;
         }
 
@@ -533,13 +567,13 @@ function setStrokePlaceholder(text) {
         const canvas = document.createElement('canvas');
         canvas.width = w; canvas.height = h;
         const ctx = canvas.getContext('2d');
-        // 鑳屾櫙
+        // 鑳屾�?
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, w, h);
-        // 杈规
+        // 杈规�?
         ctx.strokeStyle = '#000000'; ctx.lineWidth = 4;
         ctx.strokeRect(0, 0, w, h);
-        // 鏂囨湰
+        // 鏂囨�?
         ctx.fillStyle = '#f3f4f6';
         ctx.font = '20px Arial';
         ctx.textAlign = 'center';
@@ -547,7 +581,7 @@ function setStrokePlaceholder(text) {
         ctx.fillText(text, w/2, h/2);
 
         img.src = canvas.toDataURL('image/png');
-        // 鏍囪涓哄崰浣嶅浘锛岄伩鍏嶈鍏ㄥ眬鐨?rotate(-90deg) 鏍峰紡鏃嬭浆
+        // 鏍囪涓哄崰浣嶅浘锛岄伩鍏嶈鍏ㄥ眬�?rotate(-90deg) 鏍峰紡鏃嬭浆
         img.classList.add('placeholder-image');
         if (status) {
             status.textContent = '-';
@@ -555,7 +589,7 @@ function setStrokePlaceholder(text) {
             status.style.display = 'block';
         }
     } catch (e) {
-        console.error('璁剧疆 stroke 鍗犱綅鍥惧け璐?', e);
+        console.error('璁剧�?stroke 鍗犱綅鍥惧け�?', e);
     }
 }
 
@@ -585,7 +619,7 @@ function optimizeGridLayout() {
     grid.classList.add('layout-full');
 }
 
-// 鍋忎晶閫夋嫨宸茬Щ闄わ紝鍚庣鎻愪緵 hemisphere 瀛楁
+// 鍋忎晶閫夋嫨宸茬Щ闄わ紝鍚庣鎻愪�?hemisphere 瀛楁�?
 
 
 const LUT_MODELS = ['cbf', 'cbv', 'tmax'];
@@ -711,7 +745,7 @@ function loadSlice(sliceIndex) {
     currentSlice = sliceIndex;
     const sliceData = currentRgbFiles[currentSlice];
     
-    // 娣诲姞璋冭瘯淇℃伅
+    // 娣诲姞璋冭瘯淇℃�?
     console.log('loadSlice:', sliceIndex);
     console.log('sliceData:', {
         mcta_image: sliceData.mcta_image,
@@ -754,17 +788,17 @@ function updateImage(cellId, imageUrl) {
         img.src = imageUrl;
         img.style.display = 'block';
         if (status) {
-            status.textContent = '✓';
+            status.textContent = '?';
             status.className = 'cell-status status-ready';
             status.style.display = 'block';
         }
         
-        // 娣诲姞鍥惧儚鍔犺浇閿欒澶勭悊
+        // 娣诲姞鍥惧儚鍔犺浇閿欒澶勭�?
         img.onerror = function() {
             console.error('Image load error:', cellId, imageUrl);
             img.style.display = 'none';
             if (status) {
-                status.textContent = '✗';
+                status.textContent = '?';
                 status.className = 'cell-status status-error';
                 status.style.display = 'block';
             }
@@ -794,7 +828,7 @@ function updateAIImage(modelKey, sliceData) {
         img.src = finalUrl;
         img.style.display = 'block';
         if (status) {
-            status.textContent = '✓';
+            status.textContent = '?';
             status.className = 'cell-status status-ready';
             status.style.display = 'block';
         }
@@ -821,10 +855,16 @@ function updateSliceInfo() {
 function changeSlice(delta) { loadSlice(currentSlice + delta); }
 function updateSlice(value) { loadSlice(parseInt(value)); }
 
+function updatePseudocolorButtonLabel() {
+    const btn = document.getElementById('pseudocolorBtn');
+    if (!btn) return;
+    btn.textContent = isPseudocolorActive ? '\u5173\u95ed\u4f2a\u5f69\u6a21\u5f0f' : '\u751f\u6210\u4f2a\u5f69\u56fe';
+}
+
 function togglePseudocolor() {
     const btn = document.getElementById('pseudocolorBtn');
     if (!pseudocolorGenerated) {
-        showLoading(true, '姝ｅ湪涓烘墍鏈夊垏鐗囩敓鎴愪吉褰╁浘...');
+        showLoading(true, '\u6b63\u5728\u4e3a\u6240\u6709\u5207\u7247\u751f\u6210\u4f2a\u5f69\u56fe...');
         btn.disabled = true;
         fetch(`/generate_all_pseudocolors/${currentFileId}`)
             .then(res => res.json()).then(data => {
@@ -837,17 +877,17 @@ function togglePseudocolor() {
                         pseudocolorMode[model] = true;
                         document.getElementById('toggle-' + model).classList.add('active');
                     });
-                    btn.textContent = '关闭伪彩图模式';
+                    updatePseudocolorButtonLabel();
                     btn.disabled = false;
                     loadSlice(currentSlice);
-                    showMessage(`浼僵鍥剧敓鎴愬畬鎴?(${data.total_success}/${data.total_attempts})`, 'success');
+                    showMessage(`\u4f2a\u5f69\u56fe\u751f\u6210\u5b8c\u6210 (${data.total_success}/${data.total_attempts})`, 'success');
                 } else {
                     btn.disabled = false;
-                    showMessage('鐢熸垚澶辫触: ' + data.error, 'error');
+                    showMessage('\u751f\u6210\u5931\u8d25: ' + data.error, 'error');
                 }
             }).catch(err => {
                 btn.disabled = false;
-                showMessage('鐢熸垚澶辫触: ' + err.message, 'error');
+                showMessage('\u751f\u6210\u5931\u8d25: ' + err.message, 'error');
             }).finally(() => showLoading(false));
     } else {
         isPseudocolorActive = !isPseudocolorActive;
@@ -855,7 +895,7 @@ function togglePseudocolor() {
             pseudocolorMode[model] = isPseudocolorActive;
             document.getElementById('toggle-' + model).classList.toggle('active', isPseudocolorActive);
         });
-        btn.textContent = isPseudocolorActive ? '关闭伪彩图模式' : '开启伪彩图模式';
+        updatePseudocolorButtonLabel();
         loadSlice(currentSlice);
     }
 }
@@ -870,13 +910,13 @@ function toggleCellPseudocolor(modelKey) {
 function toggleAnalysisPanel() { document.getElementById('analysisPanel').classList.toggle('open'); }
 
 function startStrokeAnalysis() {
-    showLoading(true, '姝ｅ湪杩涜鑴戝崚涓垎鏋?..');
+    showLoading(true, '姝ｅ湪杩涜鑴戝崚涓垎�?..');
     fetch(`/analyze_stroke/${currentFileId}?hemisphere=${currentHemisphere}`)
         .then(res => res.json()).then(data => {
             if (data.success || data.analysis_results) {
                 analysisResults = data.analysis_results || data;
                 displayAnalysisResults();
-                showMessage('鍒嗘瀽瀹屾垚', 'success');
+                showMessage('�������', 'success');
             } else { showMessage('鍒嗘瀽澶辫触: ' + data.error, 'error'); }
         }).catch(err => showMessage('鍒嗘瀽澶辫触: ' + err.message, 'error')).finally(() => showLoading(false));
 }
@@ -900,18 +940,18 @@ function displayAnalysisResults() {
         const statusEl = document.getElementById('value-status');
         const mismatchContainer = document.getElementById('metric-mismatch-container');
         if (report.has_mismatch) {
-            statusEl.textContent = '存在显著不匹配';
+            statusEl.textContent = '\u5b58\u5728\u663e\u8457\u4e0d\u5339\u914d';
             statusEl.className = 'metric-value alert';
             mismatchContainer.classList.add('warning');
         } else {
-            statusEl.textContent = '鏃犳樉钁椾笉鍖归厤';
+            statusEl.textContent = '\u672a\u89c1\u663e\u8457\u4e0d\u5339\u914d';
             statusEl.className = 'metric-value good';
             mismatchContainer.classList.remove('warning');
         }
     }
 
-    // 淇濆瓨鍒嗘瀽鏁版嵁鍒?localStorage锛屼緵鎶ュ憡椤甸潰浣跨敤锛堣法鏍囩椤靛叡浜級
-    // 闀滃儚閫昏緫锛氬墠绔€夋嫨left 鈫?鐥呯伓鍦╮ight锛堝彂鐥呬晶锛?
+    // 淇濆瓨鍒嗘瀽鏁版嵁�?localStorage锛屼緵鎶ュ憡椤甸潰浣跨敤锛堣法鏍囩椤靛叡浜級
+    // 闀滃儚閫昏緫锛氬墠绔€夋嫨left �?鐥呯伓鍦╮ight锛堝彂鐥呬晶�?
     const hemisphereMap = {
         'left': 'right',
         'right': 'left',
@@ -963,7 +1003,7 @@ function updateStrokeImage() {
             const istroke = document.getElementById('img-stroke');
             if (icomb) { icomb.classList.remove('placeholder-image'); icomb.src = vis.combined[currentSlice]; }
             if (istroke) { istroke.classList.remove('placeholder-image'); istroke.src = vis.combined[currentSlice]; }
-            document.getElementById('status-stroke').textContent = '✓';
+            document.getElementById('status-stroke').textContent = '?';
             document.getElementById('status-stroke').className = 'cell-status status-ready';
             document.getElementById('status-stroke').style.display = 'block';
         }
@@ -983,7 +1023,7 @@ function downloadData() {
 async function saveAnalysisToDB() {
     if (!analysisResults || !currentPatientId || !currentFileId) return;
 
-    // 闀滃儚閫昏緫锛氬墠绔€夋嫨left 鈫?鐥呯伓鍦╮ight锛堝彂鐥呬晶锛?
+    // 闀滃儚閫昏緫锛氬墠绔€夋嫨left �?鐥呯伓鍦╮ight锛堝彂鐥呬晶�?
     const hemisphereMap = {
         'left': 'right',
         'right': 'left',
@@ -1007,15 +1047,15 @@ async function saveAnalysisToDB() {
             contentType: 'application/json',
             data: JSON.stringify(payload)
         });
-        showMsg('分析结果已保存', 'success');
+        showMsg('Analysis result saved.', 'success');
         
-        // 娉ㄦ剰锛氬凡绉婚櫎鑷姩璋冪敤鐧惧窛 AI锛屾敼涓烘墜鍔ㄨЕ鍙?
+        // 娉ㄦ剰锛氬凡绉婚櫎鑷姩璋冪敤鐧惧窛 AI锛屾敼涓烘墜鍔ㄨЕ�?
     } catch (err) {
         showMsg('保存失败: ' + err.message, 'error');
     }
 }
 
-// 璋冪敤 NeuroMatrix AI 鐢熸垚鎶ュ憡
+// 璋冪�?NeuroMatrix AI 鐢熸垚鎶ュ憡
 function getReportStorageKeys(fileId = currentFileId) {
     const normalized = fileId || '';
     return {
@@ -1038,18 +1078,90 @@ function getReportUrl() {
     return `/report/${currentPatientId}?${params.toString()}`;
 }
 
+function getReportGeneratingTsKey(keys) {
+    return `${keys.generating}_ts`;
+}
+
+function clearReportGeneratingState(fileId = currentFileId) {
+    const keys = getReportStorageKeys(fileId);
+    localStorage.removeItem(keys.generating);
+    localStorage.removeItem(getReportGeneratingTsKey(keys));
+    localStorage.removeItem('ai_report_generating');
+}
+
+function setReportError(fileId, message) {
+    if (!fileId || !message) return;
+    const keys = getReportStorageKeys(fileId);
+    localStorage.setItem(keys.error, message);
+    localStorage.setItem('ai_report_error', message);
+}
+
+function upsertReportCache(fileId, reportResult) {
+    if (!fileId || !reportResult || typeof reportResult !== 'object') return false;
+    const keys = getReportStorageKeys(fileId);
+    let wrote = false;
+    if (typeof reportResult.report === 'string' && reportResult.report.trim()) {
+        localStorage.setItem(keys.report, reportResult.report);
+        localStorage.setItem('ai_report', reportResult.report);
+        wrote = true;
+    }
+    if (reportResult.report_payload && typeof reportResult.report_payload === 'object') {
+        localStorage.setItem(keys.payload, JSON.stringify(reportResult.report_payload));
+        wrote = true;
+    }
+    if (wrote) {
+        clearReportGeneratingState(fileId);
+        localStorage.removeItem(keys.error);
+        localStorage.removeItem('ai_report_error');
+    }
+    return wrote;
+}
+
+function extractRunReportResult(runState) {
+    const result = ((runState || {}).result || {});
+    const reportResult = result.report_result;
+    return reportResult && typeof reportResult === 'object' ? reportResult : null;
+}
+
+function readReportGeneratingStartedAt(fileId = currentFileId) {
+    const keys = getReportStorageKeys(fileId);
+    const raw = localStorage.getItem(getReportGeneratingTsKey(keys));
+    const ts = Number(raw);
+    return Number.isFinite(ts) && ts > 0 ? ts : 0;
+}
+
+function isReportGeneratingTimeout(fileId = currentFileId) {
+    const startedAt = readReportGeneratingStartedAt(fileId);
+    if (!startedAt) return false;
+    return Date.now() - startedAt >= REPORT_GENERATING_TIMEOUT_MS;
+}
+
 function getReportCacheState(fileId = currentFileId) {
     const keys = getReportStorageKeys(fileId);
     const reportText = localStorage.getItem(keys.report) || '';
     const hasReport = !!reportText;
     const isGenerating = localStorage.getItem(keys.generating) === 'true';
-    const errorMessage = localStorage.getItem(keys.error) || '';
+    const errorMessage = localStorage.getItem(keys.error) || localStorage.getItem('ai_report_error') || '';
 
+    if (hasReport) {
+        if (isGenerating) {
+            clearReportGeneratingState(fileId);
+        }
+        return { status: 'ready', errorMessage: '', hasReport, isGenerating: false, reportText };
+    }
+    if (isGenerating && isReportGeneratingTimeout(fileId)) {
+        clearReportGeneratingState(fileId);
+        setReportError(fileId, '�������ɳ�ʱ�������ԡ�');
+        return {
+            status: 'error',
+            errorMessage: '�������ɳ�ʱ�������ԡ�',
+            hasReport: false,
+            isGenerating: false,
+            reportText: '',
+        };
+    }
     if (isGenerating) {
         return { status: 'generating', errorMessage, hasReport, isGenerating, reportText };
-    }
-    if (hasReport) {
-        return { status: 'ready', errorMessage: '', hasReport, isGenerating: false, reportText };
     }
     if (errorMessage) {
         return { status: 'error', errorMessage, hasReport: false, isGenerating: false, reportText: '' };
@@ -1141,6 +1253,30 @@ function refreshReportStatusFromCache() {
     return cache;
 }
 
+async function hydrateReportCacheFromRun(runId = getActiveRunId()) {
+    if (!currentFileId || !runId) return false;
+    try {
+        const runResp = await fetch(`/api/agent/runs/${encodeURIComponent(runId)}`);
+        if (runResp.ok) {
+            const runData = await runResp.json();
+            if (runData && runData.success && upsertReportCache(currentFileId, extractRunReportResult(runData.run))) {
+                return true;
+            }
+        }
+    } catch (_e) {}
+
+    try {
+        const resultResp = await fetch(`/api/agent/runs/${encodeURIComponent(runId)}/result`);
+        if (!resultResp.ok) return false;
+        const resultData = await resultResp.json();
+        if (!resultData || !resultData.success) return false;
+        const reportResult = (((resultData || {}).result || {}).report_result || null);
+        return upsertReportCache(currentFileId, reportResult);
+    } catch (_e) {
+        return false;
+    }
+}
+
 function handleReportStatusPrimaryAction() {
     if (reportStatusState === 'ready' || reportStatusState === 'generating') {
         openReportPage();
@@ -1166,16 +1302,49 @@ function bindReportStatusBannerEvents() {
     }
 }
 
-function initializeReportAutoFlow() {
+function ensureReportGeneratingWatcher() {
+    if (reportGeneratingWatcher) return;
+    reportGeneratingWatcher = setInterval(async () => {
+        if (!currentFileId) return;
+        const cache = getReportCacheState(currentFileId);
+        if (cache.status !== 'generating') return;
+
+        const hydrated = await hydrateReportCacheFromRun();
+        if (hydrated) {
+            const latest = refreshReportStatusFromCache();
+            if (latest.status === 'ready' && latest.reportText) {
+                displayAIReport(latest.reportText, false);
+            }
+            return;
+        }
+
+        const latest = refreshReportStatusFromCache();
+        if (latest.status === 'error') {
+            showMsg(latest.errorMessage || '�������ɳ�ʱ�������ԡ�', 'warning');
+        }
+    }, 5000);
+}
+
+async function initializeReportAutoFlow() {
     bindReportStatusBannerEvents();
-    refreshReportStatusFromCache();
+    ensureReportGeneratingWatcher();
+    let cache = refreshReportStatusFromCache();
 
     if (autoReportBootstrapped) {
         return;
     }
     autoReportBootstrapped = true;
 
-    const cache = getReportCacheState(currentFileId);
+    if (cache.status === 'generating' || cache.status === 'idle') {
+        const hydrated = await hydrateReportCacheFromRun();
+        if (hydrated) {
+            cache = refreshReportStatusFromCache();
+        } else {
+            cache = getReportCacheState(currentFileId);
+        }
+    } else {
+        cache = getReportCacheState(currentFileId);
+    }
     // 如果已有报告，直接在侧边面板显示
     if (cache.status === 'ready' && cache.reportText) {
         displayAIReport(cache.reportText, false);
@@ -1214,13 +1383,14 @@ async function autoGenerateReportIfNeeded() {
 
 function setReportGenerating(fileId, generating) {
     const keys = getReportStorageKeys(fileId);
+    const tsKey = getReportGeneratingTsKey(keys);
     if (generating) {
         localStorage.setItem(keys.generating, 'true');
+        localStorage.setItem(tsKey, String(Date.now()));
         // 兼容旧版 /report 页面（读取全局键）
         localStorage.setItem('ai_report_generating', 'true');
     } else {
-        localStorage.removeItem(keys.generating);
-        localStorage.removeItem('ai_report_generating');
+        clearReportGeneratingState(fileId);
     }
 
     if (fileId === currentFileId) {
@@ -1232,11 +1402,11 @@ function clearReportCache(fileId) {
     const keys = getReportStorageKeys(fileId);
     localStorage.removeItem(keys.report);
     localStorage.removeItem(keys.error);
-    localStorage.removeItem(keys.generating);
+    localStorage.removeItem('ai_report_error');
     localStorage.removeItem(keys.payload);
+    clearReportGeneratingState(fileId);
     // 清理历史全局键，避免旧页面串病例
     localStorage.removeItem('ai_report');
-    localStorage.removeItem('ai_report_generating');
 
     if (fileId === currentFileId) {
         refreshReportStatusFromCache();
@@ -1251,6 +1421,10 @@ function openReportPage(reportWindow = null) {
     }
     const win = window.open(reportUrl, '_blank');
     if (!win) {
+        if (reportStatusState === 'generating') {
+            showMsg('Report is still generating. Please open it later.', 'warning');
+            return;
+        }
         // 弹窗被拦截时兜底在当前窗口打开
         window.location.href = reportUrl;
     }
@@ -1340,7 +1514,7 @@ async function generateAIReport(options = {}) {
         console.warn(`[MedGemma][Viewer] generate failed: ${errorMessage}`);
         localStorage.setItem(keys.error, errorMessage);
         setReportGenerating(currentFileId, false);
-        setReportStatus('error', `自动生成失败：${errorMessage}`, errorMessage);
+        setReportStatus('error', `自动生成失败�?{errorMessage}`, errorMessage);
 
         if (showInline && aiReportContent) {
             aiReportContent.innerHTML = `
@@ -1356,13 +1530,13 @@ async function generateAIReport(options = {}) {
         console.error(`[MedGemma][Viewer] generate exception: ${errorMessage}`);
         localStorage.setItem(keys.error, errorMessage);
         setReportGenerating(currentFileId, false);
-        setReportStatus('error', `自动生成失败：${errorMessage}`, errorMessage);
+        setReportStatus('error', `自动生成失败�?{errorMessage}`, errorMessage);
 
         const aiReportContent = document.getElementById('aiReportContent');
         if (showInline && aiReportContent) {
             aiReportContent.innerHTML = `
                 <div style="background: #fee2e2; padding: 16px; border-radius: 8px; border-left: 4px solid #ef4444;">
-                    <p style="color: #dc2626; font-weight: 600; margin: 0 0 8px 0;">网络或服务异常</p>
+                    <p style="color: #dc2626; font-weight: 600; margin: 0 0 8px 0;">网络或服务异�?/p>
                     <p style="color: #991b1b; margin: 0;">${errorMessage}</p>
                 </div>
             `;
@@ -1399,10 +1573,10 @@ function attachIcvToggleHandlers() {
         btn.addEventListener('click', () => {
             if (box.style.display === 'none' || !box.style.display) {
                 box.style.display = 'block';
-                btn.textContent = btn.textContent.replace(/▾$/, '▴');
+                btn.textContent = '���� ICV ����';
             } else {
                 box.style.display = 'none';
-                btn.textContent = btn.textContent.replace(/▴$/, '▾');
+                btn.textContent = '��ʾ ICV ����';
             }
         });
     } catch (e) {
@@ -1410,7 +1584,7 @@ function attachIcvToggleHandlers() {
     }
 }
 
-// 鎵嬪姩瑙﹀彂 AI 鎶ュ憡鐢熸垚锛堢敱鐢ㄦ埛鐐瑰嚮鎸夐挳璋冪敤锛?
+// 鎵嬪姩瑙﹀�?AI 鎶ュ憡鐢熸垚锛堢敱鐢ㄦ埛鐐瑰嚮鎸夐挳璋冪敤锛?
 function manualGenerateAIReport() {
     clearReportCache(currentFileId);
     setReportStatus('generating', '\u6b63\u5728\u91cd\u65b0\u751f\u6210\u62a5\u544a\uff0c\u8bf7\u7a0d\u5019\u3002');
@@ -1492,6 +1666,7 @@ function checkAnalysisStatus() {
             console.warn('check analysis status failed', err);
         });
 }
+
 
 
 

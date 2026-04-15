@@ -52,6 +52,51 @@ except Exception as e:
 
 
 # ==================== Supabase database helpers ====================
+_SUPABASE_TRANSIENT_ERROR_TOKENS = (
+    "unexpected_eof_while_reading",
+    "eof occurred in violation of protocol",
+    "connection reset",
+    "connection aborted",
+    "timed out",
+    "timeout",
+    "server closed the connection",
+    "temporarily unavailable",
+)
+
+
+def _is_supabase_transient_error(exc: Exception) -> bool:
+    text = str(exc or "").lower()
+    if not text:
+        return False
+    if any(token in text for token in _SUPABASE_TRANSIENT_ERROR_TOKENS):
+        return True
+    if "ssl" in text and ("eof" in text or "timeout" in text or "connection" in text):
+        return True
+    return False
+
+
+def _run_with_supabase_retry(op_name, fn, retries=3, base_delay=0.35):
+    attempts = max(1, int(retries))
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            transient = _is_supabase_transient_error(exc)
+            if transient and attempt < attempts:
+                sleep_s = round(base_delay * attempt, 2)
+                print(
+                    f"[Supabase Retry] op={op_name} attempt={attempt}/{attempts} "
+                    f"sleep={sleep_s}s error={exc}"
+                )
+                time.sleep(sleep_s)
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+
+
 def insert_patient_info(patient_data: dict):
     """
     Insert patient info into Supabase patient_info table.
@@ -105,8 +150,12 @@ def get_patient_by_id(patient_id: int):
     if not SUPABASE_AVAILABLE:
         return None
     try:
-        response = (
-            supabase.table("patient_info").select("*").eq("id", patient_id).execute()
+        response = _run_with_supabase_retry(
+            "get_patient_by_id",
+            lambda: supabase.table("patient_info")
+            .select("*")
+            .eq("id", patient_id)
+            .execute(),
         )
         if response.data and len(response.data) > 0:
             return response.data[0]
@@ -123,13 +172,18 @@ def get_imaging_by_case(patient_id: int, case_id: str):
     if not SUPABASE_AVAILABLE:
         return None
     try:
-        query = supabase.table("patient_imaging").select("*").eq("case_id", case_id)
-        if patient_id:
-            query = query.eq("patient_id", patient_id)
-        try:
-            response = query.order("updated_at", desc=True).limit(1).execute()
-        except Exception:
-            response = query.limit(1).execute()
+        def _query_once():
+            query = supabase.table("patient_imaging").select("*").eq("case_id", case_id)
+            if patient_id:
+                query = query.eq("patient_id", patient_id)
+            try:
+                return query.order("updated_at", desc=True).limit(1).execute()
+            except Exception as order_exc:
+                if _is_supabase_transient_error(order_exc):
+                    raise
+                return query.limit(1).execute()
+
+        response = _run_with_supabase_retry("get_imaging_by_case", _query_once)
         if response.data and len(response.data) > 0:
             return response.data[0]
         return None
@@ -1167,6 +1221,28 @@ def _generate_pseudocolor_for_result(file_id, total_slices):
     return ok, msg
 
 
+def _is_infra_stroke_analysis_error(error_message):
+    text = str(error_message or "").lower()
+    if not text:
+        return False
+    tokens = (
+        "database query failed",
+        "database connection failed",
+        "unexpected_eof_while_reading",
+        "eof occurred in violation of protocol",
+        "connection reset",
+        "connection aborted",
+        "timed out",
+        "timeout",
+        "supabase",
+    )
+    if any(token in text for token in tokens):
+        return True
+    if "ssl" in text and ("eof" in text or "timeout" in text or "connection" in text):
+        return True
+    return False
+
+
 def _run_upload_processing_job(job_id, payload):
     temp_dir = payload.get("temp_dir")
     warnings = []
@@ -1226,13 +1302,23 @@ def _run_upload_processing_job(job_id, payload):
                 else:
                     err = analysis_result.get("error", "脑卒中自动分析失败")
                     _update_step(job_id, "stroke_analysis", "failed", err)
-                    _set_job_status(job_id, "failed", err)
-                    return
+                    if _is_infra_stroke_analysis_error(err):
+                        warn = f"stroke_analysis degraded due infra error: {err}"
+                        warnings.append(warn)
+                        _add_job_warning(job_id, warn)
+                    else:
+                        _set_job_status(job_id, "failed", err)
+                        return
             except Exception as e:
                 err = f"脑卒中自动分析异常: {e}"
                 _update_step(job_id, "stroke_analysis", "failed", err)
-                _set_job_status(job_id, "failed", err)
-                return
+                if _is_infra_stroke_analysis_error(err):
+                    warn = f"stroke_analysis degraded due infra exception: {err}"
+                    warnings.append(warn)
+                    _add_job_warning(job_id, warn)
+                else:
+                    _set_job_status(job_id, "failed", err)
+                    return
         else:
             _update_step(
                 job_id, "stroke_analysis", "skipped", "当前模态组合不触发脑卒中自动分析"
@@ -1385,6 +1471,28 @@ AGENT_TOOL_STAGE_MAP = {
     "ekv": "ekv",
     "consensus_lite": "consensus",
     "generate_medgemma_report": "summary",
+}
+
+AGENT_TOOL_LABELS = {
+    "detect_modalities": "Case_Intake.parse()",
+    "load_patient_context": "Image_QC.validate()",
+    "generate_ctp_maps": "MRDPM_Generate.run()",
+    "run_stroke_analysis": "Stroke_Analysis.segment()",
+    "icv": "Evidence_Check.icv()",
+    "ekv": "Evidence_Check.ekv()",
+    "consensus_lite": "Evidence_Check.consensus()",
+    "generate_medgemma_report": "Report_Generate.compose()",
+}
+
+AGENT_TOOL_DESCRIPTIONS = {
+    "detect_modalities": "识别病例模态组合并确定任务路径",
+    "load_patient_context": "加载病例上下文并完成输入校验",
+    "generate_ctp_maps": "按需生成 CTP 灌注图谱",
+    "run_stroke_analysis": "执行卒中定量分析并产出关键指标",
+    "icv": "执行内在一致性校验",
+    "ekv": "执行外部证据与指南核验",
+    "consensus_lite": "聚合校验结果形成一致性结论",
+    "generate_medgemma_report": "生成结构化结论与最终摘要",
 }
 
 TOOL_ERROR_SUGGESTIONS = {
@@ -1748,6 +1856,7 @@ def _w0_mock_create_run(
             "file_id": str(file_id),
             "available_modalities": normalized_modalities,
             "question": str(goal_question or ""),
+            "goal_question": str(goal_question or ""),
         },
         "planner_output": planner_output,
         "steps": _w0_mock_build_steps(tool_sequence),
@@ -1897,6 +2006,549 @@ def _ensure_w0_run_fields(run):
     return run
 
 
+REVIEW_SECTION_SPECS = [
+    {
+        "section_id": "patient_context",
+        "title": "患者基本信息与时窗",
+        "guide": "确认患者身份、发病到入院时间及基础严重程度是否准确。",
+    },
+    {
+        "section_id": "imaging_summary",
+        "title": "影像摘要（NCCT/CTA）",
+        "guide": "核对 NCCT/CTA 关键影像结论，确认是否与原始图像一致。",
+    },
+    {
+        "section_id": "ctp_quant",
+        "title": "CTP 定量与临床意义",
+        "guide": "核对核心梗死体积、半暗带体积、不匹配比值及临床解释。",
+    },
+    {
+        "section_id": "question_answer",
+        "title": "问题驱动结论",
+        "guide": "确认针对目标问题的回答是否清晰、可执行、可追溯。",
+    },
+    {
+        "section_id": "risk_uncertainty",
+        "title": "风险与不确定性",
+        "guide": "重点确认高风险提醒与不确定项，避免误导性结论。",
+    },
+    {
+        "section_id": "next_steps",
+        "title": "下一步建议",
+        "guide": "确认建议项具备临床可执行性，并区分优先级。",
+    },
+    {
+        "section_id": "evidence_trace",
+        "title": "证据追溯与覆盖",
+        "guide": "确认关键结论的证据映射是否完整，检查高风险未映射项。",
+    },
+]
+REVIEW_SECTION_ID_SET = {item["section_id"] for item in REVIEW_SECTION_SPECS}
+REVIEW_STATUS_SET = {"pending", "confirmed", "needs_edit"}
+
+
+def _review_now_iso():
+    return datetime.utcnow().isoformat() + "Z"
+
+
+def _review_text(value, fallback=""):
+    if value is None:
+        return str(fallback or "")
+    text = str(value).strip()
+    return text if text else str(fallback or "")
+
+
+def _review_brief_json(value, max_len=1800):
+    try:
+        text = json.dumps(value, ensure_ascii=False, indent=2)
+    except Exception:
+        text = str(value)
+    text = str(text or "").strip()
+    if max_len and len(text) > max_len:
+        return text[: max_len - 3] + "..."
+    return text
+
+
+def _review_collect_evidence_refs(report_payload, limit=8):
+    refs = []
+    if not isinstance(report_payload, dict):
+        return refs
+    for item in report_payload.get("evidence_items") or []:
+        if not isinstance(item, dict):
+            continue
+        ev_id = _review_text(item.get("evidence_id"))
+        if ev_id:
+            refs.append(ev_id)
+        if len(refs) >= limit:
+            break
+    if len(refs) < limit:
+        for item in report_payload.get("citations") or []:
+            if not isinstance(item, dict):
+                continue
+            ev_id = _review_text(item.get("evidence_id"))
+            if ev_id and ev_id not in refs:
+                refs.append(ev_id)
+            if len(refs) >= limit:
+                break
+    return refs[:limit]
+
+
+def _review_join_lines(lines):
+    normalized = [_review_text(x) for x in (lines or []) if _review_text(x)]
+    return "\n".join(normalized).strip()
+
+
+def _review_build_sections_from_run(run):
+    run = run if isinstance(run, dict) else {}
+    planner_input = run.get("planner_input") if isinstance(run.get("planner_input"), dict) else {}
+    run_result = run.get("result") if isinstance(run.get("result"), dict) else {}
+    report_result = run_result.get("report_result") if isinstance(run_result.get("report_result"), dict) else {}
+    report_payload = report_result.get("report_payload") if isinstance(report_result.get("report_payload"), dict) else {}
+    patient_ctx = run_result.get("patient_context") if isinstance(run_result.get("patient_context"), dict) else {}
+    analysis_result = run_result.get("analysis_result") if isinstance(run_result.get("analysis_result"), dict) else {}
+
+    ctx_struct = patient_ctx.get("context_struct") if isinstance(patient_ctx.get("context_struct"), dict) else {}
+    patient_info = (
+        ctx_struct.get("patient")
+        if isinstance(ctx_struct.get("patient"), dict)
+        else (patient_ctx.get("patient") if isinstance(patient_ctx.get("patient"), dict) else {})
+    )
+    imaging_info = (
+        ctx_struct.get("imaging")
+        if isinstance(ctx_struct.get("imaging"), dict)
+        else (patient_ctx.get("imaging") if isinstance(patient_ctx.get("imaging"), dict) else {})
+    )
+    ctp_info = (
+        ctx_struct.get("ctp")
+        if isinstance(ctx_struct.get("ctp"), dict)
+        else (patient_ctx.get("ctp") if isinstance(patient_ctx.get("ctp"), dict) else {})
+    )
+
+    qa = report_payload.get("question_answer") if isinstance(report_payload.get("question_answer"), dict) else {}
+    final_report = report_payload.get("final_report") if isinstance(report_payload.get("final_report"), dict) else {}
+    traceability = report_payload.get("traceability") if isinstance(report_payload.get("traceability"), dict) else {}
+
+    core_val = (
+        analysis_result.get("core_infarct_volume")
+        if analysis_result.get("core_infarct_volume") is not None
+        else ctp_info.get("core_infarct_volume")
+    )
+    penumbra_val = (
+        analysis_result.get("penumbra_volume")
+        if analysis_result.get("penumbra_volume") is not None
+        else ctp_info.get("penumbra_volume")
+    )
+    mismatch_val = (
+        analysis_result.get("mismatch_ratio")
+        if analysis_result.get("mismatch_ratio") is not None
+        else ctp_info.get("mismatch_ratio")
+    )
+    hemisphere_val = (
+        analysis_result.get("hemisphere")
+        or imaging_info.get("hemisphere")
+        or planner_input.get("hemisphere")
+        or "both"
+    )
+
+    summary_findings = report_payload.get("summary_findings")
+    if not isinstance(summary_findings, list):
+        summary_findings = []
+    summary_findings = [str(x).strip() for x in summary_findings if str(x).strip()]
+
+    key_points = qa.get("key_points")
+    if not isinstance(key_points, list):
+        key_points = []
+    key_points = [str(x).strip() for x in key_points if str(x).strip()]
+
+    next_steps = qa.get("next_steps")
+    if not isinstance(next_steps, list):
+        next_steps = final_report.get("next_actions") if isinstance(final_report.get("next_actions"), list) else []
+    next_steps = [str(x).strip() for x in next_steps if str(x).strip()]
+
+    uncertainties = final_report.get("uncertainties")
+    if not isinstance(uncertainties, list):
+        uncertainties = []
+    uncertainties = [str(x).strip() for x in uncertainties if str(x).strip()]
+
+    evidence_refs = _review_collect_evidence_refs(report_payload, limit=16)
+    now_ts = _review_now_iso()
+    goal_question = _review_text(
+        planner_input.get("goal_question") or planner_input.get("question"),
+        "请确认本次卒中影像结论与下一步建议。",
+    )
+
+    patient_lines = [
+        f"患者ID：{_review_text(planner_input.get('patient_id'), '-')}",
+        f"病例号：{_review_text(planner_input.get('file_id'), '-')}",
+        f"性别：{_review_text(patient_info.get('patient_sex'), _review_text(patient_info.get('sex'), '-'))}",
+        f"年龄：{_review_text(patient_info.get('patient_age'), _review_text(patient_info.get('age'), '-'))}",
+        f"入院 NIHSS：{_review_text(patient_info.get('admission_nihss'), '-')}",
+        f"发病至入院（小时）：{_review_text(patient_info.get('onset_to_admission_hours'), '-')}",
+    ]
+
+    imaging_lines = []
+    if summary_findings:
+        imaging_lines.extend([f"- {item}" for item in summary_findings[:6]])
+    else:
+        imaging_lines.extend(
+            [
+                f"可用模态：{_review_text(imaging_info.get('available_modalities'), '-')}",
+                f"病灶侧别：{_review_text(hemisphere_val, '-')}",
+                "请结合 NCCT/CTA 原始图像复核关键征象。",
+            ]
+        )
+
+    ctp_lines = [
+        f"核心梗死体积（ml）：{_review_text(core_val, '-')}",
+        f"半暗带体积（ml）：{_review_text(penumbra_val, '-')}",
+        f"不匹配比值：{_review_text(mismatch_val, '-')}",
+        f"病灶侧别：{_review_text(hemisphere_val, '-')}",
+        "请确认上述指标与 CTP 图谱一致，并复核临床可解释性。",
+    ]
+
+    qa_lines = [
+        f"用户问题：{goal_question}",
+        f"回答置信度：{_review_text(qa.get('confidence'), _review_text(final_report.get('confidence'), '-'))}",
+        "",
+        _review_text(qa.get("answer"), _review_text(report_result.get("report"), "暂无结构化回答文本，请补充。")),
+    ]
+    if key_points:
+        qa_lines.append("")
+        qa_lines.append("关键要点：")
+        qa_lines.extend([f"- {item}" for item in key_points[:6]])
+
+    risk_level = _review_text(final_report.get("risk_level"), "medium").lower()
+    risk_lines = [
+        f"风险等级：{risk_level}",
+    ]
+    if uncertainties:
+        risk_lines.append("不确定项：")
+        risk_lines.extend([f"- {item}" for item in uncertainties[:8]])
+    else:
+        risk_lines.append("未返回明确不确定项，建议复核证据覆盖率。")
+
+    next_lines = []
+    if next_steps:
+        next_lines.extend([f"{idx + 1}. {item}" for idx, item in enumerate(next_steps[:8])])
+    else:
+        next_lines.append("暂无明确下一步建议，请结合临床路径手动补充。")
+
+    trace_lines = [
+        f"证据覆盖率：{_review_text(traceability.get('coverage'), '-')}",
+        f"已映射/总发现：{_review_text(traceability.get('mapped_findings'), '-')} / {_review_text(traceability.get('total_findings'), '-')}",
+        f"高风险未映射数量：{_review_text(traceability.get('high_risk_unmapped_count'), '-')}",
+    ]
+    if evidence_refs:
+        trace_lines.append("证据引用ID：")
+        trace_lines.extend([f"- {item}" for item in evidence_refs[:10]])
+
+    raw_section_text = {
+        "patient_context": _review_join_lines(patient_lines),
+        "imaging_summary": _review_join_lines(imaging_lines),
+        "ctp_quant": _review_join_lines(ctp_lines),
+        "question_answer": _review_join_lines(qa_lines),
+        "risk_uncertainty": _review_join_lines(risk_lines),
+        "next_steps": _review_join_lines(next_lines),
+        "evidence_trace": _review_join_lines(trace_lines),
+    }
+
+    section_risk_level = {
+        "patient_context": "low",
+        "imaging_summary": "medium",
+        "ctp_quant": "medium",
+        "question_answer": "medium",
+        "risk_uncertainty": "high" if risk_level == "high" else "medium",
+        "next_steps": "medium",
+        "evidence_trace": "medium",
+    }
+
+    section_evidence_map = {
+        "patient_context": evidence_refs[:3],
+        "imaging_summary": evidence_refs[:5],
+        "ctp_quant": evidence_refs[:6],
+        "question_answer": evidence_refs[:6],
+        "risk_uncertainty": evidence_refs[:8],
+        "next_steps": evidence_refs[:6],
+        "evidence_trace": evidence_refs[:10],
+    }
+
+    sections = []
+    for spec in REVIEW_SECTION_SPECS:
+        sid = spec["section_id"]
+        sections.append(
+            {
+                "section_id": sid,
+                "title": spec["title"],
+                "guide": spec["guide"],
+                "draft_text": raw_section_text.get(sid) or "（待补充）",
+                "evidence_refs": section_evidence_map.get(sid, []),
+                "risk_level": section_risk_level.get(sid, "medium"),
+                "review_status": "pending",
+                "doctor_note": "",
+                "updated_at": now_ts,
+            }
+        )
+    return sections
+
+
+def _review_recompute_state(review_state):
+    state = copy.deepcopy(review_state or {})
+    sections = state.get("sections")
+    if not isinstance(sections, list):
+        sections = []
+    normalized = []
+    current_lookup = {}
+    for item in sections:
+        if not isinstance(item, dict):
+            continue
+        sid = _review_text(item.get("section_id"))
+        if not sid:
+            continue
+        current_lookup[sid] = item
+
+    for spec in REVIEW_SECTION_SPECS:
+        sid = spec["section_id"]
+        src = current_lookup.get(sid, {})
+        review_status = _review_text(src.get("review_status"), "pending").lower()
+        if review_status not in REVIEW_STATUS_SET:
+            review_status = "pending"
+        normalized.append(
+            {
+                "section_id": sid,
+                "title": _review_text(src.get("title"), spec["title"]),
+                "guide": _review_text(src.get("guide"), spec["guide"]),
+                "draft_text": _review_text(src.get("draft_text"), "（待补充）"),
+                "evidence_refs": [
+                    _review_text(x)
+                    for x in (src.get("evidence_refs") or [])
+                    if _review_text(x)
+                ],
+                "risk_level": _review_text(src.get("risk_level"), "medium").lower(),
+                "review_status": review_status,
+                "doctor_note": _review_text(src.get("doctor_note"), ""),
+                "updated_at": _review_text(src.get("updated_at"), _review_now_iso()),
+            }
+        )
+
+    confirmed = sum(1 for x in normalized if x.get("review_status") == "confirmed")
+    total = len(normalized)
+    all_confirmed = bool(total > 0 and confirmed == total)
+    first_pending = next(
+        (x.get("section_id") for x in normalized if x.get("review_status") != "confirmed"),
+        None,
+    )
+
+    state["sections"] = normalized
+    state["all_confirmed"] = all_confirmed
+    state["confirmed_count"] = confirmed
+    state["total_sections"] = total
+    state["pending_count"] = max(0, total - confirmed)
+    state["current_section_id"] = None if all_confirmed else first_pending
+    state["updated_at"] = _review_now_iso()
+    return state
+
+
+def _review_build_state(run, existing_state=None):
+    run = run if isinstance(run, dict) else {}
+    base_sections = _review_build_sections_from_run(run)
+
+    merged_lookup = {}
+    if isinstance(existing_state, dict):
+        for item in existing_state.get("sections") or []:
+            if not isinstance(item, dict):
+                continue
+            sid = _review_text(item.get("section_id"))
+            if sid:
+                merged_lookup[sid] = item
+
+    for section in base_sections:
+        sid = section["section_id"]
+        old = merged_lookup.get(sid)
+        if not old:
+            continue
+        section["draft_text"] = _review_text(old.get("draft_text"), section["draft_text"])
+        section["doctor_note"] = _review_text(old.get("doctor_note"), "")
+        status = _review_text(old.get("review_status"), "pending").lower()
+        section["review_status"] = status if status in REVIEW_STATUS_SET else "pending"
+        if isinstance(old.get("evidence_refs"), list) and old.get("evidence_refs"):
+            section["evidence_refs"] = [
+                _review_text(x)
+                for x in old.get("evidence_refs")
+                if _review_text(x)
+            ]
+        if _review_text(old.get("risk_level")):
+            section["risk_level"] = _review_text(old.get("risk_level"), section["risk_level"]).lower()
+
+    created_at = (
+        _review_text((existing_state or {}).get("created_at"))
+        if isinstance(existing_state, dict)
+        else ""
+    )
+    if not created_at:
+        created_at = _review_now_iso()
+
+    state = {
+        "version": "w1_review_v1",
+        "run_id": _review_text(run.get("run_id")),
+        "patient_id": run.get("patient_id"),
+        "file_id": _review_text(run.get("file_id")),
+        "created_at": created_at,
+        "updated_at": _review_now_iso(),
+        "sections": base_sections,
+    }
+    return _review_recompute_state(state)
+
+
+def _review_get_section(review_state, section_id):
+    sid = _review_text(section_id)
+    if sid not in REVIEW_SECTION_ID_SET:
+        return None, None
+    sections = review_state.get("sections") if isinstance(review_state, dict) else []
+    if not isinstance(sections, list):
+        return None, None
+    for idx, item in enumerate(sections):
+        if _review_text(item.get("section_id")) == sid:
+            return idx, item
+    return None, None
+
+
+def _review_rule_rewrite(draft_text, section, rewrite_intent=""):
+    base_text = _review_text(draft_text, "（待补充）")
+    intent = _review_text(rewrite_intent)
+    title = _review_text((section or {}).get("title"), "当前章节")
+    evidence_refs = (
+        [str(x).strip() for x in ((section or {}).get("evidence_refs") or []) if str(x).strip()]
+        if isinstance(section, dict)
+        else []
+    )
+    lines = [f"【{title}（改写建议）】", base_text]
+    if intent:
+        lines.append("")
+        lines.append(f"改写意图：{intent}")
+    if evidence_refs:
+        lines.append("")
+        lines.append(f"证据引用：{', '.join(evidence_refs[:6])}")
+    suggestion = _review_join_lines(lines)
+    reason = "已按临床表达优先策略保留关键指标、结论与证据引用。"
+    return suggestion, reason
+
+
+def _review_compose_final_report(review_state):
+    state = _review_recompute_state(review_state)
+    lines = ["# StrokeClaw 最终确认版报告", ""]
+    for section in state.get("sections") or []:
+        title = _review_text(section.get("title"), _review_text(section.get("section_id"), "章节"))
+        lines.append(f"## {title}")
+        lines.append(_review_text(section.get("draft_text"), "（待补充）"))
+        note = _review_text(section.get("doctor_note"))
+        if note:
+            lines.append("")
+            lines.append(f"医生备注：{note}")
+        lines.append("")
+    return "\n".join(lines).strip()
+
+
+def _review_attach_to_run_state(state, review_state, final_report_text=None):
+    state["review_state"] = copy.deepcopy(_review_recompute_state(review_state))
+
+    run_result = state.get("result")
+    if not isinstance(run_result, dict):
+        run_result = {}
+    report_result = run_result.get("report_result")
+    if not isinstance(report_result, dict):
+        report_result = {}
+    report_payload = report_result.get("report_payload")
+    if not isinstance(report_payload, dict):
+        report_payload = {}
+
+    report_payload["review_state"] = copy.deepcopy(state["review_state"])
+    report_payload["review_updated_at"] = _review_now_iso()
+    if final_report_text:
+        report_payload["final_confirmed_report"] = str(final_report_text)
+        report_payload["review_finalized_at"] = _review_now_iso()
+        report_result["report"] = str(final_report_text)
+
+    report_result["report_payload"] = report_payload
+    run_result["report_result"] = report_result
+    state["result"] = run_result
+
+
+def _persist_review_state_best_effort(
+    patient_id,
+    file_id,
+    review_state,
+    run=None,
+    final_report_text=None,
+):
+    result = {"success": False, "error": None, "mode": "none"}
+    if not SUPABASE_AVAILABLE:
+        result["error"] = "Supabase unavailable"
+        return result
+    if not file_id:
+        result["error"] = "Missing file_id"
+        return result
+
+    try:
+        report_payload = {}
+        if isinstance(run, dict):
+            run_result = run.get("result") if isinstance(run.get("result"), dict) else {}
+            report_result = (
+                run_result.get("report_result")
+                if isinstance(run_result.get("report_result"), dict)
+                else {}
+            )
+            candidate = report_result.get("report_payload")
+            if isinstance(candidate, dict):
+                report_payload = copy.deepcopy(candidate)
+
+        if not report_payload:
+            imaging = get_imaging_by_case(patient_id, file_id)
+            if isinstance(imaging, dict):
+                candidate = imaging.get("report_payload")
+                if isinstance(candidate, dict):
+                    report_payload = copy.deepcopy(candidate)
+                elif isinstance(imaging.get("analysis_result"), dict):
+                    nested = imaging.get("analysis_result", {}).get("report_payload")
+                    if isinstance(nested, dict):
+                        report_payload = copy.deepcopy(nested)
+
+        report_payload["review_state"] = copy.deepcopy(_review_recompute_state(review_state))
+        report_payload["review_updated_at"] = _review_now_iso()
+        if final_report_text:
+            report_payload["final_confirmed_report"] = str(final_report_text)
+            report_payload["review_finalized_at"] = _review_now_iso()
+
+        def _upsert_once():
+            update_query = (
+                supabase.table("patient_imaging")
+                .update({"report_payload": report_payload})
+                .eq("case_id", file_id)
+            )
+            if patient_id not in (None, ""):
+                update_query = update_query.eq("patient_id", patient_id)
+            update_resp = update_query.execute()
+            if update_resp.data and len(update_resp.data) > 0:
+                return "updated"
+
+            insert_payload = {
+                "patient_id": patient_id,
+                "case_id": file_id,
+                "report_payload": report_payload,
+            }
+            insert_resp = supabase.table("patient_imaging").insert([insert_payload]).execute()
+            if insert_resp.data and len(insert_resp.data) > 0:
+                return "inserted"
+            return "noop"
+
+        mode = _run_with_supabase_retry("persist_review_state", _upsert_once)
+        result["success"] = True
+        result["mode"] = mode
+        return result
+    except Exception as exc:
+        result["error"] = str(exc)
+        return result
+
+
 def _classify_agent_event_type(event):
     tool_name = str((event or {}).get("tool_name") or "").strip().lower()
     status = str((event or {}).get("status") or "").strip().lower()
@@ -1995,7 +2647,9 @@ def _create_agent_run(
     }
     # 将用户问题存入 planner_input
     if question:
-        planner_input["question"] = str(question).strip()
+        normalized_question = str(question).strip()
+        planner_input["question"] = normalized_question
+        planner_input["goal_question"] = normalized_question
     run = {
         "run_id": run_id,
         "patient_id": patient_id,
@@ -2021,6 +2675,7 @@ def _create_agent_run(
         "termination_reason": "queued",
         "human_checkpoint": None,
         "finalization": None,
+        "review_state": None,
     }
     with AGENT_RUNTIME_LOCK:
         AGENT_RUNS[run_id] = run
@@ -2098,6 +2753,203 @@ def _get_agent_events(run_id):
         return _safe_agent_copy(AGENT_EVENTS.get(run_id, []))
 
 
+def _agent_compact_value(value, max_chars=140):
+    """Convert nested payload into short, readable one-line text."""
+    if value is None:
+        return "-"
+    if isinstance(value, bool):
+        return "是" if value else "否"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return "-"
+        return text if len(text) <= max_chars else f"{text[: max_chars - 3]}..."
+    if isinstance(value, (list, tuple, set)):
+        items = [str(_agent_compact_value(v, max_chars=30)) for v in list(value)[:4]]
+        suffix = ", ..." if len(value) > 4 else ""
+        return f"[{', '.join(items)}{suffix}]"
+    if isinstance(value, dict):
+        if value.get("error_message"):
+            return _agent_compact_value(value.get("error_message"), max_chars=max_chars)
+        if value.get("message"):
+            return _agent_compact_value(value.get("message"), max_chars=max_chars)
+        pairs = []
+        for key in list(value.keys())[:5]:
+            pairs.append(f"{key}={_agent_compact_value(value.get(key), max_chars=28)}")
+        suffix = ", ..." if len(value) > 5 else ""
+        text = ", ".join(pairs) + suffix
+        return text if len(text) <= max_chars else f"{text[: max_chars - 3]}..."
+    text = str(value)
+    return text if len(text) <= max_chars else f"{text[: max_chars - 3]}..."
+
+
+def _agent_modalities_text(payload):
+    if not isinstance(payload, dict):
+        return "-"
+    raw = payload.get("available_modalities")
+    if isinstance(raw, (list, tuple, set)):
+        values = [str(item).strip().lower() for item in raw if str(item).strip()]
+        if values:
+            return " + ".join(values)
+    modalities = payload.get("modalities")
+    if isinstance(modalities, (list, tuple, set)):
+        values = [str(item).strip().lower() for item in modalities if str(item).strip()]
+        if values:
+            return " + ".join(values)
+    return "-"
+
+
+def _agent_collect_risk_items(output_ref, fallback_message):
+    if isinstance(output_ref, dict):
+        raw = output_ref.get("risk_items")
+        if isinstance(raw, list):
+            items = [str(x).strip() for x in raw if str(x).strip()]
+            if items:
+                return items[:5]
+        issues = output_ref.get("issues")
+        if isinstance(issues, list):
+            items = [str(x).strip() for x in issues if str(x).strip()]
+            if items:
+                return items[:5]
+        if isinstance(output_ref.get("error_message"), str) and output_ref.get(
+            "error_message"
+        ).strip():
+            return [output_ref.get("error_message").strip()]
+    if isinstance(fallback_message, str) and fallback_message.strip():
+        return [fallback_message.strip()]
+    return []
+
+
+def _build_agent_event_clinical_fields(event):
+    """Build compatibility summary fields for processing runtime UI."""
+    item = dict(event or {})
+    tool_name = str(item.get("tool_name") or "").strip()
+    event_type = str(item.get("event_type") or "").strip().lower()
+    status = str(item.get("status") or "").strip().lower()
+    error_code = str(item.get("error_code") or "").strip()
+    input_ref = item.get("input_ref") if isinstance(item.get("input_ref"), dict) else {}
+    output_ref = (
+        item.get("output_ref") if isinstance(item.get("output_ref"), dict) else {}
+    )
+    summary = {
+        "input_summary": "",
+        "result_summary": "",
+        "clinical_impact": "",
+        "risk_level": "none",
+        "risk_items": [],
+        "action_required": "",
+        "action_log": "",
+        "narrative_hint": "node_progress",
+    }
+
+    patient_id = input_ref.get("patient_id") or item.get("patient_id") or "-"
+    file_id = input_ref.get("file_id") or item.get("file_id") or "-"
+    modalities = _agent_modalities_text(input_ref) or _agent_modalities_text(output_ref)
+    tool_label = _agent_tool_title(tool_name)
+    base_result = _agent_compact_value(
+        output_ref if output_ref else item.get("message") or item.get("status")
+    )
+
+    summary["input_summary"] = f"接收病例上下文（patient_id={patient_id}, file_id={file_id}）。"
+    summary["result_summary"] = f"{tool_label}执行状态：{base_result}"
+    summary["clinical_impact"] = "该节点用于推进卒中评估流程，保证报告链路连续。"
+
+    if tool_name in {"triage_planner"}:
+        summary["input_summary"] = (
+            f"整合病例主诉与模态信息，生成执行计划（模态：{modalities or '-'}）。"
+        )
+        summary["result_summary"] = "已完成任务编排，进入多节点协作执行。"
+        summary["clinical_impact"] = "明确后续分析顺序，减少关键步骤遗漏。"
+        summary["narrative_hint"] = "plan_created"
+    elif tool_name in {"detect_modalities"}:
+        summary["input_summary"] = "识别已上传影像模态并进行路由判定。"
+        summary["result_summary"] = f"可用模态：{modalities}"
+        summary["clinical_impact"] = "确认可执行的分析路径，避免无效推理。"
+    elif tool_name in {"load_patient_context"}:
+        summary["input_summary"] = "加载患者基础信息、病史及影像上下文。"
+        summary["result_summary"] = _agent_compact_value(output_ref or "病例上下文已加载")
+        summary["clinical_impact"] = "为后续卒中分割与证据核验提供临床背景。"
+    elif tool_name in {"generate_ctp_maps"}:
+        summary["input_summary"] = "基于多模态影像生成灌注图谱（CBF/CBV/Tmax）。"
+        summary["result_summary"] = _agent_compact_value(output_ref or "灌注图谱已生成")
+        summary["clinical_impact"] = "提供缺血核心与低灌注评估的定量依据。"
+    elif tool_name in {"run_stroke_analysis"}:
+        summary["input_summary"] = "执行卒中区域分割与体积测量。"
+        summary["result_summary"] = _agent_compact_value(output_ref or "卒中分析已完成")
+        summary["clinical_impact"] = "为治疗决策提供病灶侧别与体积证据。"
+    elif tool_name in {"icv"}:
+        summary["input_summary"] = "对院内关键指标进行一致性核验。"
+        summary["result_summary"] = _agent_compact_value(output_ref or "ICV 校验完成")
+        summary["clinical_impact"] = "降低指标矛盾导致的误判风险。"
+    elif tool_name in {"ekv"}:
+        summary["input_summary"] = "将当前结果与指南证据进行比对。"
+        summary["result_summary"] = _agent_compact_value(output_ref or "EKV 核验完成")
+        summary["clinical_impact"] = "提高结论的循证可信度。"
+    elif tool_name in {"consensus_lite"}:
+        summary["input_summary"] = "融合多路证据并做冲突裁决。"
+        summary["result_summary"] = _agent_compact_value(output_ref or "共识裁决完成")
+        summary["clinical_impact"] = "形成可解释的一致性诊断意见。"
+    elif tool_name in {"generate_medgemma_report"}:
+        summary["input_summary"] = "根据推理结果自动生成结构化卒中报告。"
+        summary["result_summary"] = _agent_compact_value(output_ref or "报告草案已生成")
+        summary["clinical_impact"] = "减少医生重复录入，提升报告出具效率。"
+    elif tool_name in {"human_confirm", "human_review"}:
+        summary["input_summary"] = "触发人工复核节点，等待临床确认。"
+        summary["result_summary"] = _agent_compact_value(output_ref or "等待人工操作")
+        summary["clinical_impact"] = "高风险决策需人工签核，保障医疗安全。"
+    elif tool_name in {"emr_sync", "emr_sync_writeback"}:
+        summary["input_summary"] = "将结果回写至 HIS/EMR 并完成归档。"
+        summary["result_summary"] = _agent_compact_value(output_ref or "写回归档完成")
+        summary["clinical_impact"] = "形成可追溯闭环，支持后续临床追踪。"
+        summary["narrative_hint"] = "writeback_completed"
+
+    if event_type in {"issue_found"} or status in {"failed", "error", "warn", "warning"}:
+        summary["risk_level"] = (
+            "high"
+            if "MISSING" in error_code.upper()
+            or "SAFETY" in error_code.upper()
+            or "BLOCK" in error_code.upper()
+            else "medium"
+        )
+        summary["risk_items"] = _agent_collect_risk_items(output_ref, base_result)
+        summary["clinical_impact"] = (
+            f"{summary['clinical_impact']} 当前发现潜在风险，需要复核后再继续。"
+        )
+        summary["narrative_hint"] = "issue_found"
+
+    if event_type == "human_review_required" or status in {
+        "paused_review_required",
+        "review_required",
+        "await_review",
+    }:
+        action_required = (
+            output_ref.get("action_required")
+            if isinstance(output_ref, dict)
+            else None
+        )
+        summary["risk_level"] = "high"
+        summary["action_required"] = str(
+            action_required or "请临床医生确认高风险节点并决定是否继续。"
+        )
+        summary["clinical_impact"] = "流程已进入人工确认阶段，等待临床签核。"
+        summary["narrative_hint"] = "human_review_required"
+
+    if event_type == "human_review_completed":
+        action_log = (
+            output_ref.get("action_log") if isinstance(output_ref, dict) else None
+        ) or item.get("message")
+        summary["action_log"] = str(action_log or "人工复核已完成并允许流程继续。")
+        summary["narrative_hint"] = "human_review_completed"
+
+    if event_type == "writeback_completed":
+        summary["narrative_hint"] = "writeback_completed"
+        summary["risk_level"] = "none"
+
+    return summary
+
+
 def _append_agent_event(
     run_id,
     agent_name,
@@ -2113,6 +2965,7 @@ def _append_agent_event(
     run_state = _get_agent_run(run_id) or {}
     current_stage = run_state.get("stage")
     current_seq = len(_get_agent_events(run_id)) + 1
+    event_type = _classify_agent_event_type({"tool_name": tool_name, "status": status})
     event = {
         "event_id": str(uuid.uuid4()),
         "run_id": run_id,
@@ -2125,13 +2978,12 @@ def _append_agent_event(
         "output_ref": output_ref,
         "latency_ms": int(latency_ms or 0),
         "status": status,
-        "event_type": _classify_agent_event_type(
-            {"tool_name": tool_name, "status": status}
-        ),
+        "event_type": event_type,
         "error_code": error_code,
         "retryable": bool(retryable),
         "attempt": int(attempt),
     }
+    event.update(_build_agent_event_clinical_fields(event))
     with AGENT_RUNTIME_LOCK:
         AGENT_EVENTS.setdefault(run_id, []).append(event)
     _agent_log(
@@ -2195,6 +3047,36 @@ def _agent_tool_sequence(imaging_path):
     return AGENT_TOOL_SEQUENCE_MAP.get(str(imaging_path or "").strip(), [])
 
 
+def _agent_tool_title(tool_name):
+    key = str(tool_name or "").strip()
+    if not key:
+        return "-"
+    return AGENT_TOOL_LABELS.get(key, key)
+
+
+def _agent_tool_description(tool_name):
+    key = str(tool_name or "").strip()
+    if not key:
+        return ""
+    return AGENT_TOOL_DESCRIPTIONS.get(key, "")
+
+
+def _modality_display_label(modality_key):
+    labels = {
+        "ncct": "NCCT",
+        "mcta": "mCTA-arterial",
+        "vcta": "mCTA-venous",
+        "dcta": "mCTA-delayed",
+        "cbf": "CBF",
+        "cbv": "CBV",
+        "tmax": "Tmax",
+    }
+    token = str(modality_key or "").strip().lower()
+    if not token:
+        return "-"
+    return labels.get(token, token.upper())
+
+
 def _collect_case_upload_files(file_id):
     suffix_to_field = {
         "ncct": "ncct_file",
@@ -2217,6 +3099,25 @@ def _collect_case_upload_files(file_id):
             "filename": os.path.basename(path),
         }
     return files
+
+
+def _infer_modalities_from_file_id(file_id):
+    field_to_modality = {
+        "ncct_file": "ncct",
+        "mcta_file": "mcta",
+        "vcta_file": "vcta",
+        "dcta_file": "dcta",
+        "cbf_file": "cbf",
+        "cbv_file": "cbv",
+        "tmax_file": "tmax",
+    }
+    files = _collect_case_upload_files(file_id)
+    detected = []
+    for field_name in files.keys():
+        modality = field_to_modality.get(field_name)
+        if modality and modality not in detected:
+            detected.append(modality)
+    return _normalize_uploaded_modalities(detected)
 
 
 def _latest_tool_result_by_name(run, tool_name):
@@ -7441,6 +8342,11 @@ def strokeclaw_w0_page():
     return render_template("patient/upload/strokeclaw_w0/index.html")
 
 
+@app.route("/strokeclaw/tasks")
+def strokeclaw_tasks_page():
+    return render_template("patient/strokeclaw_tasks/index.html")
+
+
 @app.route("/processing")
 def processing_page():
     return render_template("patient/upload/processing/index.html")
@@ -7613,6 +8519,357 @@ def api_upload_progress(job_id):
     return jsonify({"success": True, "job": job})
 
 
+@app.route("/api/strokeclaw/tasks", methods=["GET"])
+def api_get_strokeclaw_tasks():
+    limit_raw = request.args.get("limit", "24")
+    try:
+        limit = int(limit_raw)
+    except Exception:
+        limit = 24
+    limit = max(1, min(limit, 100))
+
+    with AGENT_RUNTIME_LOCK:
+        run_snapshots = [copy.deepcopy(run) for run in AGENT_RUNS.values()]
+
+    latest_run_by_task = {}
+    for run in run_snapshots:
+        file_id = str((run or {}).get("file_id") or "").strip()
+        patient_id_raw = (run or {}).get("patient_id")
+        try:
+            patient_id = int(patient_id_raw)
+        except Exception:
+            continue
+        if patient_id <= 0 or not file_id:
+            continue
+        key = (patient_id, file_id)
+        token = str((run or {}).get("updated_at") or (run or {}).get("created_at") or "")
+        previous = latest_run_by_task.get(key)
+        previous_token = str(
+            (previous or {}).get("updated_at") or (previous or {}).get("created_at") or ""
+        )
+        if previous is None or token >= previous_token:
+            latest_run_by_task[key] = run
+
+    tasks = []
+    source_tags = []
+
+    if SUPABASE_AVAILABLE:
+        imaging_rows = []
+        try:
+            response = (
+                supabase.table("patient_imaging")
+                .select(
+                    "patient_id, case_id, available_modalities, hemisphere, updated_at, created_at"
+                )
+                .order("updated_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            imaging_rows = response.data or []
+        except Exception as e:
+            print(f"[StrokeClaw Tasks] patient_imaging order by updated_at failed: {e}")
+            try:
+                response = (
+                    supabase.table("patient_imaging")
+                    .select(
+                        "patient_id, case_id, available_modalities, hemisphere, updated_at, created_at"
+                    )
+                    .order("created_at", desc=True)
+                    .limit(limit)
+                    .execute()
+                )
+                imaging_rows = response.data or []
+            except Exception as ee:
+                print(f"[StrokeClaw Tasks] patient_imaging order by created_at failed: {ee}")
+                imaging_rows = []
+
+        if imaging_rows:
+            patient_name_map = {}
+            patient_ids = sorted(
+                {
+                    int(item.get("patient_id"))
+                    for item in imaging_rows
+                    if str(item.get("patient_id") or "").strip().isdigit()
+                }
+            )
+            if patient_ids:
+                try:
+                    patient_resp = (
+                        supabase.table("patient_info")
+                        .select("id, patient_name")
+                        .in_("id", patient_ids)
+                        .execute()
+                    )
+                    for row in patient_resp.data or []:
+                        try:
+                            pid = int(row.get("id"))
+                        except Exception:
+                            continue
+                        patient_name_map[pid] = str(row.get("patient_name") or "").strip()
+                except Exception as e:
+                    print(f"[StrokeClaw Tasks] patient_info batch fetch failed: {e}")
+
+            for row in imaging_rows:
+                file_id = str((row or {}).get("case_id") or "").strip()
+                patient_id_raw = (row or {}).get("patient_id")
+                try:
+                    patient_id = int(patient_id_raw)
+                except Exception:
+                    continue
+                if patient_id <= 0 or not file_id:
+                    continue
+
+                modalities = _normalize_uploaded_modalities(
+                    (row or {}).get("available_modalities") or []
+                )
+                if not modalities:
+                    modalities = _infer_modalities_from_file_id(file_id)
+                decision = _build_path_decision(modalities)
+                run_state = latest_run_by_task.get((patient_id, file_id)) or {}
+                run_status = str((run_state or {}).get("status") or "").strip().lower()
+
+                if run_status:
+                    task_status = run_status
+                elif decision.get("valid"):
+                    task_status = "ready"
+                else:
+                    task_status = "input_missing"
+
+                updated_at = str(
+                    (row or {}).get("updated_at")
+                    or (row or {}).get("created_at")
+                    or (run_state or {}).get("updated_at")
+                    or (run_state or {}).get("created_at")
+                    or ""
+                )
+
+                modalities_text = " + ".join(
+                    [_modality_display_label(item) for item in modalities]
+                )
+                if not modalities_text:
+                    modalities_text = "No modalities"
+
+                planner_input = (run_state or {}).get("planner_input") or {}
+                goal_question = str(
+                    planner_input.get("question") or planner_input.get("goal_question") or ""
+                ).strip()
+
+                tasks.append(
+                    {
+                        "task_id": f"{patient_id}:{file_id}",
+                        "patient_id": patient_id,
+                        "patient_name": patient_name_map.get(patient_id)
+                        or f"Patient {patient_id}",
+                        "file_id": file_id,
+                        "available_modalities": modalities,
+                        "modality_labels": [
+                            _modality_display_label(item) for item in modalities
+                        ],
+                        "modality_summary": modalities_text,
+                        "imaging_path": decision.get("imaging_path")
+                        if decision.get("valid")
+                        else "unknown",
+                        "path_valid": bool(decision.get("valid")),
+                        "status": task_status,
+                        "updated_at": updated_at,
+                        "hemisphere": str((row or {}).get("hemisphere") or "both"),
+                        "goal_question": goal_question,
+                        "last_run": {
+                            "run_id": str((run_state or {}).get("run_id") or ""),
+                            "status": str((run_state or {}).get("status") or ""),
+                            "stage": str((run_state or {}).get("stage") or ""),
+                            "termination_reason": str(
+                                (run_state or {}).get("termination_reason") or ""
+                            ),
+                        },
+                        "source": "patient_imaging",
+                    }
+                )
+            source_tags.append("supabase")
+
+    if not tasks and latest_run_by_task:
+        for (patient_id, file_id), run_state in latest_run_by_task.items():
+            planner_input = (run_state or {}).get("planner_input") or {}
+            modalities = _normalize_uploaded_modalities(
+                planner_input.get("available_modalities") or []
+            )
+            decision = _build_path_decision(modalities)
+            modalities_text = " + ".join(
+                [_modality_display_label(item) for item in modalities]
+            )
+            if not modalities_text:
+                modalities_text = "No modalities"
+            tasks.append(
+                {
+                    "task_id": f"{patient_id}:{file_id}",
+                    "patient_id": patient_id,
+                    "patient_name": f"Patient {patient_id}",
+                    "file_id": file_id,
+                    "available_modalities": modalities,
+                    "modality_labels": [_modality_display_label(item) for item in modalities],
+                    "modality_summary": modalities_text,
+                    "imaging_path": decision.get("imaging_path")
+                    if decision.get("valid")
+                    else "unknown",
+                    "path_valid": bool(decision.get("valid")),
+                    "status": str((run_state or {}).get("status") or "running"),
+                    "updated_at": str(
+                        (run_state or {}).get("updated_at")
+                        or (run_state or {}).get("created_at")
+                        or ""
+                    ),
+                    "hemisphere": str(planner_input.get("hemisphere") or "both"),
+                    "goal_question": str(
+                        planner_input.get("question")
+                        or planner_input.get("goal_question")
+                        or ""
+                    ).strip(),
+                    "last_run": {
+                        "run_id": str((run_state or {}).get("run_id") or ""),
+                        "status": str((run_state or {}).get("status") or ""),
+                        "stage": str((run_state or {}).get("stage") or ""),
+                        "termination_reason": str(
+                            (run_state or {}).get("termination_reason") or ""
+                        ),
+                    },
+                    "source": "runtime_cache",
+                }
+            )
+        source_tags.append("runtime_cache")
+
+    tasks_sorted = sorted(
+        tasks, key=lambda item: str((item or {}).get("updated_at") or ""), reverse=True
+    )[:limit]
+
+    return jsonify(
+        {
+            "success": True,
+            "tasks": tasks_sorted,
+            "count": len(tasks_sorted),
+            "source": ",".join(source_tags) if source_tags else "empty",
+        }
+    )
+
+
+@app.route("/api/agent/plans/preview", methods=["POST"])
+def api_preview_agent_plan():
+    data = request.get_json(silent=True) or {}
+
+    patient_id_raw = data.get("patient_id")
+    try:
+        patient_id = int(patient_id_raw)
+    except Exception:
+        return jsonify({"success": False, "error": "Invalid patient_id"}), 400
+
+    file_id = str(data.get("file_id") or "").strip()
+    if not file_id:
+        latest_imaging = _get_latest_imaging_by_patient(patient_id)
+        if latest_imaging:
+            file_id = str(latest_imaging.get("case_id") or "").strip()
+
+    if not file_id:
+        return jsonify({"success": False, "error": "Missing file_id"}), 400
+
+    available_modalities = data.get("available_modalities")
+    if not isinstance(available_modalities, list) or len(available_modalities) == 0:
+        imaging = get_imaging_by_case(patient_id, file_id)
+        if imaging:
+            available_modalities = imaging.get("available_modalities") or []
+        else:
+            available_modalities = _infer_modalities_from_file_id(file_id)
+
+    normalized_modalities = _normalize_uploaded_modalities(available_modalities or [])
+    if not normalized_modalities:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "available_modalities is required",
+                    "message": "Please upload imaging first or provide available_modalities",
+                }
+            ),
+            400,
+        )
+
+    path_decision = _build_path_decision(normalized_modalities)
+    if not path_decision.get("valid"):
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": path_decision.get("error") or "Invalid modality combination",
+                    "path_decision": path_decision,
+                }
+            ),
+            400,
+        )
+
+    tool_sequence = _agent_tool_sequence(path_decision.get("imaging_path"))
+    if not tool_sequence:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "No tool sequence found for current modality path",
+                    "path_decision": path_decision,
+                }
+            ),
+            400,
+        )
+
+    planner_output = {
+        "imaging_path": path_decision["imaging_path"],
+        "tool_sequence": list(tool_sequence),
+        "should_generate_ctp": bool(path_decision.get("should_generate_ctp")),
+        "should_run_stroke_analysis": bool(path_decision.get("should_run_stroke_analysis")),
+        "path_decision": path_decision,
+    }
+
+    nodes = []
+    for index, tool_name in enumerate(tool_sequence, start=1):
+        nodes.append(
+            {
+                "index": index,
+                "key": tool_name,
+                "title": _agent_tool_title(tool_name),
+                "description": _agent_tool_description(tool_name),
+                "phase": _stage_for_tool(tool_name),
+                "status": "pending",
+                "input_hint": f"patient_id={patient_id}, file_id={file_id}",
+                "output_hint": "waiting for runtime",
+            }
+        )
+
+    goal_question = str(data.get("goal_question") or data.get("question") or "").strip()
+    plan_frame = _build_w0_plan_frame(
+        tool_sequence=tool_sequence,
+        imaging_path=path_decision.get("imaging_path") or "",
+        source="plan_preview",
+        revision=1,
+    )
+
+    preview = {
+        "patient_id": patient_id,
+        "file_id": file_id,
+        "goal_question": goal_question,
+        "available_modalities": normalized_modalities,
+        "modality_labels": [_modality_display_label(item) for item in normalized_modalities],
+        "planner_output": planner_output,
+        "plan_frames": [plan_frame],
+        "replan_count": 0,
+        "termination_reason": "not_started",
+        "human_checkpoint": None,
+        "finalization": None,
+        "nodes": nodes,
+        "orchestration_brief": (
+            "任务触发后将按既定节点推进：先做病例与影像上下文校验，再执行分析、证据核对与报告生成。"
+        ),
+        "generated_at": _agent_now(),
+    }
+
+    return jsonify({"success": True, "preview": preview})
+
+
 @app.route("/api/strokeclaw/w0/mock-runs", methods=["POST"])
 def api_create_w0_mock_run():
     data = request.get_json(silent=True) or {}
@@ -7720,7 +8977,7 @@ def api_create_agent_run():
             400,
         )
 
-    api_question = str(data.get("question") or "").strip()
+    api_goal_question = str(data.get("goal_question") or data.get("question") or "").strip()
 
     run_id = str(uuid.uuid4())
     run = _create_agent_run(
@@ -7730,7 +8987,7 @@ def api_create_agent_run():
         available_modalities=available_modalities,
         hemisphere=hemisphere,
         source="api",
-        question=api_question or None,
+        question=api_goal_question or None,
     )
 
     worker = threading.Thread(target=_run_agent_pipeline, args=(run_id,), daemon=True)
@@ -7773,6 +9030,10 @@ def api_get_agent_events(run_id):
         )
         event["phase"] = str(event.get("phase") or event.get("stage") or "")
         event["node_name"] = str(event.get("node_name") or event.get("tool_name") or "")
+        enrich = _build_agent_event_clinical_fields(event)
+        for field_name, field_value in enrich.items():
+            if field_name not in event or event.get(field_name) in (None, "", [], {}):
+                event[field_name] = field_value
         normalized.append(event)
     return jsonify({"success": True, "run_id": run_id, "events": normalized})
 
@@ -7809,6 +9070,42 @@ def api_get_agent_result(run_id):
     )
 
 
+@app.route("/api/agent/runs/<run_id>/review", methods=["GET"])
+def api_get_agent_run_review(run_id):
+    run = _get_agent_run(run_id)
+    if not run:
+        return jsonify({"success": False, "error": "Run not found"}), 404
+
+    review_state = run.get("review_state") if isinstance(run.get("review_state"), dict) else None
+    if review_state is None:
+        review_state = _review_build_state(run)
+
+        def _apply(state):
+            _review_attach_to_run_state(state, review_state)
+
+        run = _update_agent_run(run_id, _apply) or run
+        _persist_review_state_best_effort(
+            patient_id=run.get("patient_id"),
+            file_id=run.get("file_id"),
+            review_state=review_state,
+            run=run,
+        )
+    else:
+        review_state = _review_recompute_state(review_state)
+
+    run = _ensure_w0_run_fields(run)
+    return jsonify(
+        {
+            "success": True,
+            "run_id": run_id,
+            "review_state": review_state,
+            "all_confirmed": bool(review_state.get("all_confirmed")),
+            "current_section_id": review_state.get("current_section_id"),
+            "can_enter_viewer": bool(review_state.get("all_confirmed")),
+        }
+    )
+
+
 @app.route("/api/agent/runs/<run_id>/review", methods=["POST"])
 def api_review_agent_run(run_id):
     run = _get_agent_run(run_id)
@@ -7817,35 +9114,210 @@ def api_review_agent_run(run_id):
 
     data = request.get_json(silent=True) or {}
     action = str(data.get("action") or "").strip().lower()
-    allowed_actions = ["accept", "edit", "reject", "sign", "handoff"]
-    if action and action not in allowed_actions:
+    allowed_actions = [
+        "init_review",
+        "rewrite_section",
+        "save_section",
+        "confirm_section",
+        "finalize_review",
+    ]
+    if action not in allowed_actions:
         return (
             jsonify(
                 {
                     "success": False,
-                    "error": f"Invalid action: {action}",
+                    "error": f"Invalid action: {action or '-'}",
                     "allowed_actions": allowed_actions,
                 }
             ),
             400,
         )
 
-    return (
-        jsonify(
+    review_state = run.get("review_state") if isinstance(run.get("review_state"), dict) else None
+    if review_state is None:
+        review_state = _review_build_state(run)
+    else:
+        review_state = _review_recompute_state(review_state)
+
+    def _save_review_state(state_obj, final_report_text=None):
+        def _apply(state):
+            _review_attach_to_run_state(state, state_obj, final_report_text=final_report_text)
+
+        updated = _update_agent_run(run_id, _apply)
+        if not updated:
+            return None, {"success": False, "error": "Run disappeared while saving review state"}
+        persist_result = _persist_review_state_best_effort(
+            patient_id=updated.get("patient_id"),
+            file_id=updated.get("file_id"),
+            review_state=state_obj,
+            run=updated,
+            final_report_text=final_report_text,
+        )
+        return updated, persist_result
+
+    if action == "init_review":
+        force = bool(data.get("force"))
+        review_state = _review_build_state(run, None if force else review_state)
+        updated_run, persist_result = _save_review_state(review_state)
+        if not updated_run:
+            return jsonify(persist_result), 500
+        return jsonify(
             {
-                "success": False,
+                "success": True,
                 "run_id": run_id,
-                "error": "W0 contract frozen: review action will be implemented in W1",
-                "error_code": "NOT_IMPLEMENTED_IN_W0",
-                "contract": {
-                    "allowed_actions": allowed_actions,
-                    "required_fields": ["action"],
-                    "optional_fields": ["patch", "signature", "note", "actor_id"],
-                },
+                "action": action,
+                "review_state": review_state,
+                "all_confirmed": bool(review_state.get("all_confirmed")),
+                "persist_result": persist_result,
             }
-        ),
-        501,
-    )
+        )
+
+    if action == "finalize_review":
+        review_state = _review_recompute_state(review_state)
+        if not review_state.get("all_confirmed"):
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Cannot finalize before all sections confirmed",
+                        "review_state": review_state,
+                    }
+                ),
+                409,
+            )
+        final_report_text = _review_text(
+            data.get("final_report"), _review_compose_final_report(review_state)
+        )
+        updated_run, persist_result = _save_review_state(
+            review_state, final_report_text=final_report_text
+        )
+        if not updated_run:
+            return jsonify(persist_result), 500
+        return jsonify(
+            {
+                "success": True,
+                "run_id": run_id,
+                "action": action,
+                "review_state": review_state,
+                "all_confirmed": True,
+                "final_report": final_report_text,
+                "persist_result": persist_result,
+            }
+        )
+
+    section_id = _review_text(data.get("section_id"))
+    idx, section = _review_get_section(review_state, section_id)
+    if section is None:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": f"Unknown section_id: {section_id or '-'}",
+                    "allowed_sections": [x["section_id"] for x in REVIEW_SECTION_SPECS],
+                }
+            ),
+            400,
+        )
+
+    if action == "rewrite_section":
+        rewrite_intent = _review_text(data.get("rewrite_intent") or data.get("intent"))
+        source_text = _review_text(data.get("draft_text"), section.get("draft_text"))
+        suggestion_text, suggestion_reason = _review_rule_rewrite(
+            source_text,
+            section=section,
+            rewrite_intent=rewrite_intent,
+        )
+        return jsonify(
+            {
+                "success": True,
+                "run_id": run_id,
+                "action": action,
+                "section_id": section_id,
+                "rewrite_suggestion": {
+                    "text": suggestion_text,
+                    "reason": suggestion_reason,
+                    "evidence_refs": section.get("evidence_refs") or [],
+                },
+                "review_state": review_state,
+            }
+        )
+
+    if action == "save_section":
+        prev_text = _review_text(section.get("draft_text"))
+        if "draft_text" in data:
+            section["draft_text"] = _review_text(data.get("draft_text"), section.get("draft_text"))
+        if "doctor_note" in data:
+            section["doctor_note"] = _review_text(data.get("doctor_note"), "")
+        status_in = _review_text(data.get("review_status")).lower()
+        if status_in in REVIEW_STATUS_SET:
+            section["review_status"] = status_in
+        elif section.get("review_status") == "confirmed" and section.get("draft_text") != prev_text:
+            section["review_status"] = "needs_edit"
+        section["updated_at"] = _review_now_iso()
+        review_state = _review_recompute_state(review_state)
+        updated_run, persist_result = _save_review_state(review_state)
+        if not updated_run:
+            return jsonify(persist_result), 500
+        return jsonify(
+            {
+                "success": True,
+                "run_id": run_id,
+                "action": action,
+                "section_id": section_id,
+                "review_state": review_state,
+                "persist_result": persist_result,
+            }
+        )
+
+    if action == "confirm_section":
+        current_section_id = _review_text(review_state.get("current_section_id"))
+        already_confirmed = _review_text(section.get("review_status")).lower() == "confirmed"
+        if current_section_id and section_id != current_section_id and not already_confirmed:
+            return (
+                jsonify(
+                    {
+                        "success": False,
+                        "error": "Section confirm order violation",
+                        "current_section_id": current_section_id,
+                        "requested_section_id": section_id,
+                    }
+                ),
+                409,
+            )
+
+        if "draft_text" in data:
+            section["draft_text"] = _review_text(data.get("draft_text"), section.get("draft_text"))
+        if "doctor_note" in data:
+            section["doctor_note"] = _review_text(data.get("doctor_note"), section.get("doctor_note"))
+        section["review_status"] = "confirmed"
+        section["updated_at"] = _review_now_iso()
+        review_state = _review_recompute_state(review_state)
+
+        final_report_text = None
+        auto_finalize = bool(data.get("auto_finalize", True))
+        if review_state.get("all_confirmed") and auto_finalize:
+            final_report_text = _review_compose_final_report(review_state)
+
+        updated_run, persist_result = _save_review_state(
+            review_state, final_report_text=final_report_text
+        )
+        if not updated_run:
+            return jsonify(persist_result), 500
+
+        return jsonify(
+            {
+                "success": True,
+                "run_id": run_id,
+                "action": action,
+                "section_id": section_id,
+                "review_state": review_state,
+                "all_confirmed": bool(review_state.get("all_confirmed")),
+                "final_report": final_report_text,
+                "persist_result": persist_result,
+            }
+        )
+
+    return jsonify({"success": False, "error": "Unhandled review action"}), 500
 
 
 @app.route("/api/validation/context", methods=["GET"])
