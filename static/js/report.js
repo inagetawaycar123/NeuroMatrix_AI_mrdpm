@@ -165,6 +165,13 @@ const getReportStorageKeys = (fileId) => {
         error: 'ai_report_error'
     };
 };
+const REPORT_GENERATING_TIMEOUT_MS = 90000;
+const getGeneratingTsKey = (keys) => `${keys.generating}_ts`;
+const clearGeneratingState = (keys) => {
+    localStorage.removeItem(keys.generating);
+    localStorage.removeItem(getGeneratingTsKey(keys));
+    localStorage.removeItem('ai_report_generating');
+};
 const StructuredReport = ({ patientId, fileId, analysisData }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -182,26 +189,44 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
     const [error, setError] = useState(null);    // 报告缓存按 file_id 隔离，避免跨病例串数据
     useEffect(() => {
         const keys = getReportStorageKeys(fileId);
+        const tsKey = getGeneratingTsKey(keys);
 
         const applyStorageState = () => {
             const savedReport = localStorage.getItem(keys.report);
             const savedGenerating = localStorage.getItem(keys.generating);
+            const startedAt = Number(localStorage.getItem(tsKey) || 0);
+            let generating = savedGenerating === 'true';
+
+            if (savedReport) {
+                if (generating) {
+                    clearGeneratingState(keys);
+                }
+                generating = false;
+            } else if (generating && Number.isFinite(startedAt) && startedAt > 0 && Date.now() - startedAt >= REPORT_GENERATING_TIMEOUT_MS) {
+                clearGeneratingState(keys);
+                localStorage.setItem(keys.error, '报告生成超时，请重试。');
+                generating = false;
+            }
+
             setAiReport(savedReport || null);
-            setIsGeneratingReport(savedGenerating === 'true');
+            setIsGeneratingReport(generating);
         };
 
         applyStorageState();
 
         const handleStorage = (e) => {
             if (e.key === keys.generating) {
-                setIsGeneratingReport(e.newValue === 'true');
-                if (e.newValue === 'true') {
+                const hasReport = !!localStorage.getItem(keys.report);
+                const generating = e.newValue === 'true' && !hasReport;
+                setIsGeneratingReport(generating);
+                if (generating) {
                     setAiReport(null);
                 }
             }
             if (e.key === keys.report) {
                 setAiReport(e.newValue || null);
                 setIsGeneratingReport(false);
+                clearGeneratingState(keys);
             }
             if (e.key === keys.error && e.newValue) {
                 setIsGeneratingReport(false);
@@ -210,6 +235,34 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
 
         window.addEventListener('storage', handleStorage);
         return () => window.removeEventListener('storage', handleStorage);
+    }, [fileId]);
+
+    useEffect(() => {
+        const keys = getReportStorageKeys(fileId);
+        const tsKey = getGeneratingTsKey(keys);
+        const timer = setInterval(() => {
+            const hasReport = !!localStorage.getItem(keys.report);
+            if (hasReport) {
+                clearGeneratingState(keys);
+                setAiReport(localStorage.getItem(keys.report) || null);
+                setIsGeneratingReport(false);
+                return;
+            }
+
+            if (localStorage.getItem(keys.generating) !== 'true') {
+                return;
+            }
+
+            const startedAt = Number(localStorage.getItem(tsKey) || 0);
+            if (!Number.isFinite(startedAt) || startedAt <= 0) return;
+            if (Date.now() - startedAt < REPORT_GENERATING_TIMEOUT_MS) return;
+
+            clearGeneratingState(keys);
+            localStorage.setItem(keys.error, '报告生成超时，请重试。');
+            setIsGeneratingReport(false);
+        }, 5000);
+
+        return () => clearInterval(timer);
     }, [fileId]);
     
     useEffect(() => {
@@ -347,7 +400,7 @@ const StructuredReport = ({ patientId, fileId, analysisData }) => {
                     React.createElement("h3", { style: { color: '#fff', fontSize: '18px', marginBottom: '12px' } }, "请先完成脑卒中分析"),
                     React.createElement("p", { style: { color: '#888', fontSize: '14px' } }, "请返回 viewer 页面完成影像自动分析后，再生成 AI 报告")
                 )
-            : isGeneratingReport ?
+            : (isGeneratingReport && !aiReport) ?
                 React.createElement("div", { className: "report-module", style: { background: 'linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%)', padding: '40px', borderRadius: '12px', marginTop: '20px', textAlign: 'center' } },
                     React.createElement("div", { 
                         style: { 

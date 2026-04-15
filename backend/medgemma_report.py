@@ -118,6 +118,23 @@ _REPORT_TIME_BUDGET_SECONDS = float(
 )
 
 
+def _env_optional_bool(name: str) -> Optional[bool]:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    token = str(raw).strip().lower()
+    if not token:
+        return None
+    if token in {"1", "true", "yes", "y", "on"}:
+        return True
+    if token in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
+_MEDGEMMA_USE_FAST_PROCESSOR = _env_optional_bool("MEDGEMMA_USE_FAST_PROCESSOR")
+
+
 def _log(message: str) -> None:
     print(f"{_LOG_PREFIX} {message}")
 
@@ -187,9 +204,12 @@ def load_medgemma(
             low_cpu_mem_usage=True,
             local_files_only=local_files_only,
         )
+        processor_kwargs = {"local_files_only": local_files_only}
+        if _MEDGEMMA_USE_FAST_PROCESSOR is not None:
+            processor_kwargs["use_fast"] = bool(_MEDGEMMA_USE_FAST_PROCESSOR)
         _PROCESSOR = AutoProcessor.from_pretrained(
             resolved_model_dir,
-            local_files_only=local_files_only,
+            **processor_kwargs,
         )
         elapsed = round(time.time() - t0, 2)
         _MODEL_META = {
@@ -197,6 +217,7 @@ def load_medgemma(
             "device": resolved_device,
             "dtype": str(resolved_dtype),
             "local_files_only": local_files_only,
+            "use_fast_processor": processor_kwargs.get("use_fast", "default"),
             "load_seconds": elapsed,
         }
         _MODEL_LOADED_AT = datetime.utcnow().isoformat() + "Z"
@@ -1012,7 +1033,7 @@ def generate_report_with_medgemma(
     file_id: str,
     output_format: str = "markdown",
 ) -> Dict[str, Any]:
-    t0 = time.time()
+    t0_total = time.time()
     try:
         if not file_id:
             return {
@@ -1048,6 +1069,7 @@ def generate_report_with_medgemma(
         )
 
         model, processor, model_meta = load_medgemma()
+        t0_infer = time.time()
         _ensure_import_path()
         from image_preprocessing import ImagePreprocessor
 
@@ -1112,7 +1134,7 @@ def generate_report_with_medgemma(
                 "stage1_aggregated": None,
                 "normalized_cn": None,
             }
-            if (time.time() - t0) >= _REPORT_TIME_BUDGET_SECONDS:
+            if (time.time() - t0_infer) >= _REPORT_TIME_BUDGET_SECONDS:
                 _log("Time budget exceeded during Stage-1, skip remaining CTA phases")
                 cta_payloads[modality] = payload
                 continue
@@ -1153,11 +1175,11 @@ def generate_report_with_medgemma(
             cta_payloads[modality] = payload
 
         # Stage-2: case-level enhanced synthesis
-        elapsed_before_stage2 = time.time() - t0
+        elapsed_before_stage2 = time.time() - t0_infer
         if elapsed_before_stage2 >= _REPORT_TIME_BUDGET_SECONDS * 0.8:
             _log(
-                f"Skip Stage-2 due time budget: elapsed={round(elapsed_before_stage2, 2)}s "
-                f"budget={_REPORT_TIME_BUDGET_SECONDS}s"
+                f"Skip Stage-2 due time budget: infer_elapsed={round(elapsed_before_stage2, 2)}s "
+                f"budget={_REPORT_TIME_BUDGET_SECONDS}s total_elapsed={round(time.time() - t0_total, 2)}s"
             )
             stage2_sections = _stage2_fallback(ncct_section, cta_sections)
             stage2_info = {
@@ -1229,6 +1251,9 @@ def generate_report_with_medgemma(
             "quality_checks": quality_checks,
         }
 
+        inference_elapsed_seconds = round(time.time() - t0_infer, 2)
+        total_elapsed_seconds = round(time.time() - t0_total, 2)
+
         payload = {
             "meta": {
                 "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -1238,7 +1263,8 @@ def generate_report_with_medgemma(
                 "hemisphere": hemisphere,
                 "model": model_meta,
                 "model_loaded_at": _MODEL_LOADED_AT,
-                "elapsed_seconds": round(time.time() - t0, 2),
+                "elapsed_seconds": total_elapsed_seconds,
+                "inference_elapsed_seconds": inference_elapsed_seconds,
             },
             "generation_mode": "two_stage_high_info",
             "prompts": {
@@ -1284,7 +1310,10 @@ def generate_report_with_medgemma(
             json.dump(payload, f, ensure_ascii=False, indent=2)
 
         _log(f"Report JSON saved: {json_path}")
-        _log(f"Report generation finished in {round(time.time() - t0, 2)}s")
+        _log(
+            f"Report generation finished total={total_elapsed_seconds}s "
+            f"inference={inference_elapsed_seconds}s"
+        )
 
         if output_format == "json":
             report_content = json.dumps(

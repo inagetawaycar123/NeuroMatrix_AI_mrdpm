@@ -1,98 +1,94 @@
-{% extends "base.html" %}
+﻿{% extends "base.html" %}
 
 {% block tools %}
-<button class="tool-btn" onclick="backToUpload()">返回上传</button>
+<button class="tool-btn" id="runtimeBackUploadBtn">返回上传页</button>
+<button class="tool-btn" id="runtimeTopViewerBtn" style="display:none;">进入 Viewer</button>
 {% endblock %}
 
 {% block content %}
-<div class="container">
+<div class="container processing-runtime-page">
     <div class="page">
-        <div class="processing-shell">
-            <div class="processing-header">
-                <div class="processing-title">影像处理流程</div>
-                <div class="processing-subtitle">主时间线来自上传链，Agent 为后置汇总链（Week3）</div>
+        <div class="runtime-shell runtime-shell-centered">
+            <div class="runtime-session-strip">
+                <div class="runtime-session-item">Session <strong id="runtimeSessionToken">-</strong></div>
+                <div class="runtime-session-item">job <strong id="runtimeJobId">-</strong></div>
+                <div class="runtime-session-item">run <strong id="runtimeRunId">-</strong></div>
+                <div class="runtime-session-item">patient <strong id="runtimePatientId">-</strong></div>
+                <div class="runtime-session-item">time <strong id="runtimeStartAt">-</strong></div>
             </div>
-            <div class="processing-main">
-                <div class="processing-left">
-                    <div class="processing-progress">
-                        <div class="processing-progress-top">
-                            <span>上传进度</span>
-                            <span id="processingPercent">0%</span>
-                        </div>
-                        <div class="processing-progress-track">
-                            <div class="processing-progress-fill" id="processingProgressFill"></div>
-                        </div>
+
+            <section class="runtime-case-card">
+                <div class="runtime-case-head">
+                    <div>
+                        <h1>StrokeClaw Runtime Feed</h1>
+                        <p class="runtime-case-subtitle">
+                            上传主链与多智能体协作在同一时间轴推进，系统会持续展示当前动作、临床意义和阶段结论。
+                        </p>
                     </div>
-                    <div id="processingSteps" class="processing-steps"></div>
-                    <div class="processing-current" id="processingCurrent">正在等待上传处理流程...</div>
-                    <div class="processing-error" id="processingError" style="display:none;"></div>
-                    <div class="processing-actions">
-                        <button id="processingRetryBtn" class="tool-btn" style="display:none;" onclick="backToUpload()">返回上传</button>
-                        <button id="processingViewerBtn" class="tool-btn primary" style="display:none;" onclick="goToViewerNow()">进入 Viewer</button>
-                    </div>
+                    <span class="runtime-status-pill pending" id="runtimeOverallStatus">Pending</span>
                 </div>
 
-                <div class="processing-right">
-                    <div class="processing-card">
-                        <div class="processing-card-title">上传关联信息</div>
-                        <div class="processing-kv"><span>file_id</span><span id="processingFileId">-</span></div>
-                        <div class="processing-kv"><span>job_id</span><span id="processingJobId">-</span></div>
-                        <div class="processing-kv"><span>agent_run_id</span><span id="processingAgentRunId">-</span></div>
-                        <div class="processing-note" id="processingReusableFileHint">可复用 file_id（用于 W0 联调）：-</div>
-                        <div class="processing-actions" style="margin-top:8px;">
-                            <button class="tool-btn" id="processingCopyFileIdBtn" onclick="copyProcessingFileId()">复制 file_id</button>
-                            <button class="tool-btn" id="processingGoW0Btn" onclick="goToW0WithContext()">前往 W0 联调页</button>
-                        </div>
-                    </div>
-
-                    <div class="processing-card" id="agentPanel" style="display:none;">
-                        <div class="processing-card-title">Agent 汇总状态</div>
-                        <div class="processing-kv"><span>status</span><span id="agentRunStatus">-</span></div>
-                        <div class="processing-kv"><span>stage</span><span id="agentRunStage">-</span></div>
-                        <div class="processing-kv"><span>current_tool</span><span id="agentCurrentTool">-</span></div>
-                        <div class="processing-kv"><span>event_count</span><span id="agentEventCount">0</span></div>
-                        <div class="processing-kv"><span>plan_revision</span><span id="agentPlanRevision">-</span></div>
-                        <div class="processing-kv"><span>replan_count</span><span id="agentReplanCount">0</span></div>
-                        <div class="processing-kv"><span>plan_objective</span><span id="agentPlanObjective">-</span></div>
-                        <div class="processing-kv"><span>goal_question</span><span id="agentGoalQuestion">-</span></div>
-                        <div class="processing-kv"><span>answer_status</span><span id="agentAnswerStatus">-</span></div>
-                        <div class="processing-kv"><span>termination_reason</span><span id="agentTerminationReason">-</span></div>
-                        <div class="processing-kv"><span>报告状态</span><span id="agentReportStatus">-</span></div>
-                        <div class="processing-kv"><span>ICV 状态</span><span id="agentIcvStatus">-</span></div>
-                        <div class="processing-kv"><span>ICV 发现</span><span id="agentIcvFindings">0</span></div>
-                        <div class="processing-kv"><span>EKV status</span><span id="agentEkvStatus">-</span></div>
-                        <div class="processing-kv"><span>EKV findings</span><span id="agentEkvFindings">0</span></div>
-                        <div class="processing-kv"><span>EKV support_rate</span><span id="agentEkvSupportRate">-</span></div>
-                        <div class="processing-kv"><span>一致性裁决</span><span id="agentConsensusDecision">-</span></div>
-                        <div class="processing-kv"><span>高风险冲突</span><span id="agentConsensusConflicts">0</span></div>
-                        <div class="processing-kv"><span>最后错误</span><span id="agentLastError">-</span></div>
-                        <div class="processing-kv"><span>可重试步骤</span><span id="agentRetryStep">-</span></div>
-                        <div class="processing-note" id="agentRunMessage">本次上传未启用 Agent 后置汇总。</div>
-                        <div class="processing-note" id="agentRetryHint">当前无需重试。</div>
-                        <div class="processing-actions" id="agentRetryActions" style="display:none;">
-                            <button id="agentRetryActionBtn" class="tool-btn" onclick="retryAgentFailedStep()">重试失败步骤</button>
-                        </div>
-                    </div>
-
-                    <div class="processing-card">
-                        <div class="processing-card-title">模态</div>
-                        <div class="processing-modality-list" id="processingModalities">-</div>
-                    </div>
-
-                    <div class="processing-card">
-                        <div class="processing-card-title">说明</div>
-                        <div class="processing-note">
-                            左侧 6 步为上传主链执行真值；右侧 Agent 仅展示后置汇总结果。
-                            若 Agent 失败，不影响上传主链完成与进入 Viewer。
-                        </div>
-                    </div>
+                <div class="runtime-case-grid">
+                    <div class="runtime-kv"><span>file_id</span><strong id="runtimeFileId">-</strong></div>
+                    <div class="runtime-kv"><span>modalities</span><strong id="runtimeModalities">-</strong></div>
+                    <div class="runtime-kv"><span>goal_question</span><strong id="runtimeGoalQuestion">-</strong></div>
+                    <div class="runtime-kv"><span>current_stage</span><strong id="runtimeCurrentStage">-</strong></div>
+                    <div class="runtime-kv"><span>current_tool</span><strong id="runtimeCurrentTool">-</strong></div>
+                    <div class="runtime-kv"><span>termination</span><strong id="runtimeTerminationReason">-</strong></div>
                 </div>
-            </div>
+
+                <div class="runtime-case-actions">
+                    <button class="tool-btn" id="runtimeCopyFileBtn">复制 file_id</button>
+                    <button class="tool-btn" id="runtimeOpenCockpitBtn">进入 Cockpit</button>
+                    <button class="tool-btn primary" id="runtimeOpenViewerBtn" style="display:none;">进入 Viewer</button>
+                    <button class="tool-btn" id="runtimeGoW0Btn">打开 W0 联调页</button>
+                </div>
+                <div class="runtime-case-note" id="runtimeCaseNote">等待流程启动...</div>
+            </section>
+
+            <section class="runtime-orchestration-card">
+                <h2>AGENT ORCHESTRATION</h2>
+                <p id="runtimeOrchestrationText">
+                    系统在上传主链完成后自动进入多智能体协作，并按“计划-执行-结果”持续输出可解释过程。
+                </p>
+                <p class="runtime-orchestration-path" id="runtimeOrchestrationPath">
+                    Case_Intake -> Modality_Detect -> CTP_Generate -> Stroke_Analysis -> Report -> Agent_Network
+                </p>
+            </section>
+
+            <section class="runtime-feed runtime-feed-centered" id="runtimeFeed">
+                <div class="runtime-empty">等待流程节点...</div>
+            </section>
+
+            <section class="runtime-review-card" id="runtimeReviewCard" hidden>
+                <h2>REPORT REVIEW WORKFLOW</h2>
+                <div class="runtime-review-body" id="runtimeReviewBody"></div>
+            </section>
+
+            <section class="runtime-finalization-card" id="runtimeFinalizationCard" hidden>
+                <h2 id="runtimeFinalizationTitle">闭环阶段总结</h2>
+                <div class="runtime-finalization-body" id="runtimeFinalizationBody"></div>
+            </section>
+
+            <section class="runtime-error-banner" id="runtimeErrorBanner" hidden></section>
+        </div>
+    </div>
+</div>
+
+<div class="runtime-agent-rail runtime-agent-rail-floating" id="runtimeAgentRail">
+    <button class="runtime-rail-toggle" id="runtimeRailToggle" type="button">Agent Network ▾</button>
+    <div class="runtime-rail-body" id="runtimeRailBody">
+        <div class="runtime-rail-progress">
+            <span id="runtimeRailSteps">Steps 0/0</span>
+            <span id="runtimeRailPercent">0%</span>
+        </div>
+        <div class="runtime-rail-chips" id="runtimeRailChips">
+            <span class="runtime-chip empty">No nodes</span>
         </div>
     </div>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
-<script src="/static/js/processing.js"></script>
+<script src="/static/js/processing.js?v=20260414_w1_report_review"></script>
 {% endblock %}

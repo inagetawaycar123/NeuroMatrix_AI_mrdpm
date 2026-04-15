@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+
+{% block title %}NeuroMatrix AI | StrokeClaw W1 Tasks{% endblock %}
+
+{% block extra_css %}
+<link rel="stylesheet" href="/static/css/strokeclaw_tasks.css">
+{% endblock %}
+
+{% block tools %}
+<button class="tool-btn" onclick="window.location.href='/upload'">影像上传</button>
+<button class="tool-btn" onclick="window.location.href='/cockpit'">进入 Runtime</button>
+<button class="tool-btn" onclick="window.location.href='/strokeclaw/w0'">W0联调页</button>
+{% endblock %}
+
+{% block content %}
+<div class="container strokeclaw-tasks-page">
+    <div class="page strokeclaw-tasks-shell">
+        <section class="sc-hero-card">
+            <div class="sc-hero-top">
+                <div>
+                    <h1>StrokeClaw Task Orchestration</h1>
+                    <p class="sc-subtitle">先预览计划，再确认执行。让执行链路对用户可见、可感知、可追踪。</p>
+                </div>
+                <div class="sc-session-chip">W1 · Runtime Visible Loop</div>
+            </div>
+
+            <div class="sc-trigger-text" id="scTriggerText">
+                未触发任务。请选择病例后生成编排计划。
+            </div>
+
+            <div class="sc-launch-grid">
+                <label>
+                    <span>patient_id</span>
+                    <input id="scPatientId" type="number" min="1" placeholder="例如 682">
+                </label>
+                <label>
+                    <span>file_id</span>
+                    <input id="scFileId" type="text" placeholder="例如 079d1bec">
+                </label>
+            </div>
+
+            <label class="sc-goal-wrap">
+                <span>goal_question（可选）</span>
+                <textarea
+                    id="scGoalQuestion"
+                    rows="2"
+                    placeholder="例如：评估可挽救脑组织，并输出下一步治疗建议。"
+                ></textarea>
+            </label>
+
+            <div class="sc-modality-wrap">
+                <div class="sc-modality-title">available_modalities</div>
+                <label><input type="checkbox" value="ncct" checked> ncct</label>
+                <label><input type="checkbox" value="mcta" checked> mcta</label>
+                <label><input type="checkbox" value="vcta"> vcta</label>
+                <label><input type="checkbox" value="dcta"> dcta</label>
+                <label><input type="checkbox" value="cbf"> cbf</label>
+                <label><input type="checkbox" value="cbv"> cbv</label>
+                <label><input type="checkbox" value="tmax"> tmax</label>
+            </div>
+
+            <div class="sc-action-row">
+                <button id="scPreviewBtn" class="tool-btn primary">1. 计划预览</button>
+                <button id="scConfirmBtn" class="tool-btn" disabled>2. 确认执行</button>
+                <button id="scOpenRuntimeBtn" class="tool-btn" disabled>进入 Runtime（Cockpit）</button>
+            </div>
+            <div class="sc-form-hint" id="scFormHint">先选择任务或填写参数，再点击“计划预览”。</div>
+        </section>
+
+        <section class="sc-main-grid">
+            <article class="sc-panel sc-task-panel">
+                <div class="sc-panel-head">
+                    <h2>Task Workbench</h2>
+                    <button id="scRefreshTasksBtn" class="tool-btn">刷新任务</button>
+                </div>
+                <div id="scTaskList" class="sc-task-list">
+                    <div class="sc-empty">正在加载任务...</div>
+                </div>
+            </article>
+
+            <article class="sc-panel sc-orch-panel">
+                <div class="sc-panel-head">
+                    <h2>Stroke Orchestration</h2>
+                    <span class="sc-status-pill idle" id="scPlanBadge">未预览</span>
+                </div>
+                <div class="sc-orch-brief" id="scOrchBrief">
+                    计划预览将展示节点执行顺序、状态胶囊与输入/输出占位。
+                </div>
+                <div class="sc-plan-meta" id="scPlanMeta"></div>
+                <div class="sc-node-list" id="scNodeList">
+                    <div class="sc-empty">暂无计划节点。</div>
+                </div>
+            </article>
+
+            <article class="sc-panel sc-runtime-panel">
+                <div class="sc-panel-head">
+                    <h2>Runtime Event Stream</h2>
+                    <span class="sc-status-pill idle" id="scRunStatusPill">idle</span>
+                </div>
+                <div class="sc-runtime-meta">
+                    <div><span>run_id</span><strong id="scRunId">-</strong></div>
+                    <div><span>stage</span><strong id="scRunStage">-</strong></div>
+                    <div><span>current_tool</span><strong id="scCurrentTool">-</strong></div>
+                    <div><span>termination_reason</span><strong id="scTerminationReason">-</strong></div>
+                </div>
+                <div id="scEventList" class="sc-event-list">
+                    <div class="sc-empty">等待运行事件...</div>
+                </div>
+            </article>
+        </section>
+    </div>
+</div>
+
+<div class="sc-agent-rail" id="scAgentRail">
+    <button id="scRailToggle" class="sc-rail-toggle" type="button">Agent Network</button>
+    <div class="sc-rail-body">
+        <div class="sc-rail-progress">
+            <span id="scRailProgressText">Steps 0/0</span>
+            <span id="scRailPercent">0%</span>
+        </div>
+        <div class="sc-rail-chips" id="scRailChips">
+            <span class="sc-chip empty">No plan</span>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/js/strokeclaw_tasks.js"></script>
+{% endblock %}

@@ -13,6 +13,7 @@ import cv2
 from scipy import ndimage
 import json
 import re
+import time
 
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -535,6 +536,51 @@ def parse_hemisphere(hemisphere):
         return "both"
 
 
+_TRANSIENT_DB_ERROR_TOKENS = (
+    "unexpected_eof_while_reading",
+    "eof occurred in violation of protocol",
+    "connection reset",
+    "connection aborted",
+    "timed out",
+    "timeout",
+    "server closed the connection",
+    "temporarily unavailable",
+)
+
+
+def _is_transient_db_error(exc):
+    text = str(exc or "").lower()
+    if not text:
+        return False
+    if any(token in text for token in _TRANSIENT_DB_ERROR_TOKENS):
+        return True
+    if "ssl" in text and ("eof" in text or "timeout" in text or "connection" in text):
+        return True
+    return False
+
+
+def _run_with_db_retry(op_name, fn, retries=3, base_delay=0.35):
+    attempts = max(1, int(retries))
+    last_exc = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            transient = _is_transient_db_error(exc)
+            if transient and attempt < attempts:
+                sleep_s = round(base_delay * attempt, 2)
+                print(
+                    f"[DB Retry] op={op_name} attempt={attempt}/{attempts} "
+                    f"sleep={sleep_s}s error={exc}"
+                )
+                time.sleep(sleep_s)
+                continue
+            raise
+    if last_exc:
+        raise last_exc
+
+
 def auto_analyze_stroke(case_id, patient_id=None):
     """
     Auto trigger stroke analysis using DB modalities with file-system fallback.
@@ -544,43 +590,50 @@ def auto_analyze_stroke(case_id, patient_id=None):
             f"start auto stroke analysis - case_id: {case_id}, patient_id: {patient_id}"
         )
 
-        # Init Supabase client
+        supabase_client = None
+        db_modalities = []
+        hemisphere = "both"
+
+        # Init Supabase client (best effort; file fallback is allowed)
         try:
             from supabase import create_client, Client
 
             SUPABASE_URL = "https://ppyexzqdbsnwqfyugfvc.supabase.co"
             SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InBweWV4enFkYnNud3FmeXVnZnZjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njc1Nzc3ODAsImV4cCI6MjA4MzE1Mzc4MH0.EjDH3eufPKBF8MJiHM6SVzPQlsWvGqhLQPKKhVG5Ffo"
-            supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+            supabase_client: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
             print("[OK] Supabase client initialized")
         except Exception as e:
-            print(f"[ERR] Supabase init failed: {e}")
-            return {"success": False, "error": "database connection failed"}
+            print(f"[WARN] Supabase init failed, fallback to file-based modes: {e}")
 
-        # Query patient_imaging
-        try:
-            query = supabase.table("patient_imaging").select(
-                "available_modalities, hemisphere"
-            )
-            if patient_id:
-                query = query.eq("patient_id", patient_id)
-            response = query.eq("case_id", case_id).execute()
+        # Query patient_imaging (retry on transient connection errors)
+        if supabase_client is not None:
+            try:
+                def _query_once():
+                    query = supabase_client.table("patient_imaging").select(
+                        "available_modalities, hemisphere"
+                    )
+                    if patient_id:
+                        query = query.eq("patient_id", patient_id)
+                    return query.eq("case_id", case_id).execute()
 
-            if not response.data or len(response.data) == 0:
-                print(f"[ERR] case not found: case_id={case_id}")
-                return {"success": False, "error": "case not found"}
-
-            imaging_data = response.data[0]
-            db_modalities = normalize_modalities(
-                imaging_data.get("available_modalities", [])
-            )
-            hemisphere = imaging_data.get("hemisphere", "both")
-
-            print("[OK] case info loaded")
-            print(f"  db modalities: {db_modalities}")
-            print(f"  hemisphere: {hemisphere}")
-        except Exception as e:
-            print(f"[ERR] database query failed: {e}")
-            return {"success": False, "error": "database query failed"}
+                response = _run_with_db_retry("patient_imaging.query", _query_once)
+                if response.data and len(response.data) > 0:
+                    imaging_data = response.data[0]
+                    db_modalities = normalize_modalities(
+                        imaging_data.get("available_modalities", [])
+                    )
+                    hemisphere = imaging_data.get("hemisphere", "both")
+                    print("[OK] case info loaded")
+                    print(f"  db modalities: {db_modalities}")
+                    print(f"  hemisphere: {hemisphere}")
+                else:
+                    print(
+                        f"[WARN] case not found in DB, fallback to file-based modalities: case_id={case_id}"
+                    )
+            except Exception as e:
+                print(
+                    f"[WARN] database query failed, fallback to file-based modalities: {e}"
+                )
 
         # File-system fallback
         file_modalities = infer_modalities_from_uploads(case_id)
@@ -615,20 +668,23 @@ def auto_analyze_stroke(case_id, patient_id=None):
         print(f"  use_real_ctp: {use_real_ctp}")
 
         # Backfill valid modalities to DB when fallback is used
-        if source == "files":
+        if source == "files" and supabase_client is not None:
             try:
                 merged = []
                 for mod in db_modalities + chosen_modalities:
                     if mod not in merged:
                         merged.append(mod)
-                upd = (
-                    supabase.table("patient_imaging")
-                    .update({"available_modalities": merged})
-                    .eq("case_id", case_id)
-                )
-                if patient_id:
-                    upd = upd.eq("patient_id", patient_id)
-                upd.execute()
+                def _backfill_once():
+                    upd = (
+                        supabase_client.table("patient_imaging")
+                        .update({"available_modalities": merged})
+                        .eq("case_id", case_id)
+                    )
+                    if patient_id:
+                        upd = upd.eq("patient_id", patient_id)
+                    return upd.execute()
+
+                _run_with_db_retry("patient_imaging.backfill_modalities", _backfill_once)
                 print(f"[OK] backfilled available_modalities: {merged}")
             except Exception as e:
                 print(f"[WARN] backfill available_modalities failed: {e}")
@@ -641,23 +697,32 @@ def auto_analyze_stroke(case_id, patient_id=None):
 
         if analysis_result.get("success"):
             print("[OK] stroke analysis succeeded")
-            try:
-                update_data = {
-                    "analysis_result": analysis_result,
-                    "hemisphere": parsed_hemisphere,
-                    "available_modalities": chosen_modalities,
-                }
-                upd = (
-                    supabase.table("patient_imaging")
-                    .update(update_data)
-                    .eq("case_id", case_id)
-                )
-                if patient_id:
-                    upd = upd.eq("patient_id", patient_id)
-                upd.execute()
-                print("[OK] patient_imaging updated")
-            except Exception as e:
-                print(f"[WARN] patient_imaging update failed: {e}")
+            if supabase_client is not None:
+                try:
+                    update_data = {
+                        "analysis_result": analysis_result,
+                        "hemisphere": parsed_hemisphere,
+                        "available_modalities": chosen_modalities,
+                    }
+
+                    def _update_once():
+                        upd = (
+                            supabase_client.table("patient_imaging")
+                            .update(update_data)
+                            .eq("case_id", case_id)
+                        )
+                        if patient_id:
+                            upd = upd.eq("patient_id", patient_id)
+                        return upd.execute()
+
+                    _run_with_db_retry(
+                        "patient_imaging.update_analysis_result", _update_once
+                    )
+                    print("[OK] patient_imaging updated")
+                except Exception as e:
+                    print(f"[WARN] patient_imaging update failed: {e}")
+            else:
+                print("[WARN] skip patient_imaging update: supabase unavailable")
         else:
             print(f"[ERR] stroke analysis failed: {analysis_result.get('error')}")
 
