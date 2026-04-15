@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}NeuroMatrix AI 医生助手{% endblock %}
+{% block title %}StrokeClaw 医生助手{% endblock %}
 
 {% block tools %}
 <button class="tool-btn" onclick="window.history.back()">返回查看器</button>
@@ -27,12 +27,12 @@
             <!-- 主聊天区域 -->
             <div class="chat-main">
                 <div class="chat-header">
-                    <h2 id="conversation-title">NeuroMatrix AI 医生助手</h2>
+                    <h2 id="conversation-title">StrokeClaw 医生助手</h2>
                 </div>
                 <div class="chat-messages" id="chat-messages">
                     <div class="welcome-message">
                         <div class="welcome-icon">🩺</div>
-                        <h3>欢迎使用 NeuroMatrix AI 医生助手</h3>
+                        <h3>欢迎使用 StrokeClaw 医生助手</h3>
                         <p>专注于脑卒中影像分析，请描述您的临床问题</p>
                     </div>
                 </div>
@@ -1199,7 +1199,7 @@ function loadConversation(id) {
         messagesContainer.innerHTML = `
             <div class="welcome-message">
                 <div class="welcome-icon">🩺</div>
-                <h3>欢迎使用 NeuroMatrix AI 医生助手</h3>
+                <h3>欢迎使用 StrokeClaw 医生助手</h3>
                 <p>专注于脑卒中影像分析，请描述您的临床问题</p>
             </div>
         `;
@@ -1213,7 +1213,7 @@ function loadConversation(id) {
         messageElement.className = `message ${message.role}`;
         
         const avatarText = message.role === 'user' ? '我' : 'AI';
-        const authorText = message.role === 'user' ? '您' : 'NeuroMatrix AI';
+        const authorText = message.role === 'user' ? '您' : 'StrokeClaw';
         
         messageElement.innerHTML = `
             <div class="message-content">
@@ -1824,7 +1824,7 @@ function sendMessage(event) {
         <div class="message-content">
             <div class="message-header">
                 <div class="message-avatar">AI</div>
-                <div class="message-author">NeuroMatrix AI</div>
+                <div class="message-author">StrokeClaw</div>
             </div>
             <div class="loading-message">
                 <div class="loading-dots">
@@ -1878,7 +1878,7 @@ function sendMessage(event) {
                 <div class="message-content">
                     <div class="message-header">
                         <div class="message-avatar">AI</div>
-                        <div class="message-author">NeuroMatrix AI</div>
+                        <div class="message-author">StrokeClaw</div>
                     </div>
                     <div class="message-text"></div>
                     <div class="message-time">${new Date().toLocaleTimeString()}</div>
@@ -1973,7 +1973,7 @@ function sendMessage(event) {
             <div class="message-content">
                 <div class="message-header">
                     <div class="message-avatar">AI</div>
-                    <div class="message-author">NeuroMatrix AI</div>
+                    <div class="message-author">StrokeClaw</div>
                 </div>
                 <div class="message-text">错误：${error.message || '网络错误，请稍后重试'}</div>
                 <div class="message-time">${new Date().toLocaleTimeString()}</div>

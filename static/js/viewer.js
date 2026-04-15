@@ -1055,7 +1055,7 @@ async function saveAnalysisToDB() {
     }
 }
 
-// 璋冪�?NeuroMatrix AI 鐢熸垚鎶ュ憡
+// 璋冪�?StrokeClaw 鐢熸垚鎶ュ憡
 function getReportStorageKeys(fileId = currentFileId) {
     const normalized = fileId || '';
     return {
@@ -1462,7 +1462,7 @@ async function generateAIReport(options = {}) {
             aiReportContent.innerHTML = `
                 <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 40px; border-radius: 12px; text-align: center;">
                     <div style="border: 4px solid rgba(255,255,255,0.3); border-top: 4px solid white; border-radius: 50%; width: 48px; height: 48px; animation: spin 1s linear infinite; margin: 0 auto 16px;"></div>
-                    <p style="color: white; font-size: 16px; font-weight: 600; margin: 0;">NeuroMatrix AI 正在生成报告...</p>
+                    <p style="color: white; font-size: 16px; font-weight: 600; margin: 0;">StrokeClaw 正在生成报告...</p>
                     <p style="color: rgba(255,255,255,0.8); font-size: 13px; margin-top: 8px;">请稍候，模型推理时间可能较长</p>
                 </div>
             `;
@@ -1555,7 +1555,7 @@ function displayAIReport(report, isMock) {
     aiReportContent.innerHTML = `
         <div style="background: #eff6ff; padding: 12px; border-radius: 6px; border-left: 3px solid #2563eb; margin-bottom: 8px;">
             <div style="font-size: 11px; font-weight: 600; color: #2563eb; margin-bottom: 8px;">
-                NeuroMatrix AI 报告 ${isMock ? '<span style="background: #ffd700; padding: 1px 6px; border-radius: 8px; font-size: 10px;">模拟</span>' : ''}
+                StrokeClaw 报告 ${isMock ? '<span style="background: #ffd700; padding: 1px 6px; border-radius: 8px; font-size: 10px;">模拟</span>' : ''}
             </div>
             <div style="font-size: 12px; line-height: 1.8; color: #333;">${parseMarkdown(report)}</div>
         </div>

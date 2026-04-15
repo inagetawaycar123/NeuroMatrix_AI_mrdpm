@@ -686,30 +686,30 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 }
 
 .runtime-review-card {
-    padding: 16px;
+    padding: 20px;
     border-color: #2f4f8a;
     box-shadow: 0 0 0 1px rgba(84, 126, 214, 0.18), 0 12px 26px rgba(3, 9, 27, 0.45);
 }
 
 .runtime-review-card h2 {
-    margin: 0 0 12px;
+    margin: 0 0 14px;
     color: #8dd8ff;
     letter-spacing: 0.8px;
-    font-size: 20px;
+    font-size: 22px;
 }
 
 .runtime-review-body {
     display: grid;
-    gap: 12px;
+    gap: 14px;
 }
 
 .runtime-review-progress {
     border: 1px solid #2b4a84;
     border-radius: 12px;
     background: rgba(8, 19, 45, 0.78);
-    padding: 10px 12px;
+    padding: 12px 14px;
     display: grid;
-    gap: 8px;
+    gap: 10px;
 }
 
 .runtime-review-progress-head {
@@ -739,45 +739,67 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 
 .runtime-review-progress-meta {
     color: #86a9d8;
-    font-size: 12px;
-}
-
-.runtime-review-progress-line {
-    display: flex;
-    justify-content: space-between;
-    color: #b1cbee;
     font-size: 13px;
 }
 
-.runtime-review-progress-track {
-    width: 100%;
-    height: 7px;
-    border-radius: 999px;
-    background: rgba(38, 63, 108, 0.58);
-    overflow: hidden;
+.runtime-review-progress-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
 }
 
-.runtime-review-progress-fill {
-    height: 100%;
-    border-radius: inherit;
-    background: linear-gradient(90deg, #35b1ff, #63ffd2);
-    transition: width 0.22s ease;
+.runtime-review-tag {
+    border-radius: 999px;
+    border: 1px solid #355e94;
+    background: rgba(8, 23, 50, 0.78);
+    color: #9ec4ee;
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.runtime-review-tag.high {
+    border-color: #d9697b;
+    color: #ffb5bf;
+}
+
+.runtime-review-tag.medium {
+    border-color: #c98a43;
+    color: #ffd7a6;
+}
+
+.runtime-review-tag.low {
+    border-color: #2ea67a;
+    color: #95f0cb;
+}
+
+.runtime-review-tag.offline {
+    border-color: #d7697b;
+    color: #ffcad2;
+}
+
+.runtime-review-tag.online {
+    border-color: #2ea67a;
+    color: #9df3cf;
 }
 
 .runtime-review-grid {
     display: grid;
-    grid-template-columns: 280px minmax(0, 1fr);
-    gap: 12px;
+    grid-template-columns: 300px minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
 }
 
 .runtime-review-sidebar {
     border: 1px solid #28477d;
     border-radius: 12px;
     background: rgba(6, 16, 39, 0.78);
-    padding: 10px;
+    padding: 12px;
     display: grid;
-    gap: 7px;
+    gap: 8px;
     align-content: start;
+    max-height: 640px;
+    overflow-y: auto;
 }
 
 .runtime-review-section-btn {
@@ -785,30 +807,34 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
     border-radius: 10px;
     background: rgba(10, 24, 55, 0.82);
     color: #b5cdeb;
-    font-size: 13px;
+    font-size: 14px;
     text-align: left;
     line-height: 1.45;
-    padding: 8px 10px;
+    padding: 10px 12px;
     cursor: pointer;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
 }
 
 .runtime-review-section-index {
-    width: 20px;
-    height: 20px;
+    width: 22px;
+    height: 22px;
     border-radius: 999px;
     border: 1px solid #3f6ba8;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 11px;
-    margin-right: 8px;
+    font-size: 12px;
     color: #8eb3de;
+    flex: 0 0 auto;
 }
 
 .runtime-review-section-main {
-    display: inline-flex;
+    display: flex;
     flex-direction: column;
-    vertical-align: top;
+    min-width: 0;
+    gap: 2px;
 }
 
 .runtime-review-section-btn small {
@@ -839,23 +865,39 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
     border: 1px solid #2a4a82;
     border-radius: 12px;
     background: rgba(6, 16, 39, 0.78);
-    padding: 12px;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 640px;
+    overflow: hidden;
+}
+
+.runtime-review-main-scroll {
+    padding: 16px 16px 12px;
     display: grid;
-    gap: 10px;
+    gap: 12px;
+    overflow-y: auto;
 }
 
 .runtime-review-title-row {
     display: flex;
     justify-content: space-between;
-    align-items: center;
-    gap: 10px;
+    align-items: flex-start;
+    gap: 12px;
 }
 
 .runtime-review-title-row h3 {
     margin: 0;
     color: #e2f0ff;
-    font-size: 22px;
+    font-size: 28px;
     line-height: 1.25;
+}
+
+.runtime-review-title-row p {
+    margin: 8px 0 0;
+    color: #9dbade;
+    font-size: 15px;
+    line-height: 1.7;
 }
 
 .runtime-review-guide {
@@ -863,19 +905,48 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
     border-radius: 10px;
     background: rgba(11, 27, 58, 0.7);
     color: #c4dbf8;
-    padding: 9px 10px;
-    line-height: 1.6;
-    font-size: 14px;
+    padding: 12px 12px;
+    line-height: 1.7;
+    font-size: 15px;
 }
 
 .runtime-review-evidence {
     border: 1px solid #32608f;
     border-radius: 10px;
     background: rgba(6, 23, 51, 0.74);
-    padding: 9px 10px;
+    padding: 8px 10px;
     color: #9cc7f1;
-    font-size: 13px;
+    font-size: 14px;
     line-height: 1.5;
+}
+
+.runtime-review-evidence summary {
+    list-style: none;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 0;
+}
+
+.runtime-review-evidence summary::-webkit-details-marker {
+    display: none;
+}
+
+.runtime-review-evidence-body {
+    margin-top: 8px;
+    border-top: 1px dashed rgba(90, 137, 191, 0.4);
+    padding-top: 8px;
+}
+
+.runtime-review-evidence-count {
+    border: 1px solid #335f95;
+    border-radius: 999px;
+    padding: 3px 8px;
+    font-size: 12px;
+    color: #9ec5ed;
+    background: rgba(10, 24, 50, 0.7);
 }
 
 .runtime-review-evidence code {
@@ -885,19 +956,19 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 
 .runtime-review-field {
     display: grid;
-    gap: 6px;
+    gap: 8px;
 }
 
 .runtime-review-field label {
     color: #7fe1ff;
-    font-size: 13px;
+    font-size: 14px;
     letter-spacing: 0.4px;
     font-weight: 700;
 }
 
 .runtime-review-field-label {
     color: #7fe1ff;
-    font-size: 13px;
+    font-size: 14px;
     letter-spacing: 0.4px;
     font-weight: 700;
     margin-bottom: 4px;
@@ -910,9 +981,9 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
     border-radius: 10px;
     background: rgba(5, 15, 37, 0.85);
     color: #d4e9ff;
-    padding: 9px 10px;
-    font-size: 14px;
-    line-height: 1.6;
+    padding: 10px 12px;
+    font-size: 15px;
+    line-height: 1.72;
     resize: vertical;
 }
 
@@ -928,17 +999,34 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
     border-radius: 10px;
     background: rgba(9, 41, 34, 0.56);
     color: #a8f5d9;
-    padding: 10px;
+    padding: 12px;
     line-height: 1.65;
     font-size: 14px;
     white-space: pre-wrap;
     word-break: break-word;
 }
 
+.runtime-review-field-draft textarea {
+    min-height: 240px;
+}
+
+.runtime-review-field-note textarea {
+    min-height: 120px;
+}
+
 .runtime-review-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 10px;
+}
+
+.runtime-review-actions-sticky {
+    border-top: 1px solid #2a4b7f;
+    background: rgba(8, 19, 44, 0.94);
+    padding: 12px 16px 14px;
+    position: sticky;
+    bottom: 0;
+    z-index: 2;
 }
 
 .runtime-review-btn {
@@ -946,9 +1034,9 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
     border-radius: 999px;
     background: rgba(9, 27, 57, 0.9);
     color: #b8d9ff;
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 700;
-    padding: 6px 12px;
+    padding: 7px 14px;
     cursor: pointer;
 }
 
@@ -971,8 +1059,8 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 
 .runtime-review-note {
     color: #8eb3de;
-    font-size: 13px;
-    line-height: 1.55;
+    font-size: 14px;
+    line-height: 1.65;
 }
 
 .runtime-finalization-card {
@@ -1122,6 +1210,19 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
     }
     .runtime-review-grid {
         grid-template-columns: 1fr;
+    }
+    .runtime-review-sidebar {
+        max-height: none;
+    }
+    .runtime-review-main {
+        min-height: auto;
+    }
+    .runtime-review-main-scroll {
+        overflow: visible;
+    }
+    .runtime-review-actions-sticky {
+        position: static;
+        padding: 10px 12px 12px;
     }
     .runtime-agent-rail {
         left: 8px;
