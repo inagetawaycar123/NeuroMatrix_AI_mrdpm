@@ -10,7 +10,7 @@
 
 本项目目标不是“替代医生诊断”，而是提供**可解释、可校验、可复核**的决策支持流程。
 
-## 一、临床价值（面向评委）
+## 一、临床价值
 ### 1) 场景价值
 - 基层/夜间场景常见“有影像、缺CTP、缺专科”问题。
 - 系统可在模态不完整时自动选择可执行路径，优先给出可用结论与风险提示。
@@ -149,7 +149,7 @@
 ## 七、仓库与演示
 - 代码仓库：`https://github.com/inagetawaycar123/NeuroMatrix_AI_mrdpm.git`
 - Demo：`https://nonmodally-tinkliest-bennie.ngrok-free.dev`
-- 演示视频（B站）：`https://b23.tv/J9K5SUK`
+- 演示视频（B站）：` https://b23.tv/Ve5kbkU`
 
 > 若 Demo 因 ngrok 会话变更失效，请以本地部署结果为准。
 
@@ -227,12 +227,12 @@ cd frontend && npm install && npm run build && cd ..
 uv run python run.py
 ```
 
-### 2) 最小测试（工程评委建议执行）
+### 2) 最小测试
 ```bash
 pytest tests/test_agent_loop_modules.py tests/test_icv.py tests/test_ekv.py
 ```
 
-## 十一、验收清单（建议答辩前自检）
+## 十一、验收清单
 1. API 可用：可成功创建 run 并查询 `/runs` 与 `/events`
 2. 事件可见：可看到节点推进与状态变化（含风险事件）
 3. 审阅门禁：`/processing` 报告分段未全部确认时不能进入 `/viewer`
