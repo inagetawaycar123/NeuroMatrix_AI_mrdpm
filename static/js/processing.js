@@ -3,6 +3,7 @@
 const UPLOAD_NODES = [
     { key: "archive_ready", title: "Case_Intake.parse()", subtitle: "病例接收与归档准备", chip: "Case_Intake", delegated: "" },
     { key: "modality_detect", title: "Modality_Detect.route()", subtitle: "模态识别与路径判定", chip: "Modality", delegated: "" },
+    { key: "three_class", title: "Three_Class.triage()", subtitle: "NCCT三分类与Grad-CAM", chip: "Three_Class", delegated: "" },
     { key: "ctp_generate", title: "CTP_Generate.run()", subtitle: "灌注图谱生成", chip: "CTP_Gen", delegated: "generate_ctp_maps" },
     { key: "stroke_analysis", title: "Stroke_Analysis.segment()", subtitle: "卒中病灶分析", chip: "Analysis", delegated: "run_stroke_analysis" },
     { key: "pseudocolor", title: "Pseudocolor_Render.compose()", subtitle: "伪彩可视化生成", chip: "Pseudocolor", delegated: "generate_pseudocolor" },
@@ -27,6 +28,7 @@ const TEMPLATES = Object.freeze({
     default: ["系统正在执行当前节点。", "处理节点输入并推进流程。", "形成可解释的临床链路。"],
     archive_ready: ["系统已接收病例并创建会话。", "归集 patient_id 与 file_id。", "确保全流程同一病例上下文。"],
     modality_detect: ["系统正在识别可用模态。", "判断可执行分析路径。", "避免输入缺失导致误判。"],
+    three_class: ["系统正在执行 NCCT 三分类。", "同步生成 Grad-CAM 解释图。", "为后续临床判读提供快速分诊参考。"],
     ctp_generate: ["系统正在生成 CBF/CBV/Tmax 图谱。", "输出灌注核心参数。", "支撑缺血核心与半暗带判断。"],
     stroke_analysis: ["系统正在做病灶分割与体积评估。", "计算病灶侧别与关键指标。", "形成治疗决策依据。"],
     ai_report: ["系统正在组装结构化报告。", "汇总推理证据与关键结论。", "减少医生重复录入负担。"],
@@ -495,6 +497,9 @@ function syncRevealQueue() {
     const keep = new Set(order);
     const eligibleOrder = state.nodes.filter((n) => isNodeEligible(n)).map((n) => n.id);
     const eligibleSet = new Set(eligibleOrder);
+    const pendingIds = state.nodes
+        .filter((n) => normStatus(n.status) === "pending")
+        .map((n) => n.id);
 
     state.revealedNodeIds = state.revealedNodeIds.filter((id) => keep.has(id));
     state.revealPendingIds = state.revealPendingIds.filter(
@@ -506,6 +511,15 @@ function syncRevealQueue() {
             state.revealPendingIds.push(id);
         }
     });
+
+    // Pending nodes should be visible immediately in the main timeline.
+    pendingIds.forEach((id) => {
+        if (!state.revealedNodeIds.includes(id)) {
+            state.revealedNodeIds.push(id);
+            state.revealAt[id] = state.revealAt[id] || Date.now();
+        }
+    });
+    state.revealPendingIds = state.revealPendingIds.filter((id) => !pendingIds.includes(id));
 
     if (!state.revealedNodeIds.length && state.revealPendingIds.length) {
         const first = state.revealPendingIds.shift();
@@ -617,11 +631,13 @@ function tableRows(data) { if (data === null || data === undefined) return [{ k:
 function nodeCard(node, ctx = {}) {
     const card = document.createElement("article");
     const classes = [`runtime-node-card`, `status-${node.status}`];
+    if (node.key) classes.push(`runtime-node-${String(node.key).replace(/[^a-z0-9_-]/gi, "_")}`);
     if (ctx.isActive) classes.push("is-active");
     if (ctx.isHistory) classes.push("is-history");
     if (ctx.isNew) classes.push("is-enter");
     card.className = classes.join(" ");
     card.dataset.nodeId = node.id;
+    card.dataset.nodeKey = String(node.key || "");
     card.dataset.nodeOrder = String(node.order || 0);
     const expanded = Boolean(state.expanded[node.id]);
     const riskClass = node.riskLevel || "medium";
@@ -886,7 +902,7 @@ function render() {
         : "上传完成后，系统将依次执行影像处理与多智能体协作，并持续展示临床可读解释。";
     $("runtimeOrchestrationPath").textContent = Array.isArray(plan?.next_tools)
         ? plan.next_tools.map((x) => getMeta(x).chip).join(" → ")
-        : "Case_Intake → Modality_Detect → CTP_Generate → Stroke_Analysis → Report → Agent_Network";
+        : "Case_Intake → Modality_Detect → Three_Class → CTP_Generate → Stroke_Analysis → Report → Agent_Network";
 
     const note = $("runtimeCaseNote");
     note.classList.toggle("error", !!state.error);
@@ -954,7 +970,8 @@ function render() {
         const done = state.nodes.filter((n) => n.status === "completed").length;
         state.nodes.forEach((n) => {
             const c = document.createElement("span");
-            c.className = `runtime-chip ${n.status}`;
+            c.className = `runtime-chip ${n.status} runtime-chip-${String(n.key || "node").replace(/[^a-z0-9_-]/gi, "_")}`;
+            c.dataset.nodeKey = String(n.key || "");
             if (activeNode?.id === n.id) c.classList.add("current");
             if (!visibleSet.has(n.id)) c.classList.add("pending-reveal");
             c.textContent = n.chip;

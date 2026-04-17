@@ -908,6 +908,7 @@ print(f"处理目录: {app.config['PROCESSED_FOLDER']}")
 UPLOAD_JOB_STEP_DEFS = [
     {"key": "archive_ready", "title": "建立患者档案"},
     {"key": "modality_detect", "title": "识别上传模态"},
+    {"key": "three_class", "title": "NCCT三分类与Grad-CAM"},
     {"key": "ctp_generate", "title": "生成CTP灌注图"},
     {"key": "stroke_analysis", "title": "脑卒中自动分析"},
     {"key": "pseudocolor", "title": "生成伪彩图"},
@@ -1367,10 +1368,60 @@ def _run_upload_processing_job(job_id, payload):
 
         ok, upload_msg, upload_result = _invoke_internal_upload(payload)
         if not ok:
+            _update_step(job_id, "three_class", "failed", upload_msg)
             if should_ctp_generate:
                 _update_step(job_id, "ctp_generate", "failed", upload_msg)
             _set_job_status(job_id, "failed", upload_msg)
             return
+
+        _update_step(job_id, "three_class", "running", "正在执行 NCCT 三分类与 Grad-CAM")
+        three_class_summary = (upload_result or {}).get("three_class_summary") or {}
+        rgb_files = (upload_result or {}).get("rgb_files") or []
+        gradcam_status = (
+            (three_class_summary.get("gradcam") or {}).get("success")
+            if isinstance(three_class_summary, dict)
+            else False
+        )
+        three_class_display = (
+            str(three_class_summary.get("display") or "").strip()
+            if isinstance(three_class_summary, dict)
+            else ""
+        )
+        three_class_counts = (
+            three_class_summary.get("counts")
+            if isinstance(three_class_summary, dict)
+            and isinstance(three_class_summary.get("counts"), dict)
+            else {}
+        )
+        summary_has_counts = bool(
+            sum(int(three_class_counts.get(k) or 0) for k in ("normal", "hemo", "infarct"))
+        )
+        summary_has_output = bool(
+            isinstance(three_class_summary, dict)
+            and isinstance(three_class_summary.get("output"), dict)
+            and three_class_summary.get("output")
+        )
+        rgb_has_three_class = any(
+            str((item or {}).get("three_class_label") or "").strip() for item in rgb_files
+        )
+        display_is_ok = bool(
+            three_class_display
+            and "失败" not in three_class_display
+            and "异常" not in three_class_display
+        )
+
+        if gradcam_status or summary_has_counts or summary_has_output or rgb_has_three_class or display_is_ok:
+            done_msg = three_class_display or "三分类与 Grad-CAM 完成"
+            _update_step(job_id, "three_class", "completed", done_msg)
+        else:
+            tc_err = (
+                str((three_class_summary.get("gradcam") or {}).get("error") or "").strip()
+                if isinstance(three_class_summary, dict)
+                else ""
+            )
+            fail_msg = tc_err or three_class_display or "三分类或 Grad-CAM 未生成"
+            _update_step(job_id, "three_class", "failed", fail_msg)
+            _add_job_warning(job_id, f"three_class degraded: {fail_msg}")
 
         if should_ctp_generate:
             has_complete_ctp = _result_has_ctp_images(upload_result)

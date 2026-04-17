@@ -415,6 +415,22 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
     animation: runtimeHumanWait 2.2s ease-in-out infinite;
 }
 
+/* Three-class runtime node: keep the same component but give a dedicated accent. */
+.runtime-node-card.runtime-node-three_class {
+    border-color: #2f5da6;
+    background: linear-gradient(140deg, rgba(8, 24, 56, 0.95), rgba(5, 12, 30, 0.94));
+}
+
+.runtime-node-card.runtime-node-three_class.status-running {
+    border-color: #5aa8ff;
+    box-shadow: 0 0 0 1px rgba(90, 168, 255, 0.34), 0 0 24px rgba(90, 168, 255, 0.22);
+}
+
+.runtime-node-card.runtime-node-three_class.status-completed {
+    border-color: #29c991;
+    box-shadow: 0 0 0 1px rgba(41, 201, 145, 0.34), 0 0 20px rgba(41, 201, 145, 0.2);
+}
+
 .runtime-node-head {
     display: flex;
     justify-content: space-between;
@@ -1154,6 +1170,17 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 .runtime-chip.pending-reveal {
     opacity: 0.48;
     border-style: dashed;
+}
+
+.runtime-chip.runtime-chip-three_class {
+    border-color: #3f6fb0;
+    color: #b7d2f5;
+}
+
+.runtime-chip.runtime-chip-three_class.completed {
+    border-color: #1dbf8a;
+    color: #96f5cf;
+    box-shadow: 0 0 0 1px rgba(29, 191, 138, 0.28);
 }
 
 .runtime-agent-rail.collapsed .runtime-rail-body {
