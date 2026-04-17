@@ -863,9 +863,13 @@ import matplotlib as mpl
 try:
     from .stroke_analysis import analyze_stroke_case
     from .medgemma_report import generate_report_with_medgemma
+    from .three_class.predict_three_class import predict_three_class
+    from .three_class.generate_gradcam import generate_gradcam
 except ImportError:
     from stroke_analysis import analyze_stroke_case
     from medgemma_report import generate_report_with_medgemma
+    from three_class.predict_three_class import predict_three_class
+    from three_class.generate_gradcam import generate_gradcam
 
 # 尝试导入 nibabel（用于 NIfTI 等医学影像格式）
 try:
@@ -1161,6 +1165,101 @@ def _result_has_ctp_images(upload_result):
         if expected_slices > 0 and generated_count < expected_slices:
             return False
     return True
+
+
+_THREE_CLASS_LABEL_CN = {
+    "normal": "正常",
+    "hemo": "脑出血",
+    "infarct": "脑缺血",
+}
+
+
+def _slice_index_from_name(name):
+    try:
+        match = re.search(r"slice_(\d+)", str(name or ""))
+        return int(match.group(1)) if match else None
+    except Exception:
+        return None
+
+
+def _build_three_class_view(file_id, rgb_files):
+    """Run 3-class inference once per case and attach per-slice labels to rgb_files."""
+    payload = {
+        "success": False,
+        "summary": {
+            "display": "三分类未执行",
+            "counts": {"normal": 0, "hemo": 0, "infarct": 0},
+            "gradcam": {"success": False, "output": None, "error": ""},
+        },
+        "error": "",
+    }
+
+    try:
+        gradcam_result = generate_gradcam(
+            file_id, output_base_dir=app.config["PROCESSED_FOLDER"]
+        )
+        if not gradcam_result or not gradcam_result.get("success"):
+            payload["summary"]["gradcam"] = {
+                "success": False,
+                "output": None,
+                "error": (gradcam_result or {}).get("error", "gradcam failed"),
+            }
+        else:
+            payload["summary"]["gradcam"] = {
+                "success": True,
+                "output": gradcam_result.get("output") or {},
+                "error": "",
+            }
+
+        inference = predict_three_class(
+            file_id, output_base_dir=app.config["PROCESSED_FOLDER"]
+        )
+        if not inference or not inference.get("success"):
+            payload["error"] = (inference or {}).get("error", "three_class failed")
+            payload["summary"]["display"] = "三分类失败"
+            return payload
+
+        by_index = {}
+        for item in inference.get("predictions") or []:
+            idx = _slice_index_from_name(item.get("slice_file"))
+            if idx is not None:
+                by_index[idx] = item
+
+        counts = {"normal": 0, "hemo": 0, "infarct": 0}
+        for slice_item in rgb_files or []:
+            slice_idx = slice_item.get("slice_index")
+            pred = by_index.get(slice_idx)
+            if not pred:
+                slice_item["three_class_label"] = ""
+                slice_item["three_class_label_cn"] = ""
+                slice_item["three_class_confidence"] = 0.0
+                continue
+
+            label = str(pred.get("pred_label") or "").strip().lower()
+            confidence = float(pred.get("confidence") or 0.0)
+            if label in counts:
+                counts[label] += 1
+
+            slice_item["three_class_label"] = label
+            slice_item["three_class_label_cn"] = _THREE_CLASS_LABEL_CN.get(label, label)
+            slice_item["three_class_confidence"] = confidence
+
+        display_parts = []
+        for key in ("normal", "hemo", "infarct"):
+            display_parts.append(f"{_THREE_CLASS_LABEL_CN[key]} {counts[key]}")
+
+        payload["success"] = True
+        payload["summary"] = {
+            "display": " | ".join(display_parts),
+            "counts": counts,
+            "total_slices": int(inference.get("total_slices") or len(rgb_files or [])),
+            "output": inference.get("output") or {},
+        }
+        return payload
+    except Exception as exc:
+        payload["error"] = str(exc)
+        payload["summary"]["display"] = "三分类异常"
+        return payload
 
 
 def _invoke_internal_upload(payload):
@@ -9780,6 +9879,10 @@ def upload_files():
                 slice_result["has_ai"] = False
                 rgb_files.append(slice_result)
 
+            three_class_view = _build_three_class_view(file_id, rgb_files)
+            if not three_class_view.get("success"):
+                print(f"[WARN] three_class inference failed: {three_class_view.get('error')}")
+
             # 自动触发脑卒中分析（如果满足条件）
             if patient_id and not defer_stroke_analysis:
                 print("尝试自动触发脑卒中分析...")
@@ -9815,6 +9918,7 @@ def upload_files():
                     "available_models": [],
                     "model_configs": MODEL_CONFIGS,
                     "skip_ai": skip_ai,
+                    "three_class_summary": three_class_view.get("summary"),
                 }
             )
         else:
@@ -9826,6 +9930,14 @@ def upload_files():
 
             if result["success"]:
                 print("RGB 合成和多模型 AI 推理处理成功")
+
+                three_class_view = _build_three_class_view(
+                    file_id, result.get("rgb_files") or []
+                )
+                if not three_class_view.get("success"):
+                    print(
+                        f"[WARN] three_class inference failed: {three_class_view.get('error')}"
+                    )
 
                 # 自动触发脑卒中分析（如果满足条件）
                 if patient_id and not defer_stroke_analysis:
@@ -9878,6 +9990,9 @@ def upload_files():
                         "available_models": result["available_models"],
                         "model_configs": result["model_configs"],
                         "skip_ai": skip_ai,
+                        "three_class_summary": ensure_json_serializable(
+                            three_class_view.get("summary")
+                        ),
                     }
                 )
             else:

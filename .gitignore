@@ -39,3 +39,6 @@ MedGemma_Model/example/
 
 #vscode配置文件
 .vscode/
+
+# 三分类权重
+backend/three_class/best_model.pt

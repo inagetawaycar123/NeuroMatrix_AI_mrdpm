@@ -111,6 +111,25 @@ function summarize(v) {
 }
 function pretty(v) { try { return typeof v === "object" ? JSON.stringify(v, null, 2) : String(v); } catch (_e) { return summarize(v); } }
 function modalities() { return Array.isArray(state.latestJob?.modalities) && state.latestJob.modalities.length ? state.latestJob.modalities : (Array.isArray(state.latestRun?.planner_input?.available_modalities) ? state.latestRun.planner_input.available_modalities : []); }
+function threeClassSummaryText() {
+    const summary = state.latestJob?.result?.three_class_summary;
+    if (!summary) return "-";
+    if (typeof summary === "string") return summary;
+    if (typeof summary.display === "string" && summary.display.trim()) return summary.display.trim();
+    const counts = summary.counts && typeof summary.counts === "object" ? summary.counts : {};
+    const parts = [];
+    const map = [
+        ["normal", "正常"],
+        ["hemo", "脑出血"],
+        ["infarct", "脑缺血"],
+    ];
+    map.forEach(([key, label]) => {
+        if (counts[key] !== undefined && counts[key] !== null) {
+            parts.push(`${label} ${counts[key]}`);
+        }
+    });
+    return parts.length ? parts.join(" | ") : "-";
+}
 function getMeta(tool) { const m = TOOL_META[tool] || [`${tool}.run()`, "智能体节点", tool || "Node"]; return { title: m[0], subtitle: m[1], chip: m[2] }; }
 function setPill(elm, s) { if (!elm) return; const k = normStatus(s); elm.className = `runtime-status-pill ${k}`; elm.textContent = STATUS_TEXT[k] || STATUS_TEXT.pending; }
 
@@ -854,6 +873,7 @@ function render() {
     $("runtimeStartAt").textContent = t(state.startedAt);
     $("runtimeFileId").textContent = t(state.fileId);
     $("runtimeModalities").textContent = modalities().join(" + ") || "-";
+    $("runtimeThreeClass").textContent = threeClassSummaryText();
     $("runtimeGoalQuestion").textContent = t(run?.planner_input?.goal_question || run?.planner_input?.question);
     $("runtimeCurrentStage").textContent = t(run.stage || job.current_step);
     $("runtimeCurrentTool").textContent = t(run.current_tool);

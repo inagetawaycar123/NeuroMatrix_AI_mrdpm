@@ -850,7 +850,7 @@ def analyze_stroke_case(file_id, hemisphere="both", output_base_dir=None, use_re
 
         # 构建所有切片的可视化URL
         if os.path.exists(analysis_output_dir):
-            visualizations = {"penumbra": [], "core": [], "combined": []}
+            visualizations = {"penumbra": [], "core": [], "combined": [], "gradcam": []}
 
             # 为每个切片构建URL
             for slice_id in range(len(tmax_slices)):
@@ -894,11 +894,22 @@ def analyze_stroke_case(file_id, hemisphere="both", output_base_dir=None, use_re
                 else:
                     print(f"⚠ 综合显示图像不存在: {combined_path}")
 
+                gradcam_path = os.path.join(
+                    analysis_output_dir, f"slice_{slice_id:03d}_ncct_gradcam.png"
+                )
+                if os.path.exists(gradcam_path):
+                    visualizations["gradcam"].append(
+                        f"/get_stroke_analysis_image/{file_id}/slice_{slice_id:03d}_ncct_gradcam.png"
+                    )
+                else:
+                    print(f"⚠ Grad-CAM 图像不存在: {gradcam_path}")
+
             analysis_results["visualizations"] = visualizations
             print(f"✓ 生成 {len(tmax_slices)} 个切片的可视化URL")
             print(f"半暗带URL数量: {len(visualizations['penumbra'])}")
             print(f"核心梗死URL数量: {len(visualizations['core'])}")
             print(f"综合显示URL数量: {len(visualizations['combined'])}")
+            print(f"Grad-CAM URL数量: {len(visualizations['gradcam'])}")
 
             # 如果没有生成任何可视化图像，返回错误
             if not visualizations["combined"]:
