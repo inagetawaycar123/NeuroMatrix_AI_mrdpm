@@ -14,6 +14,7 @@ from scipy import ndimage
 import json
 import re
 import time
+from occlusion_classifier import analyze_occlusion
 
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -694,7 +695,8 @@ def auto_analyze_stroke(case_id, patient_id=None):
 
         print("start stroke analysis execution...")
         analysis_result = analyze_stroke_case(case_id, parsed_hemisphere, use_real_ctp=use_real_ctp)
-
+        occlusion_result = analyze_occlusion(case_id)
+        analysis_result["occlusion_classification"] = occlusion_result
         if analysis_result.get("success"):
             print("[OK] stroke analysis succeeded")
             if supabase_client is not None:
