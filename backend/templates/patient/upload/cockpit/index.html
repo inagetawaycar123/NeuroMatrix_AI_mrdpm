@@ -18,7 +18,7 @@
         <div class="cockpit-header">
             <div>
                 <h1>Agent 运行驾驶舱</h1>
-                <p>统一查看计划帧、工具执行轨迹、重规划和终止原因。</p>
+                <p>统一查看规划、执行、校验、证据与人工复核。</p>
             </div>
             <div class="cockpit-header-actions">
                 <button class="tool-btn" id="refreshCockpitBtn">刷新</button>
@@ -38,8 +38,74 @@
             <div class="cockpit-meta-item"><span>更新时间</span><strong id="metaUpdatedAt">-</strong></div>
         </div>
 
+        <div id="cockpitSourceBanner" class="cockpit-source-banner" hidden></div>
+
+        <section class="cockpit-demo-bar" id="demoControlBar">
+            <div class="demo-bar-head">
+                <div>
+                    <h3>Demo Scenario Quick Start</h3>
+                    <p>选择场景并一键启动临床演示链路（输入→分析→报告→复核）。</p>
+                </div>
+                <button class="tool-btn" id="toggleDemoBarBtn">收起</button>
+            </div>
+            <div class="demo-bar-body" id="demoBarBody">
+                <div class="demo-mode-row">
+                    <span>mode</span>
+                    <select id="scenarioModeSelect">
+                        <option value="mock" selected>mock (stable demo)</option>
+                        <option value="hybrid">hybrid</option>
+                        <option value="real">real</option>
+                    </select>
+                    <span class="tiny-chip" id="demoModeBadge">mode: mock</span>
+                    <span class="tiny-chip" id="demoSourceBadge">source: REAL</span>
+                </div>
+                <div class="scenario-actions scenario-actions-inline">
+                    <button class="tool-btn" id="startScenarioABtn">启动 A：NCCT+mCTA 无 CTP</button>
+                    <button class="tool-btn" id="startScenarioBBtn">启动 B：NCCT+mCTA+CTP</button>
+                    <button class="tool-btn" id="startScenarioCBtn">启动 C：冲突待复核</button>
+                </div>
+                <div class="demo-flow-hint">演示步骤：1) 选择场景 2) 点击启动 3) 观察 DAG 节点执行与证据链联动。</div>
+                <div id="scenarioHint" class="cockpit-note">可基于当前 patient_id/file_id 一键启动 A/B/C 演示场景。</div>
+            </div>
+            <div class="demo-bar-collapsed" id="demoBarCollapsed" hidden>
+                <span class="tiny-chip" id="demoCollapsedRun">run: -</span>
+                <span class="tiny-chip" id="demoCollapsedMode">mode: -</span>
+                <span class="tiny-chip" id="demoCollapsedSource">source: -</span>
+                <button class="tool-btn" id="expandDemoBarBtn">展开切换场景</button>
+            </div>
+        </section>
+
         <div class="cockpit-layout">
             <section class="cockpit-left">
+                <div class="cockpit-card cockpit-dag-card">
+                    <div class="card-header">
+                        <h3>Agent DAG 主舞台</h3>
+                        <div class="dag-header-meta dag-header-tools">
+                            <button class="tool-btn tiny-btn" id="dagZoomOutBtn">-</button>
+                            <button class="tool-btn tiny-btn" id="dagZoomResetBtn">100%</button>
+                            <button class="tool-btn tiny-btn" id="dagZoomInBtn">+</button>
+                            <span class="tiny-chip" id="dagNodeCount">nodes: 0</span>
+                            <span class="tiny-chip" id="dagEdgeCount">edges: 0</span>
+                        </div>
+                    </div>
+                    <div class="dag-stage">
+                        <div class="dag-viewport" id="dagGraphStage">
+                            <div class="dag-scene" id="dagScene">
+                                <div class="dag-lane-layer" id="dagLaneLayer"></div>
+                                <svg class="dag-edge-layer" id="dagEdgeLayer"></svg>
+                                <div class="dag-node-layer" id="dagNodeLayer"></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="dag-legend">
+                        <span class="legend-dot running"></span><span>running</span>
+                        <span class="legend-dot completed"></span><span>completed</span>
+                        <span class="legend-dot pending"></span><span>pending</span>
+                        <span class="legend-dot failed"></span><span>failed</span>
+                        <span class="legend-dot review"></span><span>review_required</span>
+                    </div>
+                </div>
+
                 <div class="cockpit-card">
                     <div class="card-header">
                         <h3>步骤时间线</h3>
@@ -49,14 +115,14 @@
 
                 <div class="cockpit-card">
                     <div class="card-header">
-                        <h3>计划帧（Plan Frames）</h3>
+                        <h3>计划帧时间线（Plan Frames）</h3>
                     </div>
                     <div id="planFrameTimeline" class="event-timeline"></div>
                 </div>
 
                 <div class="cockpit-card">
                     <div class="card-header">
-                        <h3>事件轨迹</h3>
+                        <h3>事件日志流</h3>
                         <div class="event-filters">
                             <select id="eventStageFilter">
                                 <option value="all">全部阶段</option>
@@ -100,7 +166,7 @@
                     <div class="kv"><span>EKV 发现数</span><strong id="summaryEkvFindings">-</strong></div>
                     <div class="kv"><span>EKV 支持率</span><strong id="summaryEkvSupportRate">-</strong></div>
                     <div class="kv"><span>Consensus 状态</span><strong id="summaryConsensusStatus">-</strong></div>
-                    <div class="kv"><span>Consensus 决策</span><strong id="summaryConsensusDecision">-</strong></div>
+                    <div class="kv"><span>Consensus 结论</span><strong id="summaryConsensusDecision">-</strong></div>
                     <div class="kv"><span>冲突数</span><strong id="summaryConsensusConflicts">-</strong></div>
                 </div>
 
@@ -117,21 +183,91 @@
 
                 <div class="cockpit-card">
                     <div class="card-header">
-                        <h3>入口</h3>
+                        <h3>快捷入口</h3>
                     </div>
                     <div class="entry-buttons">
-                        <button class="tool-btn" id="gotoViewerBtn">打开 Viewer</button>
-                        <button class="tool-btn" id="gotoReportBtn">打开 Report</button>
-                        <button class="tool-btn" id="gotoValidationBtn">打开 Validation</button>
+                        <button class="tool-btn" id="gotoViewerBtn">进入 Viewer</button>
+                        <button class="tool-btn" id="gotoReportBtn">进入 Report</button>
+                        <button class="tool-btn" id="gotoValidationBtn">进入 Validation</button>
                     </div>
                 </div>
 
                 <div class="cockpit-card">
-                    <div id="cockpitHint" class="cockpit-note">等待加载运行数据...</div>
+                    <div id="cockpitHint" class="cockpit-note">正在加载驾驶舱数据...</div>
                 </div>
             </aside>
         </div>
     </div>
+</div>
+
+<div class="node-drawer" id="nodeDrawer" hidden>
+    <div class="node-drawer-mask" id="nodeDrawerMask"></div>
+    <aside class="node-drawer-panel">
+        <div class="node-drawer-head">
+            <div>
+                <h3 id="drawerNodeTitle">-</h3>
+                <div class="node-drawer-subhead">
+                    <span id="drawerNodeStatus" class="badge">-</span>
+                    <span id="drawerNodeSource" class="source-badge">-</span>
+                </div>
+            </div>
+            <button class="tool-btn" id="closeNodeDrawerBtn">关闭</button>
+        </div>
+
+        <div class="node-drawer-grid">
+            <div class="kv"><span>step_key</span><strong id="drawerNodeKey">-</strong></div>
+            <div class="kv"><span>lane</span><strong id="drawerNodeLane">-</strong></div>
+            <div class="kv"><span>stage</span><strong id="drawerNodeStage">-</strong></div>
+            <div class="kv"><span>confidence</span><strong id="drawerNodeConfidence">-</strong></div>
+            <div class="kv"><span>latency_ms</span><strong id="drawerNodeLatency">-</strong></div>
+            <div class="kv"><span>risk_level</span><strong id="drawerNodeRisk">-</strong></div>
+            <div class="kv"><span>retryable</span><strong id="drawerNodeRetryable">-</strong></div>
+            <div class="kv"><span>error_code</span><strong id="drawerNodeError">-</strong></div>
+            <div class="kv"><span>message</span><strong id="drawerNodeMessage">-</strong></div>
+            <div class="kv"><span>parents</span><strong id="drawerNodeParents">-</strong></div>
+            <div class="kv"><span>children</span><strong id="drawerNodeChildren">-</strong></div>
+            <div class="kv"><span>secondary_deps</span><strong id="drawerNodeSecondaryDeps">0</strong></div>
+        </div>
+
+        <div class="drawer-tabs" id="drawerTabs">
+            <button class="drawer-tab active" data-tab="clinical">临床视图</button>
+            <button class="drawer-tab" data-tab="engineering">工程视图</button>
+            <button class="drawer-tab" data-tab="evidence">证据视图</button>
+        </div>
+
+        <div class="drawer-tab-panel" id="drawerTabClinical">
+            <div class="drawer-block">
+                <h4>clinical summary</h4>
+                <pre id="drawerClinicalSummary">-</pre>
+            </div>
+            <div class="drawer-block">
+                <h4>output summary</h4>
+                <pre id="drawerNodeOutput">-</pre>
+            </div>
+        </div>
+
+        <div class="drawer-tab-panel" id="drawerTabEngineering" hidden>
+            <div class="drawer-block">
+                <h4>tool key</h4>
+                <pre id="drawerEngineeringToolKey">-</pre>
+            </div>
+            <div class="drawer-block">
+                <h4>input payload</h4>
+                <pre id="drawerNodeInput">-</pre>
+            </div>
+            <div class="drawer-block">
+                <h4>engineering payload</h4>
+                <pre id="drawerEngineeringPayload">-</pre>
+            </div>
+        </div>
+
+        <div class="drawer-tab-panel" id="drawerTabEvidence" hidden>
+            <div class="drawer-block">
+                <h4>evidence refs</h4>
+                <div id="drawerNodeEvidence" class="evidence-chip-wrap"></div>
+            </div>
+        </div>
+    </aside>
 </div>
 {% endblock %}
 
