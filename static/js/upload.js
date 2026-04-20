@@ -1,187 +1,164 @@
-﻿const DEFAULT_UPLOAD_MODE = 'ncct_3phase_cta';
+const DEFAULT_UPLOAD_MODE = 'ncct_3phase_cta';
 
-document.addEventListener('DOMContentLoaded', function () {
-    const uploadInfo = document.querySelector('.upload-info');
-    if (uploadInfo && !uploadInfo.dataset.runtimeHint) {
-        uploadInfo.dataset.runtimeHint = '1';
-        uploadInfo.innerHTML += '<br>上传成功后将自动进入 StrokeClaw 运行等待页，查看多节点协作过程。';
+function getUploadMode() {
+    const modeEl = document.getElementById('uploadModeSelect');
+    return modeEl ? modeEl.value : DEFAULT_UPLOAD_MODE;
+}
+
+function isAgentEnabled() {
+    const toggle = document.getElementById('agentRunToggle');
+    return !toggle || !!toggle.checked;
+}
+
+function getRowByInputId(id) {
+    const el = document.getElementById(id);
+    return el ? el.parentElement : null;
+}
+
+function isValidNiftiFile(file) {
+    if (!file || !file.name) return false;
+    const lower = file.name.toLowerCase();
+    return lower.endsWith('.nii') || lower.endsWith('.nii.gz');
+}
+
+function renderPathPreview() {
+    const uploadPathHint = document.getElementById('uploadPathHint');
+    const uploadSourceHint = document.getElementById('uploadSourceHint');
+    const uploadPlanNote = document.getElementById('uploadPlanNote');
+    if (!uploadPathHint || !uploadSourceHint || !uploadPlanNote) return;
+
+    const mode = getUploadMode();
+    const enabled = isAgentEnabled();
+    let path = 'Case Intake -> Modality Detect -> Planner -> Tool Chain -> Report';
+    let note = '根据当前输入模态，系统将自动选择是否进入类 CTP 生成分支。';
+
+    if (mode === 'ncct') {
+        path = 'Case Intake -> NCCT Triage -> (可选)类CTP生成 -> Stroke Analysis -> Report';
+        note = '仅有 NCCT 时，优先走 NCCT 分诊链路，必要时补充推断。';
+    } else if (mode === 'ncct_single_cta') {
+        path = 'Case Intake -> NCCT+CTA Triage -> 类CTP生成 -> Stroke Analysis -> Report';
+        note = '单期 CTA 会触发类 CTP 分支，并在结果中标注来源。';
+    } else if (mode === 'ncct_3phase_cta') {
+        path = 'Case Intake -> NCCT+mCTA -> 类CTP生成 -> Stroke Analysis -> Validation -> Report';
+        note = '无真实 CTP 时将进入 pseudo-CTP 生成节点。';
+    } else if (mode === 'ncct_3phase_cta_ctp') {
+        path = 'Case Intake -> NCCT+mCTA+CTP -> Stroke Analysis -> Validation -> Report';
+        note = '存在真实 CTP 时将跳过类 CTP 生成节点。';
     }
 
-    const uploadModeSelect = document.getElementById('uploadModeSelect');
-    const ctaPhaseSelect = document.getElementById('ctaPhaseSelect');
-    const ctaPhaseRow = document.getElementById('ctaPhaseRow');
-
-    const urlParams = new URLSearchParams(window.location.search);
-    const patientIdParam = urlParams.get('patient_id');
-    if (patientIdParam) {
-        setCurrentPatientId(patientIdParam);
-    }
-
-    const patientId = getCurrentPatientId();
-    if (!patientId) {
-        showMsg('缺少 patient_id，正在返回患者列表页。', 'error');
-        setTimeout(() => {
-            window.location.href = '/patient';
-        }, 1000);
+    uploadPathHint.textContent = path;
+    if (!enabled) {
+        uploadSourceHint.textContent = 'source_tag: manual upload only';
+        uploadPlanNote.textContent = '当前关闭 Agent 主链，仅执行上传与基础处理。';
         return;
     }
+    uploadSourceHint.textContent = 'source_tag: real/hybrid(auto-fallback)';
+    uploadPlanNote.textContent = note;
+}
 
-    setPatientInfoVisible(true);
-    updatePatientHeader(patientId);
+function updateUIByMode() {
+    const mode = getUploadMode();
+    const ctaPhaseRow = document.getElementById('ctaPhaseRow');
+    const ctaPhaseSelect = document.getElementById('ctaPhaseSelect');
 
-    const mctaInput = document.getElementById('mctaFile');
-    const vctaInput = document.getElementById('vctaFile');
-    const dctaInput = document.getElementById('dctaFile');
-    const ncctInput = document.getElementById('ncctFile');
-    const cbfInput = document.getElementById('cbfFile');
-    const cbvInput = document.getElementById('cbvFile');
-    const tmaxInput = document.getElementById('tmaxFile');
-    const questionInput = document.getElementById('agentQuestion');
-    const agentToggle = document.getElementById('agentRunToggle');
-
-    function isValidNiftiFile(file) {
-        if (!file || !file.name) {
-            return false;
-        }
-        const lowerName = file.name.toLowerCase();
-        return lowerName.endsWith('.nii') || lowerName.endsWith('.nii.gz');
+    if (ctaPhaseRow) {
+        ctaPhaseRow.style.display = mode === 'ncct_single_cta' ? '' : 'none';
     }
 
-    function validateNiftiOrReset(inputEl, label) {
-        const file = inputEl && inputEl.files ? inputEl.files[0] : null;
-        if (!file) {
-            return true;
-        }
-        if (isValidNiftiFile(file)) {
-            return true;
-        }
-        inputEl.value = '';
-        showMsg(`${label} 文件必须是 .nii 或 .nii.gz`, 'error');
-        return false;
+    const ncctRow = getRowByInputId('ncctFile');
+    const mctaRow = getRowByInputId('mctaFile');
+    const vctaRow = getRowByInputId('vctaFile');
+    const dctaRow = getRowByInputId('dctaFile');
+    const cbfRow = getRowByInputId('cbfFile');
+    const cbvRow = getRowByInputId('cbvFile');
+    const tmaxRow = getRowByInputId('tmaxFile');
+    const sideRow = getRowByInputId('sideSelect');
+
+    if (ncctRow) ncctRow.style.display = '';
+
+    if (mode === 'ncct') {
+        if (mctaRow) mctaRow.style.display = 'none';
+        if (vctaRow) vctaRow.style.display = 'none';
+        if (dctaRow) dctaRow.style.display = 'none';
+        if (cbfRow) cbfRow.style.display = 'none';
+        if (cbvRow) cbvRow.style.display = 'none';
+        if (tmaxRow) tmaxRow.style.display = 'none';
+        if (sideRow) sideRow.style.display = '';
+    } else if (mode === 'ncct_single_cta') {
+        const phase = ctaPhaseSelect ? ctaPhaseSelect.value : 'mcta';
+        if (mctaRow) mctaRow.style.display = phase === 'mcta' ? '' : 'none';
+        if (vctaRow) vctaRow.style.display = phase === 'vcta' ? '' : 'none';
+        if (dctaRow) dctaRow.style.display = phase === 'dcta' ? '' : 'none';
+        if (cbfRow) cbfRow.style.display = 'none';
+        if (cbvRow) cbvRow.style.display = 'none';
+        if (tmaxRow) tmaxRow.style.display = 'none';
+        if (sideRow) sideRow.style.display = '';
+    } else if (mode === 'ncct_3phase_cta') {
+        if (mctaRow) mctaRow.style.display = '';
+        if (vctaRow) vctaRow.style.display = '';
+        if (dctaRow) dctaRow.style.display = '';
+        if (cbfRow) cbfRow.style.display = 'none';
+        if (cbvRow) cbvRow.style.display = 'none';
+        if (tmaxRow) tmaxRow.style.display = 'none';
+        if (sideRow) sideRow.style.display = '';
+    } else if (mode === 'ncct_3phase_cta_ctp') {
+        if (mctaRow) mctaRow.style.display = '';
+        if (vctaRow) vctaRow.style.display = '';
+        if (dctaRow) dctaRow.style.display = '';
+        if (cbfRow) cbfRow.style.display = '';
+        if (cbvRow) cbvRow.style.display = '';
+        if (tmaxRow) tmaxRow.style.display = '';
+        if (sideRow) sideRow.style.display = '';
     }
 
-    function getRowByInputId(id) {
-        const el = document.getElementById(id);
-        return el ? el.parentElement : null;
-    }
+    checkFilesReady();
+    renderPathPreview();
+}
 
-    function updateUIByMode() {
-        const mode = uploadModeSelect ? uploadModeSelect.value : DEFAULT_UPLOAD_MODE;
-        if (ctaPhaseRow) {
-            ctaPhaseRow.style.display = mode === 'ncct_single_cta' ? '' : 'none';
-        }
-
-        const ncctRow = getRowByInputId('ncctFile');
-        const mctaRow = getRowByInputId('mctaFile');
-        const vctaRow = getRowByInputId('vctaFile');
-        const dctaRow = getRowByInputId('dctaFile');
-        const cbfRow = getRowByInputId('cbfFile');
-        const cbvRow = getRowByInputId('cbvFile');
-        const tmaxRow = getRowByInputId('tmaxFile');
-        const sideRow = getRowByInputId('sideSelect');
-
-        if (ncctRow) {
-            ncctRow.style.display = '';
-        }
-
-        if (mode === 'ncct') {
-            if (mctaRow) mctaRow.style.display = 'none';
-            if (vctaRow) vctaRow.style.display = 'none';
-            if (dctaRow) dctaRow.style.display = 'none';
-            if (cbfRow) cbfRow.style.display = 'none';
-            if (cbvRow) cbvRow.style.display = 'none';
-            if (tmaxRow) tmaxRow.style.display = 'none';
-            if (sideRow) sideRow.style.display = '';
-        } else if (mode === 'ncct_single_cta') {
-            const phase = ctaPhaseSelect ? ctaPhaseSelect.value : 'mcta';
-            if (mctaRow) mctaRow.style.display = phase === 'mcta' ? '' : 'none';
-            if (vctaRow) vctaRow.style.display = phase === 'vcta' ? '' : 'none';
-            if (dctaRow) dctaRow.style.display = phase === 'dcta' ? '' : 'none';
-            if (cbfRow) cbfRow.style.display = 'none';
-            if (cbvRow) cbvRow.style.display = 'none';
-            if (tmaxRow) tmaxRow.style.display = 'none';
-            if (sideRow) sideRow.style.display = '';
-        } else if (mode === 'ncct_3phase_cta') {
-            if (mctaRow) mctaRow.style.display = '';
-            if (vctaRow) vctaRow.style.display = '';
-            if (dctaRow) dctaRow.style.display = '';
-            if (cbfRow) cbfRow.style.display = 'none';
-            if (cbvRow) cbvRow.style.display = 'none';
-            if (tmaxRow) tmaxRow.style.display = 'none';
-            if (sideRow) sideRow.style.display = '';
-        } else if (mode === 'ncct_3phase_cta_ctp') {
-            if (mctaRow) mctaRow.style.display = '';
-            if (vctaRow) vctaRow.style.display = '';
-            if (dctaRow) dctaRow.style.display = '';
-            if (cbfRow) cbfRow.style.display = '';
-            if (cbvRow) cbvRow.style.display = '';
-            if (tmaxRow) tmaxRow.style.display = '';
-            if (sideRow) sideRow.style.display = '';
-        }
-
-        checkFilesReady();
-    }
-
-    function bindFileInput(inputEl, buttonId, label) {
-        if (!inputEl) {
+function bindFileInput(inputEl, buttonId, label) {
+    if (!inputEl) return;
+    inputEl.addEventListener('change', (event) => {
+        if (!event.target.files.length) {
+            checkFilesReady();
+            renderPathPreview();
             return;
         }
-        inputEl.addEventListener('change', function (e) {
-            if (!e.target.files.length) {
-                checkFilesReady();
-                return;
-            }
-            if (!validateNiftiOrReset(e.target, label)) {
-                checkFilesReady();
-                return;
-            }
-            const btn = document.getElementById(buttonId);
-            if (btn) {
-                btn.textContent = e.target.files[0].name;
-                btn.classList.add('selected');
-            }
+        const file = event.target.files[0];
+        if (!isValidNiftiFile(file)) {
+            inputEl.value = '';
+            showMsg(`${label} 文件必须是 .nii 或 .nii.gz`, 'error');
             checkFilesReady();
-        });
-    }
-
-    if (uploadModeSelect) uploadModeSelect.addEventListener('change', updateUIByMode);
-    if (ctaPhaseSelect) ctaPhaseSelect.addEventListener('change', updateUIByMode);
-    if (questionInput) questionInput.addEventListener('input', checkFilesReady);
-    if (agentToggle) agentToggle.addEventListener('change', checkFilesReady);
-
-    bindFileInput(mctaInput, 'mctaBtn', '动脉期CTA');
-    bindFileInput(vctaInput, 'vctaBtn', '静脉期CTA');
-    bindFileInput(dctaInput, 'dctaBtn', '延迟期CTA');
-    bindFileInput(ncctInput, 'ncctBtn', 'NCCT');
-    bindFileInput(cbfInput, 'cbfBtn', 'CBF');
-    bindFileInput(cbvInput, 'cbvBtn', 'CBV');
-    bindFileInput(tmaxInput, 'tmaxBtn', 'Tmax');
-
-    updateUIByMode();
-});
+            renderPathPreview();
+            return;
+        }
+        const btn = document.getElementById(buttonId);
+        if (btn) {
+            btn.textContent = file.name;
+            btn.classList.add('selected');
+        }
+        checkFilesReady();
+        renderPathPreview();
+    });
+}
 
 function checkFilesReady() {
-    const mctaFile = document.getElementById('mctaFile').files[0];
-    const vctaFile = document.getElementById('vctaFile').files[0];
-    const dctaFile = document.getElementById('dctaFile').files[0];
-    const ncctFile = document.getElementById('ncctFile').files[0];
-    const cbfFile = document.getElementById('cbfFile').files[0];
-    const cbvFile = document.getElementById('cbvFile').files[0];
-    const tmaxFile = document.getElementById('tmaxFile').files[0];
-    const uploadMode = document.getElementById('uploadModeSelect')
-        ? document.getElementById('uploadModeSelect').value
-        : DEFAULT_UPLOAD_MODE;
+    const mctaFile = document.getElementById('mctaFile')?.files?.[0];
+    const vctaFile = document.getElementById('vctaFile')?.files?.[0];
+    const dctaFile = document.getElementById('dctaFile')?.files?.[0];
+    const ncctFile = document.getElementById('ncctFile')?.files?.[0];
+    const cbfFile = document.getElementById('cbfFile')?.files?.[0];
+    const cbvFile = document.getElementById('cbvFile')?.files?.[0];
+    const tmaxFile = document.getElementById('tmaxFile')?.files?.[0];
+    const uploadMode = getUploadMode();
     const questionText = (document.getElementById('agentQuestion')?.value || '').trim();
-    const startAgentRun = !document.getElementById('agentRunToggle') || !!document.getElementById('agentRunToggle').checked;
+    const startAgentRun = isAgentEnabled();
+    const uploadBtn = document.getElementById('uploadBtn');
 
     let ready = !!ncctFile;
-
     if (uploadMode === 'ncct') {
         ready = !!ncctFile;
     } else if (uploadMode === 'ncct_single_cta') {
-        const phase = document.getElementById('ctaPhaseSelect')
-            ? document.getElementById('ctaPhaseSelect').value
-            : 'mcta';
+        const phase = document.getElementById('ctaPhaseSelect')?.value || 'mcta';
         if (phase === 'mcta') ready = !!(ncctFile && mctaFile);
         if (phase === 'vcta') ready = !!(ncctFile && vctaFile);
         if (phase === 'dcta') ready = !!(ncctFile && dctaFile);
@@ -194,23 +171,20 @@ function checkFilesReady() {
     if (ready && startAgentRun && !questionText) {
         ready = false;
     }
-
-    document.getElementById('uploadBtn').disabled = !ready;
+    if (uploadBtn) uploadBtn.disabled = !ready;
 }
 
 function processFiles() {
     const patientId = getCurrentPatientId();
-    const mctaFile = document.getElementById('mctaFile').files[0];
-    const vctaFile = document.getElementById('vctaFile').files[0];
-    const dctaFile = document.getElementById('dctaFile').files[0];
-    const ncctFile = document.getElementById('ncctFile').files[0];
-    const cbfFile = document.getElementById('cbfFile').files[0];
-    const cbvFile = document.getElementById('cbvFile').files[0];
-    const tmaxFile = document.getElementById('tmaxFile').files[0];
+    const mctaFile = document.getElementById('mctaFile')?.files?.[0];
+    const vctaFile = document.getElementById('vctaFile')?.files?.[0];
+    const dctaFile = document.getElementById('dctaFile')?.files?.[0];
+    const ncctFile = document.getElementById('ncctFile')?.files?.[0];
+    const cbfFile = document.getElementById('cbfFile')?.files?.[0];
+    const cbvFile = document.getElementById('cbvFile')?.files?.[0];
+    const tmaxFile = document.getElementById('tmaxFile')?.files?.[0];
 
-    if (!ncctFile || !patientId) {
-        return;
-    }
+    if (!ncctFile || !patientId) return;
 
     const formData = new FormData();
     if (mctaFile) formData.append('mcta_file', mctaFile);
@@ -222,47 +196,33 @@ function processFiles() {
     if (tmaxFile) formData.append('tmax_file', tmaxFile);
     formData.append('patient_id', patientId);
 
-    const modelType = document.getElementById('modelSelect').value;
+    const modelType = document.getElementById('modelSelect')?.value || 'mrdpm';
     formData.append('model_type', modelType);
 
-    const uploadMode = document.getElementById('uploadModeSelect')
-        ? document.getElementById('uploadModeSelect').value
-        : DEFAULT_UPLOAD_MODE;
+    const uploadMode = getUploadMode();
     formData.append('upload_mode', uploadMode);
-
     if (uploadMode === 'ncct_single_cta') {
-        const ctaPhase = document.getElementById('ctaPhaseSelect')
-            ? document.getElementById('ctaPhaseSelect').value
-            : 'mcta';
+        const ctaPhase = document.getElementById('ctaPhaseSelect')?.value || 'mcta';
         formData.append('cta_phase', ctaPhase);
     }
 
-    const hemisphere = document.getElementById('sideSelect')
-        ? document.getElementById('sideSelect').value
-        : 'both';
+    const hemisphere = document.getElementById('sideSelect')?.value || 'both';
     formData.append('hemisphere', hemisphere);
 
     const question = (document.getElementById('agentQuestion')?.value || '').trim();
-
     if (cbfFile && cbvFile && tmaxFile) {
         formData.append('skip_ai', 'true');
     }
 
-    const agentToggle = document.getElementById('agentRunToggle');
-    const startAgentRun = !agentToggle || !!agentToggle.checked;
+    const startAgentRun = isAgentEnabled();
     if (startAgentRun && !question) {
         showMsg('启用 Agent 时请填写任务问题。', 'error');
         return;
     }
-    if (question) {
-        formData.append('question', question);
-    }
-    if (startAgentRun) {
-        formData.append('start_agent_run', 'true');
-    }
+    if (question) formData.append('question', question);
+    if (startAgentRun) formData.append('start_agent_run', 'true');
 
     showLoading(true, '正在处理上传流程...');
-
     fetch('/api/upload/start', { method: 'POST', body: formData })
         .then((response) => response.json())
         .then((data) => {
@@ -272,15 +232,14 @@ function processFiles() {
             }
 
             const runInfoEl = document.getElementById('agentRunInfo');
-            if (data.agent_run_id) {
-                if (runInfoEl) {
-                    runInfoEl.style.display = 'block';
-                    runInfoEl.textContent = `已创建 Agent run: ${data.agent_run_id}`;
-                }
-                localStorage.setItem(`latest_agent_run_${data.file_id}`, data.agent_run_id);
-            } else if (runInfoEl) {
+            if (runInfoEl) {
                 runInfoEl.style.display = 'block';
-                runInfoEl.textContent = '本次上传未启用 Agent 主链。';
+                runInfoEl.textContent = data.agent_run_id
+                    ? `上传成功，正在进入 Runtime Feed（run_id=${data.agent_run_id}）...`
+                    : '上传成功，正在进入 Runtime Feed...';
+            }
+            if (data.agent_run_id) {
+                localStorage.setItem(`latest_agent_run_${data.file_id}`, data.agent_run_id);
             }
 
             let processingUrl =
@@ -291,7 +250,6 @@ function processFiles() {
             if (data.agent_run_id) {
                 processingUrl += '&agent_run_id=' + encodeURIComponent(data.agent_run_id);
             }
-
             window.location.href = processingUrl;
         })
         .catch((error) => {
@@ -300,3 +258,52 @@ function processFiles() {
         .finally(() => showLoading(false));
 }
 
+document.addEventListener('DOMContentLoaded', () => {
+    const uploadInfo = document.querySelector('.upload-info');
+    if (uploadInfo && !uploadInfo.dataset.runtimeHint) {
+        uploadInfo.dataset.runtimeHint = '1';
+        uploadInfo.innerHTML += '<br>上传成功后将自动进入 StrokeClaw 运行等待页，查看多节点协作过程。';
+    }
+
+    const uploadModeSelect = document.getElementById('uploadModeSelect');
+    const ctaPhaseSelect = document.getElementById('ctaPhaseSelect');
+    const questionInput = document.getElementById('agentQuestion');
+    const agentToggle = document.getElementById('agentRunToggle');
+
+    const urlParams = new URLSearchParams(window.location.search);
+    const patientIdParam = urlParams.get('patient_id');
+    if (patientIdParam) {
+        setCurrentPatientId(patientIdParam);
+    }
+
+    const patientId = getCurrentPatientId();
+    if (!patientId) {
+        showMsg('缺少 patient_id，正在返回患者列表页。', 'error');
+        setTimeout(() => { window.location.href = '/patient'; }, 1000);
+        return;
+    }
+
+    setPatientInfoVisible(true);
+    updatePatientHeader(patientId);
+
+    bindFileInput(document.getElementById('mctaFile'), 'mctaBtn', '动脉期CTA');
+    bindFileInput(document.getElementById('vctaFile'), 'vctaBtn', '静脉期CTA');
+    bindFileInput(document.getElementById('dctaFile'), 'dctaBtn', '延迟期CTA');
+    bindFileInput(document.getElementById('ncctFile'), 'ncctBtn', 'NCCT');
+    bindFileInput(document.getElementById('cbfFile'), 'cbfBtn', 'CBF');
+    bindFileInput(document.getElementById('cbvFile'), 'cbvBtn', 'CBV');
+    bindFileInput(document.getElementById('tmaxFile'), 'tmaxBtn', 'Tmax');
+
+    if (uploadModeSelect) uploadModeSelect.addEventListener('change', updateUIByMode);
+    if (ctaPhaseSelect) ctaPhaseSelect.addEventListener('change', updateUIByMode);
+    if (questionInput) questionInput.addEventListener('input', checkFilesReady);
+    if (agentToggle) {
+        agentToggle.addEventListener('change', () => {
+            checkFilesReady();
+            renderPathPreview();
+        });
+    }
+
+    updateUIByMode();
+    renderPathPreview();
+});
