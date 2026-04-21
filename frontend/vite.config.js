@@ -13,6 +13,10 @@ export default defineConfig({
         target: backendTarget,
         changeOrigin: true,
       },
+      "/kb-pdfs": {
+        target: backendTarget,
+        changeOrigin: true,
+      },
     },
   },
 });

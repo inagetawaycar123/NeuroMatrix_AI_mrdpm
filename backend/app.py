@@ -9,6 +9,7 @@ import glob
 import threading
 import shutil
 import os
+from urllib.parse import quote
 import requests  # 添加 requests 导入，用于调用百川 M3 API
 from flask import (
     Flask,
@@ -7042,21 +7043,98 @@ def api_chat_clinical():
 
 @app.route("/api/kb/docs", methods=["GET"])
 def api_kb_docs():
-    """杩斿洖鐭ヨ瘑搴揚DF鍒楄〃"""
+    """返回知识库 PDF 列表与元数据。"""
+    grade_score_default = {"S": 0.95, "A": 0.85, "B": 0.72, "C": 0.58, "D": 0.42}
+    allowed_grades = set(grade_score_default.keys())
+
+    manifest_by_file = {}
+    manifest_path = os.path.join(KB_PDF_DIR, "kb_manifest.json")
+    if os.path.isfile(manifest_path):
+        try:
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            items = payload.get("docs") if isinstance(payload, dict) else payload
+            if isinstance(items, list):
+                for row in items:
+                    if not isinstance(row, dict):
+                        continue
+                    file_name = str(row.get("fileName") or row.get("filename") or "").strip()
+                    if not file_name:
+                        continue
+                    key = file_name.lower()
+                    grade = str(row.get("confidence_grade") or row.get("confidenceGrade") or "C").upper()
+                    if grade not in allowed_grades:
+                        grade = "C"
+                    score_raw = row.get("confidence_score")
+                    try:
+                        score = float(score_raw)
+                    except (TypeError, ValueError):
+                        score = grade_score_default.get(grade, 0.58)
+                    manifest_by_file[key] = {
+                        "title": str(row.get("title") or "").strip(),
+                        "source": str(row.get("source") or "本地知识库").strip() or "本地知识库",
+                        "version": str(row.get("version") or "v1.0").strip() or "v1.0",
+                        "summary": str(row.get("summary") or "用于卒中评估的知识文档。").strip(),
+                        "doc_type": str(row.get("doc_type") or row.get("docType") or "guideline").strip() or "guideline",
+                        "confidence_grade": grade,
+                        "confidence_score": max(0.0, min(1.0, score)),
+                    }
+        except Exception as e:
+            print(f"读取 kb_manifest.json 失败: {e}")
+
     docs = []
     if os.path.isdir(KB_PDF_DIR):
         for filename in sorted(os.listdir(KB_PDF_DIR)):
             if not filename.lower().endswith(".pdf"):
                 continue
+            key = filename.lower()
             title = os.path.splitext(filename)[0]
+            meta = manifest_by_file.get(key) or {}
+            full_path = os.path.join(KB_PDF_DIR, filename)
+            try:
+                st = os.stat(full_path)
+                size_bytes = int(st.st_size)
+                updated_at = datetime.fromtimestamp(st.st_mtime).isoformat()
+            except Exception:
+                size_bytes = 0
+                updated_at = ""
+
+            grade = str(meta.get("confidence_grade") or "C").upper()
+            if grade not in allowed_grades:
+                grade = "C"
+            score = float(meta.get("confidence_score") or grade_score_default.get(grade, 0.58))
+
             docs.append(
                 {
-                    "title": title,
+                    "title": meta.get("title") or title,
                     "fileName": filename,
-                    "url": f"{KB_PDF_URL_PREFIX}/{filename}",
+                    "url": f"{KB_PDF_URL_PREFIX}/{quote(filename)}",
+                    "source": meta.get("source") or "本地知识库",
+                    "version": meta.get("version") or "v1.0",
+                    "summary": meta.get("summary") or "用于卒中评估的知识文档。",
+                    "doc_type": meta.get("doc_type") or "guideline",
+                    "confidence_grade": grade,
+                    "confidence_score": max(0.0, min(1.0, score)),
+                    "size_bytes": size_bytes,
+                    "updated_at": updated_at,
                 }
             )
-    return jsonify({"success": True, "docs": docs})
+
+    docs = sorted(
+        docs,
+        key=lambda x: (
+            -float(x.get("confidence_score") or 0),
+            str(x.get("title") or "").lower(),
+        ),
+    )
+
+    return jsonify(
+        {
+            "success": True,
+            "docs": docs,
+            "grades": ["S", "A", "B", "C", "D"],
+        }
+    )
 
 
 @app.route("/kb-pdfs/<path:filename>")
