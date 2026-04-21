@@ -61,19 +61,11 @@ h4 {
   color: var(--muted);
 }
 
-.launcher-grid {
-  margin-top: 16px;
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.launcher-grid label {
+.launcher-meta {
+  margin-top: 14px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--muted);
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .launcher-actions {
@@ -91,6 +83,43 @@ h4 {
 
 .primary-btn:hover {
   border-color: #1768d9;
+}
+
+.recent-cases {
+  margin-top: 16px;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+.recent-case-card {
+  text-align: left;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.94);
+  padding: 12px;
+  box-shadow: 0 10px 24px rgba(42, 64, 107, 0.08);
+}
+
+.recent-case-card:hover {
+  border-color: #9bb4da;
+  transform: translateY(-1px);
+}
+
+.recent-case-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.recent-case-meta {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 .glass {
@@ -449,10 +478,6 @@ pre {
 }
 
 @media (max-width: 1180px) {
-  .launcher-grid {
-    grid-template-columns: 1fr;
-  }
-
   .cockpit-grid {
     grid-template-columns: 1fr;
     grid-template-rows: auto;
