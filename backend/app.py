@@ -893,6 +893,23 @@ app.jinja_env.auto_reload = True
 app.json_encoder = NumpyJSONEncoder
 
 
+@app.after_request
+def apply_api_cors_headers(response):
+    """Allow standalone frontend apps to call backend /api endpoints."""
+    try:
+        if str(request.path or "").startswith("/api/"):
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            )
+            response.headers["Access-Control-Allow-Headers"] = (
+                "Content-Type, Authorization, X-Requested-With"
+            )
+    except Exception:
+        return response
+    return response
+
+
 # 创建必要的目录
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 os.makedirs(app.config["PROCESSED_FOLDER"], exist_ok=True)
@@ -9544,6 +9561,362 @@ def api_get_validation_context():
                 "last_updated": last_updated,
                 "error": meta_error,
             },
+        }
+    )
+
+
+def _cockpit_sort_key(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return dt.isoformat()
+    except Exception:
+        return raw
+
+
+def _get_latest_run_id_by_context(file_id="", patient_id=None):
+    file_token = str(file_id or "").strip()
+    patient_token = str(patient_id or "").strip()
+    candidates = []
+
+    with AGENT_RUNTIME_LOCK:
+        for rid, run in AGENT_RUNS.items():
+            item = run or {}
+            if file_token and str(item.get("file_id") or "").strip() != file_token:
+                continue
+            if patient_token and str(item.get("patient_id") or "").strip() != patient_token:
+                continue
+            candidates.append(
+                {
+                    "run_id": str(rid),
+                    "updated_at": _cockpit_sort_key(
+                        item.get("updated_at") or item.get("created_at")
+                    ),
+                }
+            )
+
+    with W0_MOCK_LOCK:
+        for rid, run in W0_MOCK_RUNS.items():
+            item = run or {}
+            if file_token and str(item.get("file_id") or "").strip() != file_token:
+                continue
+            if patient_token and str(item.get("patient_id") or "").strip() != patient_token:
+                continue
+            candidates.append(
+                {
+                    "run_id": str(rid),
+                    "updated_at": _cockpit_sort_key(
+                        item.get("updated_at") or item.get("created_at")
+                    ),
+                }
+            )
+
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+    return str((candidates[0] or {}).get("run_id") or "")
+
+
+def _resolve_cockpit_run_and_events(run_id="", file_id="", patient_id=None):
+    rid = str(run_id or "").strip()
+    if not rid:
+        rid = _get_latest_run_id_by_context(file_id=file_id, patient_id=patient_id)
+
+    if not rid:
+        return None, [], "", "none"
+
+    run = _get_agent_run(rid)
+    if run:
+        run = _ensure_w0_run_fields(run)
+        events = _get_agent_events(rid)
+        return run, events, rid, "real"
+
+    mock_run, mock_events = _w0_mock_refresh_run(rid)
+    if mock_run:
+        mock_run = _ensure_w0_run_fields(mock_run)
+        return mock_run, (mock_events or []), rid, "mock"
+
+    return None, [], rid, "none"
+
+
+def _build_cockpit_dag(run, events):
+    lane_titles = {
+        "triage": "病例输入",
+        "tooling": "影像分析",
+        "icv": "内在校验",
+        "ekv": "证据校验",
+        "consensus": "一致性裁决",
+        "summary": "结论与报告",
+        "done": "归档",
+    }
+
+    planner_output = (run or {}).get("planner_output") or {}
+    tool_sequence = planner_output.get("tool_sequence")
+    if not isinstance(tool_sequence, list) or not tool_sequence:
+        tool_sequence = [
+            str((step or {}).get("key") or "").strip()
+            for step in ((run or {}).get("steps") or [])
+            if str((step or {}).get("key") or "").strip()
+        ]
+
+    if not tool_sequence:
+        tool_sequence = AGENT_TOOL_SEQUENCE_MAP.get("ncct_mcta", [])
+
+    step_map = {}
+    for step in (run or {}).get("steps") or []:
+        key = str((step or {}).get("key") or "").strip()
+        if key:
+            step_map[key] = dict(step or {})
+
+    latest_event_by_tool = {}
+    for evt in (events or []):
+        key = str((evt or {}).get("tool_name") or "").strip()
+        if not key:
+            continue
+        seq = int((evt or {}).get("event_seq") or 0)
+        prev = latest_event_by_tool.get(key)
+        if not prev or int(prev.get("event_seq") or 0) <= seq:
+            latest_event_by_tool[key] = dict(evt or {})
+
+    nodes = []
+    edges = []
+    normalized_sequence = [str(x).strip() for x in tool_sequence if str(x).strip()]
+
+    for idx, tool_name in enumerate(normalized_sequence, start=1):
+        step = step_map.get(tool_name, {})
+        evt = latest_event_by_tool.get(tool_name, {})
+        stage = str(
+            step.get("stage")
+            or evt.get("stage")
+            or _stage_for_tool(tool_name)
+            or "tooling"
+        )
+        status = str(step.get("status") or evt.get("status") or "pending")
+        nodes.append(
+            {
+                "id": tool_name,
+                "step_key": tool_name,
+                "title": _agent_tool_title(tool_name),
+                "description": _agent_tool_description(tool_name),
+                "order": idx,
+                "status": status,
+                "stage": stage,
+                "lane": stage,
+                "lane_title": lane_titles.get(stage, stage),
+                "latency_ms": evt.get("latency_ms"),
+                "attempt": evt.get("attempt") or step.get("attempts"),
+                "retryable": bool(
+                    evt.get("retryable")
+                    if evt.get("retryable") is not None
+                    else step.get("retryable")
+                ),
+                "error_code": evt.get("error_code"),
+                "message": step.get("message") or evt.get("result_summary") or "",
+                "input_payload": evt.get("input_ref") or {},
+                "output_payload": evt.get("output_ref") or {},
+                "event_id": evt.get("event_id"),
+                "event_seq": evt.get("event_seq"),
+            }
+        )
+        if idx > 1:
+            edges.append(
+                {
+                    "id": f"{normalized_sequence[idx-2]}->{tool_name}",
+                    "source": normalized_sequence[idx - 2],
+                    "target": tool_name,
+                }
+            )
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "imaging_path": str(planner_output.get("imaging_path") or ""),
+    }
+
+
+def _build_cockpit_validation_snapshot(run, file_id="", patient_id=None):
+    if isinstance(run, dict) and str(run.get("source") or "") != "w0_mock":
+        icv_payload, ekv_payload, consensus_payload, trace_payload, meta = (
+            _extract_validation_from_run(run)
+        )
+    else:
+        (
+            icv_payload,
+            ekv_payload,
+            consensus_payload,
+            trace_payload,
+            meta,
+        ) = _extract_validation_from_case_payload(file_id=file_id, patient_id=patient_id)
+
+    return {
+        "icv": _normalize_icv_payload(icv_payload, fallback_reason="icv unavailable"),
+        "ekv": _normalize_ekv_payload(ekv_payload, fallback_reason="ekv unavailable"),
+        "consensus": _normalize_consensus_payload(
+            consensus_payload, fallback_reason="consensus unavailable"
+        ),
+        "traceability": _normalize_traceability_payload(
+            trace_payload, fallback_reason="traceability unavailable"
+        ),
+        "meta": meta or {},
+    }
+
+
+@app.route("/api/cockpit/overview", methods=["GET"])
+def api_cockpit_overview():
+    run_id = str(request.args.get("run_id") or "").strip()
+    file_id = str(request.args.get("file_id") or "").strip()
+    patient_id_raw = request.args.get("patient_id")
+    patient_id = None
+    if patient_id_raw not in (None, ""):
+        try:
+            patient_id = int(patient_id_raw)
+        except Exception:
+            return jsonify({"success": False, "error": "invalid patient_id"}), 400
+
+    run, events, resolved_run_id, source_tag = _resolve_cockpit_run_and_events(
+        run_id=run_id,
+        file_id=file_id,
+        patient_id=patient_id,
+    )
+
+    if not run:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "Run not found",
+                    "run_id": resolved_run_id or run_id or None,
+                }
+            ),
+            404,
+        )
+
+    run_file_id = str(run.get("file_id") or file_id or "").strip()
+    run_patient_id = run.get("patient_id") if run.get("patient_id") not in (None, "") else patient_id
+    validation = _build_cockpit_validation_snapshot(
+        run=run,
+        file_id=run_file_id,
+        patient_id=run_patient_id,
+    )
+    dag = _build_cockpit_dag(run, events)
+    recent_events = sorted(
+        [dict(x or {}) for x in (events or [])],
+        key=lambda x: int(x.get("event_seq") or 0),
+    )[-300:]
+
+    patient_basic = {}
+    try:
+        if run_patient_id not in (None, ""):
+            raw_patient = get_patient_by_id(int(run_patient_id))
+            if isinstance(raw_patient, dict):
+                patient_basic = {
+                    "patient_id": raw_patient.get("id"),
+                    "sex": raw_patient.get("patient_sex"),
+                    "age": raw_patient.get("patient_age"),
+                    "admission_nihss": raw_patient.get("admission_nihss"),
+                    "chief_complaint": raw_patient.get("chief_complaint"),
+                }
+    except Exception:
+        patient_basic = {}
+
+    risks = []
+    for evt in reversed(recent_events):
+        level = str(evt.get("risk_level") or "").strip().lower()
+        if level in {"high", "medium"}:
+            risks.append(
+                {
+                    "level": level,
+                    "message": str(evt.get("result_summary") or evt.get("message") or "").strip(),
+                    "tool": str(evt.get("tool_name") or "").strip(),
+                    "event_seq": evt.get("event_seq"),
+                }
+            )
+        if len(risks) >= 8:
+            break
+
+    result_payload = run.get("result") if isinstance(run.get("result"), dict) else {}
+    consensus_text = (
+        (validation.get("consensus") or {}).get("summary")
+        or (validation.get("consensus") or {}).get("decision")
+        or "-"
+    )
+
+    return jsonify(
+        {
+            "success": True,
+            "source_tag": source_tag,
+            "run": run,
+            "events": recent_events,
+            "dag": dag,
+            "validation": validation,
+            "panels": {
+                "left": {
+                    "patient": patient_basic,
+                    "available_modalities": (run.get("planner_input") or {}).get("available_modalities") or [],
+                    "hemisphere": (run.get("planner_input") or {}).get("hemisphere"),
+                },
+                "right": {
+                    "consensus": consensus_text,
+                    "risks": risks,
+                    "result_status": run.get("status"),
+                },
+                "bottom": {
+                    "timeline": recent_events,
+                    "latest_result": result_payload,
+                },
+            },
+        }
+    )
+
+
+@app.route("/api/cockpit/runs/<run_id>/nodes/<node_key>", methods=["GET"])
+def api_cockpit_node_detail(run_id, node_key):
+    run, events, resolved_run_id, _source_tag = _resolve_cockpit_run_and_events(run_id=run_id)
+    if not run:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "Run not found",
+                    "run_id": resolved_run_id or run_id,
+                }
+            ),
+            404,
+        )
+
+    key = str(node_key or "").strip()
+    if not key:
+        return jsonify({"success": False, "error": "Invalid node_key"}), 400
+
+    dag = _build_cockpit_dag(run, events)
+    node = None
+    for item in dag.get("nodes") or []:
+        if str((item or {}).get("step_key") or "") == key:
+            node = item
+            break
+
+    if not node:
+        return jsonify({"success": False, "error": "Node not found", "node_key": key}), 404
+
+    related_events = [
+        dict(evt or {})
+        for evt in (events or [])
+        if str((evt or {}).get("tool_name") or "") == key
+    ]
+    related_events = sorted(related_events, key=lambda x: int(x.get("event_seq") or 0))
+
+    return jsonify(
+        {
+            "success": True,
+            "run_id": str(run.get("run_id") or run_id),
+            "node": node,
+            "history": related_events,
+            "input_payload": node.get("input_payload") or {},
+            "output_payload": node.get("output_payload") or {},
         }
     )
 
