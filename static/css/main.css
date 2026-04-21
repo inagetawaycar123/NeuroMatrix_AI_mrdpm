@@ -129,6 +129,43 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
     line-height: 1.5;
     padding: 8px 10px;
 }
+.upload-plan-preview {
+    margin-top: 10px;
+    border: 1px solid rgba(59, 130, 246, 0.38);
+    background: linear-gradient(120deg, rgba(15, 23, 42, 0.88), rgba(2, 18, 36, 0.92));
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+.upload-plan-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-bottom: 6px;
+}
+.upload-plan-head strong {
+    color: #dbeafe;
+    font-size: 12px;
+    letter-spacing: 0.2px;
+}
+.upload-plan-source {
+    font-size: 11px;
+    color: #93c5fd;
+    border: 1px solid rgba(59, 130, 246, 0.42);
+    border-radius: 999px;
+    padding: 2px 8px;
+}
+.upload-plan-path {
+    color: #bfdbfe;
+    font-size: 12px;
+    line-height: 1.45;
+}
+.upload-plan-note {
+    margin-top: 5px;
+    color: #94a3b8;
+    font-size: 11px;
+    line-height: 1.45;
+}
 
 .processing-page-body {
     overflow-x: hidden;
@@ -1170,17 +1207,6 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 .runtime-chip.pending-reveal {
     opacity: 0.48;
     border-style: dashed;
-}
-
-.runtime-chip.runtime-chip-three_class {
-    border-color: #3f6fb0;
-    color: #b7d2f5;
-}
-
-.runtime-chip.runtime-chip-three_class.completed {
-    border-color: #1dbf8a;
-    color: #96f5cf;
-    box-shadow: 0 0 0 1px rgba(29, 191, 138, 0.28);
 }
 
 .runtime-agent-rail.collapsed .runtime-rail-body {

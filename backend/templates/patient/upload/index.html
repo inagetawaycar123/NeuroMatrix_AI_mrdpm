@@ -1,4 +1,4 @@
-﻿{% extends "base.html" %}
+{% extends "base.html" %}
 
 {% block tools %}
 <button class="tool-btn" onclick="resetAll()">重置</button>
@@ -93,6 +93,16 @@
                         <span>启用 Agent 主链（默认开启）</span>
                     </label>
                 </div>
+
+                <div class="upload-plan-preview" id="uploadPlanPreview">
+                    <div class="upload-plan-head">
+                        <strong>Path Preview</strong>
+                        <span class="upload-plan-source" id="uploadSourceHint">source_tag: real/hybrid(auto-fallback)</span>
+                    </div>
+                    <div class="upload-plan-path" id="uploadPathHint">Case Intake -> Modality Detect -> Planner -> Tool Chain -> Report</div>
+                    <div class="upload-plan-note" id="uploadPlanNote">根据当前输入模态，系统将自动选择是否进入类 CTP 生成分支。</div>
+                </div>
+
                 <button class="upload-btn" id="uploadBtn" onclick="processFiles()" disabled>开始处理</button>
                 <div id="agentRunInfo" class="upload-agent-note" style="display:none;"></div>
                 <div class="upload-info">

@@ -1674,6 +1674,24 @@ W0_MOCK_LOCK = threading.Lock()
 W0_MOCK_TTL_SECONDS = 3600
 W0_MOCK_SCENARIOS = {"happy_path", "issue_path"}
 
+DEMO_SCENARIOS = {
+    "A_ncct_mcta_no_ctp": {
+        "modalities": ["ncct", "mcta", "vcta", "dcta"],
+        "goal_question": "Assess salvageable tissue and suggest next steps.",
+        "mock_scenario": "happy_path",
+    },
+    "B_ncct_mcta_ctp": {
+        "modalities": ["ncct", "mcta", "vcta", "dcta", "cbf", "cbv", "tmax"],
+        "goal_question": "Use real CTP findings for triage and recommendations.",
+        "mock_scenario": "happy_path",
+    },
+    "C_conflict_review": {
+        "modalities": ["ncct", "mcta", "vcta", "dcta"],
+        "goal_question": "Trigger conflict flow and human review checkpoint.",
+        "mock_scenario": "issue_path",
+    },
+}
+
 W0_TOOL_TITLE_MAP = {
     "detect_modalities": "Case_Intake.parse()",
     "load_patient_context": "Image_QC.validate()",
@@ -9018,6 +9036,117 @@ def api_preview_agent_plan():
     }
 
     return jsonify({"success": True, "preview": preview})
+
+
+@app.route("/api/demo/scenarios/<scenario_id>/start", methods=["POST"])
+def api_start_demo_scenario(scenario_id):
+    data = request.get_json(silent=True) or {}
+
+    scenario_raw = str(scenario_id or "").strip()
+    scenario_map = {
+        "a": "A_ncct_mcta_no_ctp",
+        "b": "B_ncct_mcta_ctp",
+        "c": "C_conflict_review",
+    }
+    canonical_id = scenario_map.get(scenario_raw.lower(), scenario_raw)
+    config = DEMO_SCENARIOS.get(canonical_id)
+    if not config:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": f"Unsupported scenario_id: {scenario_raw}",
+                    "allowed_scenarios": sorted(DEMO_SCENARIOS.keys()),
+                }
+            ),
+            400,
+        )
+
+    mode = str(data.get("mode") or "mock").strip().lower()
+    if mode not in {"mock", "hybrid", "real"}:
+        return jsonify({"success": False, "error": f"Invalid mode: {mode}"}), 400
+
+    patient_id_raw = data.get("patient_id")
+    try:
+        patient_id = int(patient_id_raw)
+    except Exception:
+        return jsonify({"success": False, "error": "Invalid patient_id"}), 400
+
+    file_id = str(data.get("file_id") or "").strip()
+    if not file_id:
+        latest_imaging = _get_latest_imaging_by_patient(patient_id)
+        if latest_imaging:
+            file_id = str(latest_imaging.get("case_id") or "").strip()
+    if not file_id:
+        return jsonify({"success": False, "error": "Missing file_id"}), 400
+
+    available_modalities = data.get("available_modalities")
+    if isinstance(available_modalities, list) and len(available_modalities) > 0:
+        modalities = _normalize_uploaded_modalities(available_modalities)
+    else:
+        modalities = _normalize_uploaded_modalities(config.get("modalities") or [])
+    if not modalities:
+        return jsonify({"success": False, "error": "No valid modalities found"}), 400
+
+    goal_question = str(
+        data.get("goal_question") or data.get("question") or config.get("goal_question") or ""
+    ).strip()
+
+    if mode == "real":
+        run_id = str(uuid.uuid4())
+        run = _create_agent_run(
+            run_id=run_id,
+            patient_id=patient_id,
+            file_id=file_id,
+            available_modalities=modalities,
+            hemisphere=str(data.get("hemisphere") or "both"),
+            source=f"demo_{mode}",
+            question=goal_question or None,
+        )
+        worker = threading.Thread(target=_run_agent_pipeline, args=(run_id,), daemon=True)
+        worker.start()
+        run = _ensure_w0_run_fields(run)
+        return jsonify(
+            {
+                "success": True,
+                "scenario_id": canonical_id,
+                "mode": mode,
+                "run_id": run_id,
+                "source_tag": "real",
+                "run_state": run,
+                "status_url": f"/api/agent/runs/{run_id}",
+                "events_url": f"/api/agent/runs/{run_id}/events",
+                "result_url": f"/api/agent/runs/{run_id}/result",
+                "graph_url": f"/api/agent/runs/{run_id}/graph",
+                "decision_bundle_url": f"/api/agent/runs/{run_id}/decision-bundle",
+            }
+        )
+
+    mock_scenario = str(config.get("mock_scenario") or "happy_path").strip().lower()
+    run = _w0_mock_create_run(
+        patient_id=patient_id,
+        file_id=file_id,
+        available_modalities=modalities,
+        goal_question=goal_question,
+        scenario=mock_scenario,
+    )
+    run_id = str(run.get("run_id") or "").strip()
+    source_tag = "hybrid" if mode == "hybrid" else "mock"
+    return jsonify(
+        {
+            "success": True,
+            "scenario_id": canonical_id,
+            "mode": mode,
+            "run_id": run_id,
+            "source_tag": source_tag,
+            "run_state": run,
+            "status_url": f"/api/strokeclaw/w0/mock-runs/{run_id}",
+            "events_url": f"/api/strokeclaw/w0/mock-runs/{run_id}/events",
+            "result_url": None,
+            "graph_url": None,
+            "decision_bundle_url": None,
+        }
+    )
 
 
 @app.route("/api/strokeclaw/w0/mock-runs", methods=["POST"])
