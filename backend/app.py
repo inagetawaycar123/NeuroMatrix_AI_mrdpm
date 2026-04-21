@@ -9765,6 +9765,148 @@ def _build_cockpit_validation_snapshot(run, file_id="", patient_id=None):
     }
 
 
+def _cockpit_row_timestamp(row):
+    if not isinstance(row, dict):
+        return ""
+    return _cockpit_sort_key(
+        row.get("updated_at") or row.get("created_at") or row.get("inserted_at") or ""
+    )
+
+
+def _cockpit_candidate_from_context(*, patient_id=None, file_id="", run=None, source="runtime", timestamp="", available_modalities=None, hemisphere=None):
+    run = run if isinstance(run, dict) else {}
+    planner_input = run.get("planner_input") if isinstance(run.get("planner_input"), dict) else {}
+    resolved_patient_id = patient_id if patient_id not in (None, "") else run.get("patient_id")
+    resolved_file_id = str(file_id or run.get("file_id") or planner_input.get("file_id") or "").strip()
+    resolved_run_id = str(run.get("run_id") or "").strip()
+    modalities = available_modalities
+    if not isinstance(modalities, list) or not modalities:
+        modalities = planner_input.get("available_modalities")
+    if not isinstance(modalities, list):
+        modalities = []
+    return {
+        "patient_id": resolved_patient_id,
+        "file_id": resolved_file_id,
+        "run_id": resolved_run_id,
+        "source": source,
+        "timestamp": timestamp or _cockpit_sort_key(run.get("updated_at") or run.get("created_at") or ""),
+        "available_modalities": modalities,
+        "hemisphere": hemisphere if hemisphere not in (None, "") else planner_input.get("hemisphere"),
+        "status": str(run.get("status") or ""),
+        "stage": str(run.get("stage") or ""),
+        "label": f"patient {resolved_patient_id or '-'} · {resolved_file_id or '-'}",
+    }
+
+
+def _collect_recent_cockpit_candidates(limit=8):
+    candidates = []
+    seen = set()
+
+    def _add_candidate(candidate):
+        if not isinstance(candidate, dict):
+            return
+        patient_key = str(candidate.get("patient_id") or "").strip()
+        file_key = str(candidate.get("file_id") or "").strip()
+        run_key = str(candidate.get("run_id") or "").strip()
+        dedupe_key = run_key or f"{patient_key}:{file_key}"
+        if dedupe_key in seen:
+            return
+        seen.add(dedupe_key)
+        candidates.append(candidate)
+
+    if SUPABASE_AVAILABLE:
+        try:
+            query = (
+                supabase.table("patient_imaging")
+                .select("patient_id, case_id, available_modalities, hemisphere, updated_at, created_at, report_payload")
+                .order("updated_at", desc=True)
+                .limit(int(limit))
+            )
+            response = _run_with_supabase_retry("cockpit_recent_patient_imaging", lambda: query.execute())
+            for row in response.data or []:
+                if not isinstance(row, dict):
+                    continue
+                report_payload = row.get("report_payload") if isinstance(row.get("report_payload"), dict) else {}
+                resolved_run_id = str(
+                    report_payload.get("run_id")
+                    or report_payload.get("agent_run_id")
+                    or report_payload.get("cockpit_run_id")
+                    or ""
+                ).strip()
+                patient_id = row.get("patient_id")
+                file_id = str(row.get("case_id") or "").strip()
+                if not resolved_run_id:
+                    resolved_run_id = _get_latest_run_id_by_context(file_id=file_id, patient_id=patient_id)
+
+                candidate = _cockpit_candidate_from_context(
+                    patient_id=patient_id,
+                    file_id=file_id,
+                    run=_get_agent_run(resolved_run_id) or (_w0_mock_refresh_run(resolved_run_id)[0] if resolved_run_id else None),
+                    source="patient_imaging",
+                    timestamp=_cockpit_row_timestamp(row),
+                    available_modalities=row.get("available_modalities") or [],
+                    hemisphere=row.get("hemisphere"),
+                )
+                if resolved_run_id:
+                    candidate["run_id"] = resolved_run_id
+                    candidate["status"] = candidate.get("status") or "resolved"
+                _add_candidate(candidate)
+        except Exception as exc:
+            print(f"[Cockpit] recent patient_imaging lookup failed: {exc}")
+
+    with AGENT_RUNTIME_LOCK:
+        live_runs = list(AGENT_RUNS.values())
+    with W0_MOCK_LOCK:
+        live_runs.extend(list(W0_MOCK_RUNS.values()))
+
+    live_runs.sort(key=lambda item: _cockpit_row_timestamp(item), reverse=True)
+    for run in live_runs[: max(0, int(limit) * 2)]:
+        if not isinstance(run, dict):
+            continue
+        candidate = _cockpit_candidate_from_context(
+            patient_id=run.get("patient_id"),
+            file_id=run.get("file_id"),
+            run=run,
+            source=str(run.get("source") or "runtime"),
+            timestamp=_cockpit_row_timestamp(run),
+            available_modalities=((run.get("planner_input") or {}).get("available_modalities") or []),
+            hemisphere=((run.get("planner_input") or {}).get("hemisphere")),
+        )
+        _add_candidate(candidate)
+
+    candidates.sort(key=lambda item: str(item.get("timestamp") or ""), reverse=True)
+    return candidates[: max(1, int(limit))]
+
+
+@app.route("/api/cockpit/bootstrap", methods=["GET"])
+def api_cockpit_bootstrap():
+    limit_raw = request.args.get("limit", "6")
+    try:
+        limit = max(1, min(20, int(limit_raw)))
+    except Exception:
+        limit = 6
+
+    candidates = _collect_recent_cockpit_candidates(limit=limit)
+    latest_candidate = candidates[0] if candidates else None
+    latest_run = None
+    if latest_candidate:
+        latest_run, _events, _resolved_run_id, _source_tag = _resolve_cockpit_run_and_events(
+            run_id=str(latest_candidate.get("run_id") or "").strip(),
+            file_id=str(latest_candidate.get("file_id") or "").strip(),
+            patient_id=latest_candidate.get("patient_id"),
+        )
+
+    return jsonify(
+        {
+            "success": True,
+            "candidates": candidates,
+            "latest_candidate": latest_candidate,
+            "latest_run": latest_run,
+            "has_ready_target": bool(latest_candidate),
+        }
+    )
+
+
 @app.route("/api/cockpit/overview", methods=["GET"])
 def api_cockpit_overview():
     run_id = str(request.args.get("run_id") or "").strip()

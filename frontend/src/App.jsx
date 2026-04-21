@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { fetchNodeDetail, fetchOverview } from "./api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { fetchBootstrap, fetchNodeDetail, fetchOverview } from "./api";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled", "paused_review_required"]);
 
@@ -36,9 +36,12 @@ export default function App() {
   const [overview, setOverview] = useState(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(false);
+  const [bootstrapData, setBootstrapData] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [nodeDetail, setNodeDetail] = useState(null);
   const [nodeLoading, setNodeLoading] = useState(false);
+  const autoEntryAttemptedRef = useRef(false);
 
   const run = overview?.run || {};
   const dag = overview?.dag || { nodes: [], edges: [] };
@@ -53,16 +56,17 @@ export default function App() {
   const isTerminal = TERMINAL.has(runStatus) || runStatus === "completed";
   const hasLoadedRun = Boolean(run.run_id);
 
-  async function refresh(manual = false) {
-    if (!ctx.runId && !ctx.fileId && !ctx.patientId) return;
+  async function refresh(manual = false, overrideCtx = null) {
+    const activeCtx = overrideCtx || ctx;
+    if (!activeCtx.runId && !activeCtx.fileId && !activeCtx.patientId) return;
     if (manual) setLoading(true);
     setError("");
     try {
-      const next = await fetchOverview(ctx);
+      const next = await fetchOverview(activeCtx);
       setOverview(next);
       const resolvedRunId = String(next?.run?.run_id || "").trim();
-      if (resolvedRunId && resolvedRunId !== ctx.runId) {
-        const updated = { ...ctx, runId: resolvedRunId };
+      if (resolvedRunId && resolvedRunId !== activeCtx.runId) {
+        const updated = { ...activeCtx, runId: resolvedRunId };
         setCtx(updated);
         const params = new URLSearchParams();
         if (updated.runId) params.set("run_id", updated.runId);
@@ -77,9 +81,40 @@ export default function App() {
     }
   }
 
+  async function loadBootstrap(autoEnter = true) {
+    setBootstrapping(true);
+    setError("");
+    try {
+      const data = await fetchBootstrap();
+      setBootstrapData(data);
+      const latest = data?.latest_candidate || null;
+      if (autoEnter && latest && !autoEntryAttemptedRef.current) {
+        autoEntryAttemptedRef.current = true;
+        const nextCtx = {
+          runId: String(latest.run_id || "").trim(),
+          fileId: String(latest.file_id || "").trim(),
+          patientId: String(latest.patient_id || "").trim(),
+        };
+        setCtx(nextCtx);
+        const params = new URLSearchParams();
+        if (nextCtx.runId) params.set("run_id", nextCtx.runId);
+        if (nextCtx.fileId) params.set("file_id", nextCtx.fileId);
+        if (nextCtx.patientId) params.set("patient_id", nextCtx.patientId);
+        window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
+        await refresh(true, nextCtx);
+      }
+    } catch (err) {
+      setError(err.message || "无法加载最近运行列表");
+    } finally {
+      setBootstrapping(false);
+    }
+  }
+
   useEffect(() => {
     if (ctx.runId || ctx.fileId || ctx.patientId) {
       refresh(true);
+    } else {
+      loadBootstrap(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -115,9 +150,21 @@ export default function App() {
     return groups;
   }, [dag.nodes]);
 
-  async function handleLauncherEnter() {
-    setOverview(null);
-    await refresh(true);
+  async function enterCandidate(candidate) {
+    if (!candidate) return;
+    const nextCtx = {
+      runId: String(candidate.run_id || "").trim(),
+      fileId: String(candidate.file_id || "").trim(),
+      patientId: String(candidate.patient_id || "").trim(),
+    };
+    setCtx(nextCtx);
+    const params = new URLSearchParams();
+    if (nextCtx.runId) params.set("run_id", nextCtx.runId);
+    if (nextCtx.fileId) params.set("file_id", nextCtx.fileId);
+    if (nextCtx.patientId) params.set("patient_id", nextCtx.patientId);
+    window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
+    autoEntryAttemptedRef.current = true;
+    await refresh(true, nextCtx);
   }
 
   if (!hasLoadedRun) {
@@ -127,53 +174,44 @@ export default function App() {
           <p className="eyebrow">NeuroMatrix Agent Cockpit</p>
           <h1>运行入口</h1>
           <p className="launcher-subtitle">
-            输入 patient_id 或 file_id，系统会自动匹配最新 run，并一键进入 Cockpit 总览。
+            系统会直接读取最近的病例和运行记录，自动定位最新 run 并进入 Cockpit。
           </p>
-          <div className="launcher-grid">
-            <label>
-              <span>patient_id</span>
-              <input
-                placeholder="例如 500"
-                value={ctx.patientId}
-                onChange={(e) => setCtx((s) => ({ ...s, patientId: e.target.value.trim() }))}
-              />
-            </label>
-            <label>
-              <span>file_id</span>
-              <input
-                placeholder="例如 case_20260421_001"
-                value={ctx.fileId}
-                onChange={(e) => setCtx((s) => ({ ...s, fileId: e.target.value.trim() }))}
-              />
-            </label>
-            <label>
-              <span>run_id（可选）</span>
-              <input
-                placeholder="如已知可直接填"
-                value={ctx.runId}
-                onChange={(e) => setCtx((s) => ({ ...s, runId: e.target.value.trim() }))}
-              />
-            </label>
+          <div className="launcher-meta">
+            <span className="chip">recent cases {bootstrapData?.candidates?.length || 0}</span>
+            <span className="chip">source {bootstrapData?.latest_candidate?.source || "-"}</span>
+            <span className="chip">status {bootstrapping ? "loading" : "ready"}</span>
           </div>
           <div className="launcher-actions">
             <button
               className="primary-btn"
-              onClick={handleLauncherEnter}
-              disabled={loading || (!ctx.runId && !ctx.fileId && !ctx.patientId)}
+              onClick={() => enterCandidate(bootstrapData?.latest_candidate)}
+              disabled={loading || bootstrapping || !bootstrapData?.latest_candidate}
             >
-              {loading ? "定位中..." : "自动查找最新 run 并进入 Cockpit"}
+              {bootstrapping ? "定位中..." : "进入最近一次运行"}
             </button>
             <button
-              onClick={() => {
-                setError("");
-                setCtx({ runId: "", fileId: "", patientId: "" });
-              }}
-              disabled={loading}
+              onClick={() => loadBootstrap(false)}
+              disabled={bootstrapping}
             >
-              清空
+              刷新最近列表
             </button>
           </div>
           {error ? <div className="error-box">{error}</div> : null}
+          <div className="recent-cases">
+            {(bootstrapData?.candidates || []).map((candidate) => (
+              <button key={`${candidate.patient_id || "-"}:${candidate.file_id || "-"}:${candidate.run_id || "-"}`} className="recent-case-card" onClick={() => enterCandidate(candidate)}>
+                <div className="recent-case-head">
+                  <strong>{candidate.label || `patient ${candidate.patient_id || "-"}`}</strong>
+                  <span className="chip">{candidate.source || "-"}</span>
+                </div>
+                <div className="recent-case-meta">
+                  <span>patient_id {fmt(candidate.patient_id)}</span>
+                  <span>file_id {fmt(candidate.file_id)}</span>
+                  <span>run_id {fmt(candidate.run_id)}</span>
+                </div>
+              </button>
+            ))}
+          </div>
         </section>
       </div>
     );
@@ -187,21 +225,9 @@ export default function App() {
           <h1>实时总览驾驶舱</h1>
         </div>
         <div className="toolbar">
-          <input
-            placeholder="run_id"
-            value={ctx.runId}
-            onChange={(e) => setCtx((s) => ({ ...s, runId: e.target.value.trim() }))}
-          />
-          <input
-            placeholder="file_id"
-            value={ctx.fileId}
-            onChange={(e) => setCtx((s) => ({ ...s, fileId: e.target.value.trim() }))}
-          />
-          <input
-            placeholder="patient_id"
-            value={ctx.patientId}
-            onChange={(e) => setCtx((s) => ({ ...s, patientId: e.target.value.trim() }))}
-          />
+          <span className="chip">run_id {fmt(run.run_id)}</span>
+          <span className="chip">patient_id {fmt(run.patient_id || left?.patient?.patient_id)}</span>
+          <span className="chip">file_id {fmt(run.file_id)}</span>
           <button onClick={() => refresh(true)} disabled={loading}>
             {loading ? "刷新中..." : "刷新"}
           </button>
