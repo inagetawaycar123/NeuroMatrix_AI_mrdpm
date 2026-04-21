@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchBootstrap, fetchNodeDetail, fetchOverview } from "./api";
+import { fetchBootstrap, fetchNodeDetail, fetchOverview, startUploadRun } from "./api";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled", "paused_review_required"]);
 
@@ -22,6 +22,29 @@ function statusClass(status) {
   return `status-${String(status || "pending").toLowerCase().replace(/\s+/g, "-")}`;
 }
 
+function inferUploadMode(files) {
+  const has = (key) => files[key] instanceof File;
+  const hasNcct = has("ncct_file");
+  const hasMcta = has("mcta_file");
+  const hasVcta = has("vcta_file");
+  const hasDcta = has("dcta_file");
+  const hasCtp = has("cbf_file") && has("cbv_file") && has("tmax_file");
+
+  if (hasNcct && hasMcta && hasVcta && hasDcta && hasCtp) {
+    return { uploadMode: "ncct_3phase_cta_ctp", ctaPhase: "" };
+  }
+  if (hasNcct && hasMcta && hasVcta && hasDcta) {
+    return { uploadMode: "ncct_3phase_cta", ctaPhase: "" };
+  }
+  if (hasNcct && (hasMcta || hasVcta || hasDcta)) {
+    return {
+      uploadMode: "ncct_single_cta",
+      ctaPhase: hasMcta ? "mcta" : hasVcta ? "vcta" : "dcta",
+    };
+  }
+  return { uploadMode: "ncct", ctaPhase: "" };
+}
+
 function parseInitialContext() {
   const q = new URLSearchParams(window.location.search);
   return {
@@ -41,6 +64,24 @@ export default function App() {
   const [selectedNode, setSelectedNode] = useState(null);
   const [nodeDetail, setNodeDetail] = useState(null);
   const [nodeLoading, setNodeLoading] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState("");
+  const [uploadForm, setUploadForm] = useState({
+    patientId: "",
+    fileId: "",
+    hemisphere: "both",
+    question: "",
+    modelType: "mrdpm",
+    files: {
+      ncct_file: null,
+      mcta_file: null,
+      vcta_file: null,
+      dcta_file: null,
+      cbf_file: null,
+      cbv_file: null,
+      tmax_file: null,
+    },
+  });
   const autoEntryAttemptedRef = useRef(false);
 
   const run = overview?.run || {};
@@ -167,6 +208,81 @@ export default function App() {
     await refresh(true, nextCtx);
   }
 
+  function updateUploadField(name, value) {
+    setUploadForm((prev) => ({ ...prev, [name]: value }));
+  }
+
+  function updateUploadFile(name, file) {
+    setUploadForm((prev) => ({
+      ...prev,
+      files: {
+        ...prev.files,
+        [name]: file || null,
+      },
+    }));
+  }
+
+  async function submitUpload(e) {
+    e.preventDefault();
+    setUploadError("");
+
+    const patientId = String(uploadForm.patientId || "").trim();
+    if (!patientId || !/^\d+$/.test(patientId)) {
+      setUploadError("请填写合法 patient_id（数字）。");
+      return;
+    }
+    if (!(uploadForm.files.ncct_file instanceof File)) {
+      setUploadError("请至少上传 NCCT 文件。");
+      return;
+    }
+
+    const infer = inferUploadMode(uploadForm.files);
+    const skipAi =
+      uploadForm.files.cbf_file instanceof File &&
+      uploadForm.files.cbv_file instanceof File &&
+      uploadForm.files.tmax_file instanceof File;
+
+    setUploading(true);
+    try {
+      const resp = await startUploadRun({
+        patientId,
+        fileId: String(uploadForm.fileId || "").trim(),
+        hemisphere: uploadForm.hemisphere,
+        question: String(uploadForm.question || "").trim(),
+        modelType: uploadForm.modelType,
+        uploadMode: infer.uploadMode,
+        ctaPhase: infer.ctaPhase,
+        skipAi,
+        files: uploadForm.files,
+      });
+
+      const runId = String(resp?.agent_run_id || "").trim();
+      if (!runId) {
+        throw new Error("后端未返回 agent_run_id，无法直接进入主页面。");
+      }
+
+      const nextCtx = {
+        runId,
+        fileId: String(resp?.file_id || uploadForm.fileId || "").trim(),
+        patientId,
+      };
+      setCtx(nextCtx);
+      autoEntryAttemptedRef.current = true;
+
+      const params = new URLSearchParams();
+      params.set("run_id", nextCtx.runId);
+      if (nextCtx.fileId) params.set("file_id", nextCtx.fileId);
+      params.set("patient_id", nextCtx.patientId);
+      window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
+
+      await refresh(true, nextCtx);
+    } catch (err) {
+      setUploadError(err.message || "上传失败");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   if (!hasLoadedRun) {
     return (
       <div className="page launcher-page">
@@ -197,6 +313,76 @@ export default function App() {
             </button>
           </div>
           {error ? <div className="error-box">{error}</div> : null}
+          <form className="upload-card" onSubmit={submitUpload}>
+            <div className="upload-card-head">
+              <h3>新病例上传</h3>
+              <span className="chip">提交后自动进入 Cockpit</span>
+            </div>
+            <div className="upload-grid">
+              <label>
+                patient_id *
+                <input
+                  value={uploadForm.patientId}
+                  onChange={(e) => updateUploadField("patientId", e.target.value)}
+                  placeholder="例如 727"
+                />
+              </label>
+              <label>
+                file_id（可选）
+                <input
+                  value={uploadForm.fileId}
+                  onChange={(e) => updateUploadField("fileId", e.target.value)}
+                  placeholder="留空自动生成"
+                />
+              </label>
+              <label>
+                病灶半球
+                <select
+                  value={uploadForm.hemisphere}
+                  onChange={(e) => updateUploadField("hemisphere", e.target.value)}
+                >
+                  <option value="both">both</option>
+                  <option value="left">left</option>
+                  <option value="right">right</option>
+                </select>
+              </label>
+              <label>
+                模型
+                <select
+                  value={uploadForm.modelType}
+                  onChange={(e) => updateUploadField("modelType", e.target.value)}
+                >
+                  <option value="mrdpm">mrdpm</option>
+                  <option value="medgemma">medgemma</option>
+                </select>
+              </label>
+              <label className="span-2">
+                Agent 问题（可选）
+                <input
+                  value={uploadForm.question}
+                  onChange={(e) => updateUploadField("question", e.target.value)}
+                  placeholder="例如：请给出取栓相关风险评估"
+                />
+              </label>
+            </div>
+
+            <div className="upload-files">
+              <label>NCCT *<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("ncct_file", e.target.files?.[0] || null)} /></label>
+              <label>MCTA<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("mcta_file", e.target.files?.[0] || null)} /></label>
+              <label>VCTA<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("vcta_file", e.target.files?.[0] || null)} /></label>
+              <label>DCTA<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("dcta_file", e.target.files?.[0] || null)} /></label>
+              <label>CBF<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("cbf_file", e.target.files?.[0] || null)} /></label>
+              <label>CBV<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("cbv_file", e.target.files?.[0] || null)} /></label>
+              <label>TMAX<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("tmax_file", e.target.files?.[0] || null)} /></label>
+            </div>
+
+            <div className="launcher-actions">
+              <button className="primary-btn" type="submit" disabled={uploading}>
+                {uploading ? "上传并启动中..." : "上传并进入主页面"}
+              </button>
+            </div>
+            {uploadError ? <div className="error-box">{uploadError}</div> : null}
+          </form>
           <div className="recent-cases">
             {(bootstrapData?.candidates || []).map((candidate) => (
               <button key={`${candidate.patient_id || "-"}:${candidate.file_id || "-"}:${candidate.run_id || "-"}`} className="recent-case-card" onClick={() => enterCandidate(candidate)}>

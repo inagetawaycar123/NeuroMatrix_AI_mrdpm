@@ -13,11 +13,15 @@ function buildApiUrl(path) {
   return `${base}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
-async function requestJson(path) {
+async function requestJson(path, options = {}) {
+  const headers = {
+    Accept: "application/json",
+    ...(options.headers || {}),
+  };
   const resp = await fetch(buildApiUrl(path), {
-    headers: {
-      Accept: "application/json",
-    },
+    method: options.method || "GET",
+    body: options.body,
+    headers,
   });
   const contentType = (resp.headers.get("content-type") || "").toLowerCase();
   const rawText = await resp.text();
@@ -141,4 +145,42 @@ export async function fetchNodeDetail(runId, nodeKey) {
   return requestJson(
     `/api/cockpit/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeKey)}`
   );
+}
+
+export async function startUploadRun(payload) {
+  const formData = new FormData();
+  formData.append("patient_id", String(payload.patientId || "").trim());
+  if (payload.fileId) formData.append("file_id", String(payload.fileId).trim());
+
+  formData.append("hemisphere", String(payload.hemisphere || "both"));
+  formData.append("model_type", String(payload.modelType || "mrdpm"));
+  formData.append("upload_mode", String(payload.uploadMode || "ncct"));
+  if (payload.ctaPhase) formData.append("cta_phase", String(payload.ctaPhase));
+  if (payload.skipAi) formData.append("skip_ai", "true");
+
+  formData.append("start_agent_run", "true");
+  if (payload.question) formData.append("question", String(payload.question));
+
+  const fileMap = payload.files || {};
+  const keys = [
+    "ncct_file",
+    "mcta_file",
+    "vcta_file",
+    "dcta_file",
+    "cbf_file",
+    "cbv_file",
+    "tmax_file",
+  ];
+  for (const key of keys) {
+    const file = fileMap[key];
+    if (file instanceof File) {
+      formData.append(key, file);
+    }
+  }
+
+  return requestJson("/api/upload/start", {
+    method: "POST",
+    body: formData,
+    headers: {},
+  });
 }

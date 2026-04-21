@@ -9619,24 +9619,163 @@ def _get_latest_run_id_by_context(file_id="", patient_id=None):
     return str((candidates[0] or {}).get("run_id") or "")
 
 
+def _get_cockpit_case_imaging(file_id="", patient_id=None):
+    resolved_file_id = str(file_id or "").strip()
+    imaging = None
+
+    if resolved_file_id:
+        imaging = get_imaging_by_case(patient_id, resolved_file_id)
+    elif patient_id not in (None, ""):
+        try:
+            imaging = _get_latest_imaging_by_patient(int(patient_id))
+        except Exception:
+            imaging = None
+        if isinstance(imaging, dict):
+            resolved_file_id = str(imaging.get("case_id") or "").strip()
+
+    return imaging, resolved_file_id
+
+
+def _load_cockpit_case_report_payload(file_id="", patient_id=None):
+    imaging, resolved_file_id = _get_cockpit_case_imaging(file_id=file_id, patient_id=patient_id)
+    report_payload = None
+    source = None
+    updated_at = None
+    error = None
+
+    if isinstance(imaging, dict):
+        candidate = imaging.get("report_payload")
+        if isinstance(candidate, dict):
+            report_payload = copy.deepcopy(candidate)
+            source = "case_imaging_report_payload"
+            updated_at = imaging.get("updated_at") or imaging.get("created_at")
+
+        if report_payload is None:
+            analysis_candidate = imaging.get("analysis_result")
+            if isinstance(analysis_candidate, dict):
+                nested = analysis_candidate.get("report_payload")
+                if isinstance(nested, dict):
+                    report_payload = copy.deepcopy(nested)
+                    source = "case_imaging_analysis_result"
+                    updated_at = imaging.get("updated_at") or imaging.get("created_at")
+
+    if report_payload is None and resolved_file_id:
+        json_path, result_json = _load_result_json_for_file(resolved_file_id)
+        if isinstance(result_json, dict):
+            candidate = result_json.get("report_payload")
+            if isinstance(candidate, dict):
+                report_payload = copy.deepcopy(candidate)
+                source = "case_latest_result_json"
+                try:
+                    updated_at = datetime.utcfromtimestamp(os.path.getmtime(json_path)).isoformat() + "Z"
+                except Exception:
+                    updated_at = None
+        elif json_path:
+            error = f"failed to read result json: {json_path}"
+
+    return report_payload, {
+        "source_chain": source or "none",
+        "last_updated": updated_at,
+        "error": error,
+    }, imaging, resolved_file_id
+
+
 def _resolve_cockpit_run_and_events(run_id="", file_id="", patient_id=None):
     rid = str(run_id or "").strip()
     if not rid:
         rid = _get_latest_run_id_by_context(file_id=file_id, patient_id=patient_id)
 
-    if not rid:
-        return None, [], "", "none"
+    if rid:
+        run = _get_agent_run(rid)
+        if run:
+            run = _ensure_w0_run_fields(run)
+            events = _get_agent_events(rid)
+            return run, events, rid, "real"
 
-    run = _get_agent_run(rid)
-    if run:
-        run = _ensure_w0_run_fields(run)
-        events = _get_agent_events(rid)
-        return run, events, rid, "real"
+        mock_run, mock_events = _w0_mock_refresh_run(rid)
+        if mock_run:
+            mock_run = _ensure_w0_run_fields(mock_run)
+            return mock_run, (mock_events or []), rid, "mock"
 
-    mock_run, mock_events = _w0_mock_refresh_run(rid)
-    if mock_run:
-        mock_run = _ensure_w0_run_fields(mock_run)
-        return mock_run, (mock_events or []), rid, "mock"
+    report_payload, meta, imaging, resolved_file_id = _load_cockpit_case_report_payload(
+        file_id=file_id,
+        patient_id=patient_id,
+    )
+    if isinstance(report_payload, dict):
+        resolved_patient_id = None
+        if isinstance(imaging, dict):
+            resolved_patient_id = imaging.get("patient_id")
+        if resolved_patient_id in (None, ""):
+            resolved_patient_id = patient_id
+
+        resolved_run_id = rid or str(
+            report_payload.get("run_id")
+            or report_payload.get("agent_run_id")
+            or report_payload.get("cockpit_run_id")
+            or ""
+        ).strip()
+        if not resolved_run_id:
+            resolved_run_id = f"case:{resolved_file_id or file_id or resolved_patient_id or 'unknown'}"
+
+        available_modalities = []
+        hemisphere = None
+        created_at = None
+        updated_at = meta.get("last_updated") if isinstance(meta, dict) else None
+        if isinstance(imaging, dict):
+            available_modalities = imaging.get("available_modalities") or []
+            hemisphere = imaging.get("hemisphere")
+            created_at = imaging.get("created_at")
+            updated_at = imaging.get("updated_at") or updated_at or imaging.get("created_at")
+
+        planner_sequence = list(AGENT_TOOL_SEQUENCE_MAP.get("ncct_mcta", []))
+        recovered_steps = []
+        for step_key in planner_sequence:
+            recovered_steps.append(
+                {
+                    "key": step_key,
+                    "stage": _stage_for_tool(step_key),
+                    "status": "completed",
+                    "message": "Recovered from stored case data",
+                    "attempts": 1,
+                    "retryable": False,
+                }
+            )
+
+        synthetic_run = {
+            "run_id": resolved_run_id,
+            "patient_id": resolved_patient_id,
+            "file_id": resolved_file_id or file_id,
+            "status": "completed",
+            "stage": "summary",
+            "source": meta.get("source_chain") or "case_payload",
+            "created_at": created_at or updated_at or "",
+            "updated_at": updated_at or created_at or "",
+            "planner_input": {
+                "patient_id": resolved_patient_id,
+                "file_id": resolved_file_id or file_id,
+                "available_modalities": available_modalities,
+                "hemisphere": hemisphere,
+            },
+            "planner_output": {
+                "tool_sequence": planner_sequence,
+                "imaging_path": "",
+            },
+            "steps": recovered_steps,
+            "result": {
+                "report_result": {
+                    "report": str(
+                        report_payload.get("final_confirmed_report")
+                        or (report_payload.get("final_report") or {}).get("summary")
+                        or report_payload.get("report")
+                        or report_payload.get("summary")
+                        or "",
+                    ),
+                    "report_payload": report_payload,
+                },
+            },
+            "recovered_from_case_payload": True,
+        }
+        return synthetic_run, [], resolved_run_id, "case"
 
     return None, [], rid, "none"
 
