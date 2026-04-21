@@ -13,6 +13,13 @@ function buildApiUrl(path) {
   return `${base}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
+function normalizeResourceUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return buildApiUrl(raw);
+}
+
 async function requestJson(path, options = {}) {
   const headers = {
     Accept: "application/json",
@@ -145,6 +152,17 @@ export async function fetchNodeDetail(runId, nodeKey) {
   return requestJson(
     `/api/cockpit/runs/${encodeURIComponent(runId)}/nodes/${encodeURIComponent(nodeKey)}`
   );
+}
+
+export async function fetchKbDocs() {
+  const data = await requestJson("/api/kb/docs");
+  const docs = Array.isArray(data?.docs)
+    ? data.docs.map((doc) => ({
+        ...doc,
+        url: normalizeResourceUrl(doc?.url),
+      }))
+    : [];
+  return { ...data, docs };
 }
 
 export async function startUploadRun(payload) {

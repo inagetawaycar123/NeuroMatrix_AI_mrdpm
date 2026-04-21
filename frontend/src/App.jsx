@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchBootstrap, fetchNodeDetail, fetchOverview, startUploadRun } from "./api";
+import { fetchBootstrap, fetchKbDocs, fetchNodeDetail, fetchOverview, startUploadRun } from "./api";
 
 const TERMINAL = new Set(["succeeded", "failed", "cancelled", "paused_review_required"]);
+const NIFTI_ACCEPT = ".nii,.nii.gz,.gz,application/gzip,application/x-gzip";
+const KB_GRADES = ["S", "A", "B", "C", "D"];
 
 function fmt(value) {
   if (!value && value !== 0) return "-";
@@ -54,6 +56,24 @@ function parseInitialContext() {
   };
 }
 
+function inferUploadStage(form) {
+  const patientOk = /^\d+$/.test(String(form?.patientId || "").trim());
+  const hasNcct = form?.files?.ncct_file instanceof File;
+  if (hasNcct) return 3;
+  if (patientOk) return 2;
+  return 1;
+}
+
+const UPLOAD_FIELDS = [
+  { key: "ncct_file", label: "NCCT", required: true },
+  { key: "mcta_file", label: "MCTA", required: false },
+  { key: "vcta_file", label: "VCTA", required: false },
+  { key: "dcta_file", label: "DCTA", required: false },
+  { key: "cbf_file", label: "CBF", required: false },
+  { key: "cbv_file", label: "CBV", required: false },
+  { key: "tmax_file", label: "TMAX", required: false },
+];
+
 export default function App() {
   const [ctx, setCtx] = useState(parseInitialContext);
   const [overview, setOverview] = useState(null);
@@ -66,6 +86,12 @@ export default function App() {
   const [nodeLoading, setNodeLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [launcherView, setLauncherView] = useState("entry");
+  const [kbDocs, setKbDocs] = useState([]);
+  const [kbLoading, setKbLoading] = useState(false);
+  const [kbLoaded, setKbLoaded] = useState(false);
+  const [kbError, setKbError] = useState("");
+  const [showSplash, setShowSplash] = useState(true);
   const [uploadForm, setUploadForm] = useState({
     patientId: "",
     fileId: "",
@@ -96,6 +122,31 @@ export default function App() {
   const runStatus = String(run.status || "").toLowerCase();
   const isTerminal = TERMINAL.has(runStatus) || runStatus === "completed";
   const hasLoadedRun = Boolean(run.run_id);
+  const uploadStage = useMemo(() => inferUploadStage(uploadForm), [uploadForm]);
+  const kbBuckets = useMemo(() => {
+    const buckets = { S: [], A: [], B: [], C: [], D: [] };
+    for (const doc of kbDocs || []) {
+      const grade = String(doc?.confidence_grade || "C").toUpperCase();
+      if (buckets[grade]) buckets[grade].push(doc);
+      else buckets.C.push(doc);
+    }
+    return buckets;
+  }, [kbDocs]);
+
+  async function loadKb(manual = false) {
+    if (kbLoading) return;
+    setKbLoading(true);
+    setKbError("");
+    try {
+      const data = await fetchKbDocs();
+      setKbDocs(Array.isArray(data?.docs) ? data.docs : []);
+      setKbLoaded(true);
+    } catch (err) {
+      setKbError(err.message || "知识库加载失败");
+    } finally {
+      setKbLoading(false);
+    }
+  }
 
   async function refresh(manual = false, overrideCtx = null) {
     const activeCtx = overrideCtx || ctx;
@@ -155,10 +206,19 @@ export default function App() {
     if (ctx.runId || ctx.fileId || ctx.patientId) {
       refresh(true);
     } else {
-      loadBootstrap(true);
+      // do not auto-enter while splash is visible; preload list only
+      loadBootstrap(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (hasLoadedRun) return;
+    if (launcherView !== "kb") return;
+    if (kbLoaded || kbLoading) return;
+    loadKb(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [launcherView, hasLoadedRun, kbLoaded, kbLoading]);
 
   useEffect(() => {
     if (!overview || isTerminal) return;
@@ -206,6 +266,16 @@ export default function App() {
     window.history.replaceState({}, "", `${window.location.pathname}?${params.toString()}`);
     autoEntryAttemptedRef.current = true;
     await refresh(true, nextCtx);
+  }
+
+  function enterSystem() {
+    setShowSplash(false);
+    // after user enters, attempt to auto-enter latest run or refresh
+    if (ctx.runId || ctx.fileId || ctx.patientId) {
+      refresh(true);
+    } else {
+      loadBootstrap(true);
+    }
   }
 
   function updateUploadField(name, value) {
@@ -283,6 +353,24 @@ export default function App() {
     }
   }
 
+  if (showSplash) {
+    return (
+      <div className="splash-screen">
+        <div className="splash-card glass">
+          <div className="splash-logo">
+            <div className="logo-square" />
+            <div className="logo-square logo-square-2" />
+          </div>
+          <h1>NeuroMatrix Agent Cockpit</h1>
+          <p className="splash-sub">实施总览控制台</p>
+          <div className="splash-actions">
+            <button className="primary-btn splash-enter" onClick={enterSystem}>进入系统</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!hasLoadedRun) {
     return (
       <div className="page launcher-page">
@@ -290,8 +378,27 @@ export default function App() {
           <p className="eyebrow">NeuroMatrix Agent Cockpit</p>
           <h1>运行入口</h1>
           <p className="launcher-subtitle">
-            系统会直接读取最近的病例和运行记录，自动定位最新 run 并进入 Cockpit。
+            系统会直接读取最近病例并支持知识库管理视图。
           </p>
+          <div className="launcher-tabs" role="tablist" aria-label="launcher-views">
+            <button
+              className={`launcher-tab ${launcherView === "entry" ? "active" : ""}`}
+              onClick={() => setLauncherView("entry")}
+            >
+              运行入口
+            </button>
+            <button
+              className={`launcher-tab ${launcherView === "kb" ? "active" : ""}`}
+              onClick={() => {
+                setLauncherView("kb");
+                if (!kbLoaded) loadKb(false);
+              }}
+            >
+              知识库管理
+            </button>
+          </div>
+          {launcherView === "entry" ? (
+            <>
           <div className="launcher-meta">
             <span className="chip">recent cases {bootstrapData?.candidates?.length || 0}</span>
             <span className="chip">source {bootstrapData?.latest_candidate?.source || "-"}</span>
@@ -313,10 +420,24 @@ export default function App() {
             </button>
           </div>
           {error ? <div className="error-box">{error}</div> : null}
-          <form className="upload-card" onSubmit={submitUpload}>
+          <form className={`upload-card upload-stage-${uploadStage}`} onSubmit={submitUpload}>
             <div className="upload-card-head">
               <h3>新病例上传</h3>
               <span className="chip">提交后自动进入 Cockpit</span>
+            </div>
+            <div className="upload-steps" aria-label="upload-progress">
+              <div className={`upload-step ${uploadStage >= 1 ? "active" : ""}`}>
+                <span className="upload-step-index">1</span>
+                <span>填写 patient_id</span>
+              </div>
+              <div className={`upload-step ${uploadStage >= 2 ? "active" : ""}`}>
+                <span className="upload-step-index">2</span>
+                <span>补充参数</span>
+              </div>
+              <div className={`upload-step ${uploadStage >= 3 ? "active" : ""}`}>
+                <span className="upload-step-index">3</span>
+                <span>上传 NCCT 并启动</span>
+              </div>
             </div>
             <div className="upload-grid">
               <label>
@@ -367,13 +488,24 @@ export default function App() {
             </div>
 
             <div className="upload-files">
-              <label>NCCT *<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("ncct_file", e.target.files?.[0] || null)} /></label>
-              <label>MCTA<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("mcta_file", e.target.files?.[0] || null)} /></label>
-              <label>VCTA<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("vcta_file", e.target.files?.[0] || null)} /></label>
-              <label>DCTA<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("dcta_file", e.target.files?.[0] || null)} /></label>
-              <label>CBF<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("cbf_file", e.target.files?.[0] || null)} /></label>
-              <label>CBV<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("cbv_file", e.target.files?.[0] || null)} /></label>
-              <label>TMAX<input type="file" accept=".nii,.nii.gz" onChange={(e) => updateUploadFile("tmax_file", e.target.files?.[0] || null)} /></label>
+              {UPLOAD_FIELDS.map((field) => {
+                const currentFile = uploadForm.files[field.key];
+                const selected = currentFile instanceof File;
+                return (
+                  <label key={field.key} className={`file-picker ${selected ? "selected" : ""}`}>
+                    <span className="file-picker-head">
+                      <span>{field.label}{field.required ? " *" : ""}</span>
+                      <span className="file-picker-state">{selected ? "已选择" : "未选择"}</span>
+                    </span>
+                    <input
+                      type="file"
+                      accept={NIFTI_ACCEPT}
+                      onChange={(e) => updateUploadFile(field.key, e.target.files?.[0] || null)}
+                    />
+                    <span className="file-picker-name">{selected ? currentFile.name : "请选择 .nii / .nii.gz 文件"}</span>
+                  </label>
+                );
+              })}
             </div>
 
             <div className="launcher-actions">
@@ -381,6 +513,9 @@ export default function App() {
                 {uploading ? "上传并启动中..." : "上传并进入主页面"}
               </button>
             </div>
+            <p className="upload-stage-note">
+              {uploadStage < 3 ? "请先选择 NCCT 文件以激活完整上传流程。" : "已满足启动条件，可直接提交。"}
+            </p>
             {uploadError ? <div className="error-box">{uploadError}</div> : null}
           </form>
           <div className="recent-cases">
@@ -398,6 +533,63 @@ export default function App() {
               </button>
             ))}
           </div>
+            </>
+          ) : (
+            <section className="kb-manager">
+              <div className="kb-manager-head">
+                <h3>知识库书架</h3>
+                <div className="launcher-actions">
+                  <button onClick={() => loadKb(true)} disabled={kbLoading}>{kbLoading ? "刷新中..." : "刷新书架"}</button>
+                </div>
+              </div>
+              <p className="kb-manager-subtitle">按置信度等级从高到低分层展示（S/A/B/C/D）。越靠上代表证据质量越高。</p>
+              <div className="launcher-meta">
+                <span className="chip">docs {(kbDocs || []).length}</span>
+                {KB_GRADES.map((grade) => (
+                  <span key={grade} className="chip">{grade}: {kbBuckets[grade]?.length || 0}</span>
+                ))}
+              </div>
+              {kbError ? <div className="error-box">{kbError}</div> : null}
+              <div className="kb-shelves">
+                {KB_GRADES.map((grade) => (
+                  <section key={grade} className={`kb-shelf grade-${grade.toLowerCase()}`}>
+                    <div className="kb-shelf-head">
+                      <h4>{grade} 级书架</h4>
+                      <span className="chip">{kbBuckets[grade]?.length || 0} 份</span>
+                    </div>
+                    <div className="kb-shelf-grid">
+                      {(kbBuckets[grade] || []).length === 0 ? <p className="muted">暂无文档</p> : null}
+                      {(kbBuckets[grade] || []).map((doc) => (
+                        <article key={doc.fileName} className="kb-book">
+                          <div className="kb-book-spine" />
+                          <div className="kb-book-main">
+                            <div className="kb-book-title-row">
+                              <strong>{doc.title || doc.fileName}</strong>
+                              <span className={`chip kb-grade-chip grade-${String(doc.confidence_grade || "C").toLowerCase()}`}>
+                                {String(doc.confidence_grade || "C").toUpperCase()} {(Number(doc.confidence_score || 0) * 100).toFixed(0)}%
+                              </span>
+                            </div>
+                            <p className="kb-book-summary">{doc.summary || "暂无摘要"}</p>
+                            <div className="kb-book-meta">
+                              <span>来源 {doc.source || "-"}</span>
+                              <span>版本 {doc.version || "-"}</span>
+                              <span>类型 {doc.doc_type || "guideline"}</span>
+                            </div>
+                            <div className="kb-book-meta">
+                              <span>文件 {doc.fileName}</span>
+                            </div>
+                            <div className="kb-book-actions">
+                              <a href={doc.url} target="_blank" rel="noreferrer">打开文档</a>
+                            </div>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  </section>
+                ))}
+              </div>
+            </section>
+          )}
         </section>
       </div>
     );
@@ -408,12 +600,13 @@ export default function App() {
       <header className="topbar glass">
         <div>
           <p className="eyebrow">NeuroMatrix Agent Cockpit</p>
-          <h1>实时总览驾驶舱</h1>
+          <h1>实施总览控制台</h1>
         </div>
         <div className="toolbar">
-          <span className="chip">run_id {fmt(run.run_id)}</span>
-          <span className="chip">patient_id {fmt(run.patient_id || left?.patient?.patient_id)}</span>
-          <span className="chip">file_id {fmt(run.file_id)}</span>
+          <span className="chip patient-chip">
+            <span className="patient-chip-label">病人</span>
+            <strong>{fmt(run.patient_id || left?.patient?.patient_id)}</strong>
+          </span>
           <button onClick={() => refresh(true)} disabled={loading}>
             {loading ? "刷新中..." : "刷新"}
           </button>
@@ -424,7 +617,7 @@ export default function App() {
 
       <main className="cockpit-grid">
         <section className="panel glass left-panel">
-          <h2>病例与输入</h2>
+          <h2 className="panel-title"><span className="panel-title-icon" aria-hidden="true" />病例与输入</h2>
           <div className="kv"><span>patient_id</span><strong>{fmt(run.patient_id || left?.patient?.patient_id)}</strong></div>
           <div className="kv"><span>file_id</span><strong>{fmt(run.file_id)}</strong></div>
           <div className="kv"><span>模态</span><strong>{(left.available_modalities || []).join(" + ") || "-"}</strong></div>
@@ -438,7 +631,7 @@ export default function App() {
 
         <section className="panel glass dag-panel">
           <div className="panel-head">
-            <h2>DAG 处理监控</h2>
+            <h2 className="panel-title"><span className="panel-title-icon" aria-hidden="true" />DAG 处理监控</h2>
             <div className="chip-wrap">
               <span className="chip">nodes {dag.node_count || 0}</span>
               <span className="chip">edges {dag.edge_count || 0}</span>
@@ -450,10 +643,11 @@ export default function App() {
               <div key={lane} className="lane">
                 <h3>{lane}</h3>
                 <div className="lane-row">
-                  {nodes.map((node) => (
+                  {nodes.map((node, index) => (
                     <button
                       key={node.id}
                       className={`node-card ${statusClass(node.status)}`}
+                      style={{ animationDelay: `${Math.min(index, 10) * 45}ms` }}
                       onClick={() => openNode(node)}
                     >
                       <span className="node-title">{node.title || node.step_key}</span>
@@ -468,7 +662,7 @@ export default function App() {
         </section>
 
         <section className="panel glass right-panel">
-          <h2>结论 / 证据 / 风险</h2>
+          <h2 className="panel-title"><span className="panel-title-icon" aria-hidden="true" />结论 / 证据 / 风险</h2>
           <div className="kv"><span>Consensus</span><strong>{fmt(right.consensus)}</strong></div>
           <div className="kv"><span>ICV</span><strong>{fmt(validation?.icv?.status)}</strong></div>
           <div className="kv"><span>EKV</span><strong>{fmt(validation?.ekv?.status)}</strong></div>
@@ -487,7 +681,7 @@ export default function App() {
         </section>
 
         <section className="panel glass bottom-panel">
-          <h2>运行日志与时间线</h2>
+          <h2 className="panel-title"><span className="panel-title-icon" aria-hidden="true" />运行日志与时间线</h2>
           <div className="timeline">
             {logs.length === 0 ? <p className="muted">暂无日志</p> : null}
             {logs.map((evt) => (
