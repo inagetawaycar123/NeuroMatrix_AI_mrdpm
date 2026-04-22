@@ -928,6 +928,51 @@ function toggleCellPseudocolor(modelKey) {
 
 function toggleAnalysisPanel() { document.getElementById('analysisPanel').classList.toggle('open'); }
 
+function formatNcctConfidence(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n)) return '--';
+    if (n > 1) {
+        return `${Math.max(0, Math.min(100, n)).toFixed(1)}%`;
+    }
+    return `${(Math.max(0, Math.min(1, n)) * 100).toFixed(1)}%`;
+}
+
+function extractNcctThreeClassInfo() {
+    const fallback = { label: '--', confidence: '--' };
+    if (!Array.isArray(currentRgbFiles) || currentRgbFiles.length === 0) {
+        return fallback;
+    }
+
+    const currentSliceData = currentRgbFiles[currentSlice] || {};
+    const currentLabel = String(currentSliceData.three_class_label_cn || currentSliceData.three_class_label || '').trim();
+    const currentConf = Number(currentSliceData.three_class_confidence);
+    if (currentLabel) {
+        return {
+            label: currentLabel,
+            confidence: Number.isFinite(currentConf) ? formatNcctConfidence(currentConf) : '--'
+        };
+    }
+
+    let bestSlice = null;
+    currentRgbFiles.forEach((slice) => {
+        const label = String(slice?.three_class_label_cn || slice?.three_class_label || '').trim();
+        const conf = Number(slice?.three_class_confidence);
+        if (!label || !Number.isFinite(conf)) return;
+        if (!bestSlice || conf > bestSlice.confidence) {
+            bestSlice = { label, confidence: conf };
+        }
+    });
+
+    if (bestSlice) {
+        return {
+            label: bestSlice.label,
+            confidence: formatNcctConfidence(bestSlice.confidence)
+        };
+    }
+
+    return fallback;
+}
+
 function startStrokeAnalysis() {
     showLoading(true, '姝ｅ湪杩涜鑴戝崚涓垎�?..');
     fetch(`/analyze_stroke/${currentFileId}?hemisphere=${currentHemisphere}`)
@@ -952,6 +997,15 @@ function displayAnalysisResults() {
     updateStrokeImage();
     updateGradcamImage();
     const report = analysisResults.report?.summary;
+    const ncctThreeClass = extractNcctThreeClassInfo();
+    const ncctClassEl = document.getElementById('value-ncct-class');
+    const ncctConfidenceEl = document.getElementById('value-ncct-confidence');
+    if (ncctClassEl) {
+        ncctClassEl.textContent = ncctThreeClass.label;
+    }
+    if (ncctConfidenceEl) {
+        ncctConfidenceEl.textContent = ncctThreeClass.confidence;
+    }
     if (report) {
         const penumbra = report.penumbra_volume_ml?.toFixed(1) || '--';
         const core = report.core_volume_ml?.toFixed(1) || '--';
@@ -990,7 +1044,9 @@ function displayAnalysisResults() {
         penumbra_volume: analysisResults.report?.summary?.penumbra_volume_ml || 0,
         mismatch_ratio: analysisResults.report?.summary?.mismatch_ratio || 0,
         has_mismatch: analysisResults.report?.summary?.has_mismatch || false,
-        hemisphere: lesionHemisphere
+        hemisphere: lesionHemisphere,
+        three_class_label_cn: ncctThreeClass.label,
+        three_class_confidence: ncctThreeClass.confidence
     }));
     localStorage.setItem('analysis_data', JSON.stringify({
         file_id: currentFileId,
@@ -998,7 +1054,9 @@ function displayAnalysisResults() {
         penumbra_volume: analysisResults.report?.summary?.penumbra_volume_ml || 0,
         mismatch_ratio: analysisResults.report?.summary?.mismatch_ratio || 0,
         has_mismatch: analysisResults.report?.summary?.has_mismatch || false,
-        hemisphere: lesionHemisphere
+        hemisphere: lesionHemisphere,
+        three_class_label_cn: ncctThreeClass.label,
+        three_class_confidence: ncctThreeClass.confidence
     }));
 
     // 淇濆瓨瀹屾暣鐨勫垎鏋愮粨鏋滃埌localStorage锛岀敤浜庨〉闈㈠埛鏂板悗鎭㈠

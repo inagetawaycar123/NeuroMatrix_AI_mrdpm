@@ -132,6 +132,44 @@ function threeClassSummaryText() {
     });
     return parts.length ? parts.join(" | ") : "-";
 }
+
+function threeClassConfidenceValue() {
+    const result = state.latestJob?.result || {};
+    const direct = Number(result.three_class_confidence);
+    if (Number.isFinite(direct)) return direct;
+
+    const rgbFiles = Array.isArray(result.rgb_files) ? result.rgb_files : [];
+    let best = null;
+    rgbFiles.forEach((slice) => {
+        const label = t(slice?.three_class_label_cn || slice?.three_class_label, "");
+        const conf = Number(slice?.three_class_confidence);
+        if (!label || !Number.isFinite(conf)) return;
+        if (best === null || conf > best) best = conf;
+    });
+    return best;
+}
+
+function threeClassConfidenceText() {
+    const val = threeClassConfidenceValue();
+    if (!Number.isFinite(val)) return "-";
+    const pct = val > 1 ? Math.max(0, Math.min(100, val)) : Math.max(0, Math.min(1, val)) * 100;
+    return `${pct.toFixed(1)}%`;
+}
+
+function augmentImagingSummaryWithNcct(baseText) {
+    const base = t(baseText, "");
+    const triage = threeClassSummaryText();
+    const confidence = threeClassConfidenceText();
+    const hasTriage = triage !== "-";
+    const hasConfidence = confidence !== "-";
+    if (!hasTriage && !hasConfidence) {
+        return base || "请确认 NCCT/CTA 的关键影像发现。";
+    }
+    const triageLine = hasTriage ? `NCCT 三分类：${triage}` : "";
+    const confidenceLine = hasConfidence ? `NCCT 置信度：${confidence}` : "";
+    const merged = [base, triageLine, confidenceLine].filter(Boolean).join(" | ");
+    return merged || "请确认 NCCT/CTA 的关键影像发现。";
+}
 function getMeta(tool) { const m = TOOL_META[tool] || [`${tool}.run()`, "智能体节点", tool || "Node"]; return { title: m[0], subtitle: m[1], chip: m[2] }; }
 function setPill(elm, s) { if (!elm) return; const k = normStatus(s); elm.className = `runtime-status-pill ${k}`; elm.textContent = STATUS_TEXT[k] || STATUS_TEXT.pending; }
 
@@ -242,7 +280,7 @@ function reviewFallbackDraftForSection(run, sectionSpec) {
         return [t(payload.patient_name, ""), t(payload.patient_age, ""), t(payload.patient_sex, ""), t(payload.onset_to_admission_hours, "")].filter(Boolean).join(" | ") || "请确认患者基本信息与时间窗。";
     }
     if (sectionId === "imaging_summary") {
-        return t(summary.impression || summary.text || payload.imaging_summary_text, "") || "请确认 NCCT/CTA 的关键影像发现。";
+        return augmentImagingSummaryWithNcct(t(summary.impression || summary.text || payload.imaging_summary_text, ""));
     }
     if (sectionId === "ctp_quant") {
         return [t(ctp.core_infarct_volume, ""), t(ctp.penumbra_volume, ""), t(ctp.mismatch_ratio, "")].filter(Boolean).join(" | ") || "请确认 CTP 量化结果与临床解释。";
@@ -290,12 +328,17 @@ function reviewNormalize(reviewState) {
     if (!Array.isArray(base.sections)) base.sections = [];
     base.sections = base.sections.map((sec, idx) => {
         const fallback = REVIEW_FALLBACK_SECTIONS[idx] || {};
+        const sectionId = t(sec?.section_id, fallback.section_id || `section_${idx + 1}`);
+        const draftTextRaw = t(sec?.draft_text, "");
+        const draftText = sectionId === "imaging_summary"
+            ? augmentImagingSummaryWithNcct(draftTextRaw)
+            : draftTextRaw;
         return {
-            section_id: t(sec?.section_id, fallback.section_id || `section_${idx + 1}`),
+            section_id: sectionId,
             title: t(sec?.title, fallback.title || `章节 ${idx + 1}`),
             lead: t(sec?.lead, fallback.lead || ""),
             guide: t(sec?.guide, fallback.guide || ""),
-            draft_text: t(sec?.draft_text, ""),
+            draft_text: draftText,
             evidence_refs: Array.isArray(sec?.evidence_refs) ? sec.evidence_refs.filter(Boolean) : [],
             risk_level: token(sec?.risk_level || fallback.risk_level || "low"),
             review_status: token(sec?.review_status || "pending"),

@@ -6,6 +6,7 @@ let cockpitRun = null;
 let cockpitEvents = [];
 let cockpitResult = null;
 let cockpitValidation = null;
+let cockpitUploadResult = null;
 
 let cockpitPollTimer = null;
 let cockpitSourceTag = 'real';
@@ -415,9 +416,113 @@ function toSummaryCount(status, count, listLike) {
     return '-';
 }
 
+function buildThreeClassCountsText(counts) {
+    if (!counts || typeof counts !== 'object') return '';
+    const normalCount = Number(counts.normal || 0);
+    const hemoCount = Number(counts.hemo || 0);
+    const infarctCount = Number(counts.infarct || 0);
+    if (!Number.isFinite(normalCount) && !Number.isFinite(hemoCount) && !Number.isFinite(infarctCount)) {
+        return '';
+    }
+    return `正常 ${Number.isFinite(normalCount) ? normalCount : 0}，脑出血 ${Number.isFinite(hemoCount) ? hemoCount : 0}，脑缺血 ${Number.isFinite(infarctCount) ? infarctCount : 0}`;
+}
+
+function getThreeClassCandidates(run, resultResp) {
+    const candidates = [];
+    const push = (item) => {
+        if (item && typeof item === 'object') candidates.push(item);
+    };
+
+    push(cockpitUploadResult);
+    push(resultResp?.data?.result);
+    push(run?.result);
+
+    const payload = parseResultPayload(resultResp);
+    if (payload && typeof payload === 'object') {
+        push(payload);
+        push(payload.analysis_data);
+        push(payload.analysis);
+        push(payload.upload_result);
+    }
+
+    return candidates;
+}
+
+async function fetchLinkedUploadResult(run) {
+    const linkedJobId = String(run?.linked_upload_job_id || '').trim();
+    if (!linkedJobId) return null;
+    try {
+        const resp = await fetch(`/api/upload/progress/${encodeURIComponent(linkedJobId)}`);
+        const data = await safeJsonFromResponse(resp);
+        if (!resp.ok || !data?.success) return null;
+        return (data?.job?.result && typeof data.job.result === 'object') ? data.job.result : null;
+    } catch (_err) {
+        return null;
+    }
+}
+
+function extractNcctThreeClassSummary(run, resultResp) {
+    const candidates = getThreeClassCandidates(run, resultResp);
+
+    for (const item of candidates) {
+        const summary = item.three_class_summary;
+        if (summary && typeof summary === 'object') {
+            const display = String(summary.display || '').trim();
+            const countsText = buildThreeClassCountsText(summary.counts);
+            if (display) return display;
+            if (countsText) return countsText;
+        }
+
+        if (item.three_class_counts && typeof item.three_class_counts === 'object') {
+            const countsText = buildThreeClassCountsText(item.three_class_counts);
+            if (countsText) return countsText;
+        }
+
+        const topDisplay = String(item.three_class_display || '').trim();
+        if (topDisplay) return topDisplay;
+
+        const topLabel = String(item.three_class_label_cn || item.three_class_label || '').trim();
+        if (topLabel) return topLabel;
+
+        if (Array.isArray(item.rgb_files) && item.rgb_files.length > 0) {
+            const firstLabeled = item.rgb_files.find((x) => String(x?.three_class_label_cn || x?.three_class_label || '').trim());
+            const label = String(firstLabeled?.three_class_label_cn || firstLabeled?.three_class_label || '').trim();
+            if (label) return label;
+        }
+    }
+
+    return '--';
+}
+
+function extractNcctThreeClassConfidence(run, resultResp) {
+    const candidates = getThreeClassCandidates(run, resultResp);
+
+    for (const item of candidates) {
+        const topConfidence = Number(item.three_class_confidence);
+        if (Number.isFinite(topConfidence)) {
+            return formatConfidence(topConfidence);
+        }
+
+        if (Array.isArray(item.rgb_files) && item.rgb_files.length > 0) {
+            let best = null;
+            item.rgb_files.forEach((slice) => {
+                const label = String(slice?.three_class_label || slice?.three_class_label_cn || '').trim();
+                const conf = Number(slice?.three_class_confidence);
+                if (!label || !Number.isFinite(conf)) return;
+                if (best === null || conf > best) best = conf;
+            });
+            if (best !== null) return formatConfidence(best);
+        }
+    }
+
+    return '--';
+}
+
 function renderRunSummary(run, validation, resultResp) {
     const reportReady = resultResp?.ok || normalizeStatus(run?.status || '') === 'succeeded';
     setText('summaryResultStatus', reportReady ? '已生成' : '生成中');
+    setText('summaryNcctResult', extractNcctThreeClassSummary(run, resultResp));
+    setText('summaryNcctConfidence', extractNcctThreeClassConfidence(run, resultResp));
     setText('summaryLastError', computeLastError(run));
     setText('summaryRetryStep', computeRetryableStep(run));
 
@@ -1532,6 +1637,7 @@ async function fetchCockpitData(isManual = false) {
 
         cockpitRun = runBundle.run || {};
         cockpitEvents = Array.isArray(runBundle.events) ? runBundle.events : [];
+        cockpitUploadResult = await fetchLinkedUploadResult(cockpitRun);
 
         const validationData = await safeJsonFromResponse(validationResp);
         cockpitValidation = validationResp.ok && validationData.success ? validationData : null;

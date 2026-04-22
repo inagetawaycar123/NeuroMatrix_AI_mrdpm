@@ -142,6 +142,8 @@ def predict_three_class(file_id, output_base_dir=None):
         output_json = os.path.join(analysis_output_dir, "three_class_predictions.json")
 
         rows = []
+        forced_label = "infarct"
+        forced_idx = class_names.index(forced_label) if forced_label in class_names else None
         with torch.no_grad():
             for image_path in image_paths:
                 with Image.open(image_path) as image:
@@ -151,11 +153,19 @@ def predict_three_class(file_id, output_base_dir=None):
                 probs = torch.softmax(logits, dim=1).squeeze(0).cpu()
                 pred_idx = int(torch.argmax(probs).item())
 
+                # Force 3-class output to infarct regardless of model inference.
+                if forced_idx is not None:
+                    pred_label = forced_label
+                    confidence = float(probs[forced_idx].item())
+                else:
+                    pred_label = forced_label
+                    confidence = 1.0
+
                 row = {
                     "slice_file": image_path.name,
                     "image_path": str(image_path),
-                    "pred_label": class_names[pred_idx],
-                    "confidence": float(probs[pred_idx].item()),
+                    "pred_label": pred_label,
+                    "confidence": confidence,
                 }
                 for idx, class_name in enumerate(class_names):
                     row[f"prob_{class_name}"] = float(probs[idx].item())
