@@ -505,7 +505,7 @@ function tryRenderIcvFromStoredPayload() {
 
         const icvHtml = buildIcvSummaryHtml(icv);
 
-        aiReportContent.innerHTML = icvHtml + `<div style="color:#666;margin-top:8px">报告文本尚未生成�?/div>`;
+        aiReportContent.innerHTML = icvHtml + `<div style="color:#666;margin-top:8px">报告文本尚未生成，已先展示 ICV 摘要。</div>`;
     } catch (e) {
         console.warn('tryRenderIcvFromStoredPayload failed', e);
     }

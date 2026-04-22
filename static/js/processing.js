@@ -159,15 +159,12 @@ function threeClassConfidenceText() {
 function augmentImagingSummaryWithNcct(baseText) {
     const base = t(baseText, "");
     const triage = threeClassSummaryText();
-    const confidence = threeClassConfidenceText();
     const hasTriage = triage !== "-";
-    const hasConfidence = confidence !== "-";
-    if (!hasTriage && !hasConfidence) {
+    if (!hasTriage) {
         return base || "请确认 NCCT/CTA 的关键影像发现。";
     }
     const triageLine = hasTriage ? `NCCT 三分类：${triage}` : "";
-    const confidenceLine = hasConfidence ? `NCCT 置信度：${confidence}` : "";
-    const merged = [base, triageLine, confidenceLine].filter(Boolean).join(" | ");
+    const merged = [base, triageLine].filter(Boolean).join("\n");
     return merged || "请确认 NCCT/CTA 的关键影像发现。";
 }
 function getMeta(tool) { const m = TOOL_META[tool] || [`${tool}.run()`, "智能体节点", tool || "Node"]; return { title: m[0], subtitle: m[1], chip: m[2] }; }
