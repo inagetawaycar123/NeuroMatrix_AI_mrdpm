@@ -141,6 +141,35 @@
             </div>
         </div>
     </div>
+    <!-- CTP血管分类结果 -->
+    <div class="panel-section analysis-results" id="ctpClassificationSection" style="display: none;">
+        <div class="section-title">CTP 血管分类</div>
+        <div class="metrics-list">
+            <div class="metric-row">
+                <span class="metric-label">分类结果</span>
+                <span class="metric-value" id="ctp-class-name">--</span>
+            </div>
+            <div class="metric-row">
+                <span class="metric-label">置信度</span>
+                <span class="metric-value" id="ctp-confidence">--</span>
+            </div>
+            <div class="metric-row" style="flex-direction: column; align-items: flex-start;">
+                <span class="metric-label" style="margin-bottom: 8px;">临床意义</span>
+                <span class="metric-value" id="ctp-clinical-significance" style="font-size: 12px; line-height: 1.6; color: #666; text-align: left;">--</span>
+            </div>
+            <div class="metric-row" style="flex-direction: column; align-items: flex-start;">
+                <span class="metric-label" style="margin-bottom: 8px;">治疗建议</span>
+                <span class="metric-value" id="ctp-treatment-suggestion" style="font-size: 12px; line-height: 1.6; color: #666; text-align: left;">--</span>
+            </div>
+        </div>
+    </div>
+    <!-- GradCAM可视化 -->
+    <div class="panel-section analysis-results" id="gradcamVisualizationSection" style="display: none;">
+        <div class="section-title">GradCAM 特征可视化</div>
+        <div class="result-images" id="gradcam-images">
+            <!-- GradCAM图像将通过JavaScript动态添加 -->
+        </div>
+    </div>
     <!-- 手动触发 AI 报告按钮 -->
     <div class="panel-section" style="margin-top: 20px;">
         <button 

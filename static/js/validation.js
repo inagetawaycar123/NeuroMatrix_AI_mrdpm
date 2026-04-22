@@ -122,6 +122,7 @@ const CLAIM_ID_TEXT_MAP = {
     mismatch_ratio: '不匹配比例',
     significant_mismatch: '显著不匹配',
     treatment_window_notice: '治疗时间窗提示',
+    vessel_occlusion_classification: '血管闭塞分级',
 };
 
 const CLAIM_TEXT_MAP = {
@@ -131,6 +132,8 @@ const CLAIM_TEXT_MAP = {
     'Mismatch ratio is evidence-supported.': '不匹配比例结论得到证据支持。',
     'Significant mismatch exists.': '存在显著不匹配。',
     'Treatment-window notice is guideline-aligned.': '治疗时间窗提示与指南一致。',
+    'CTP vessel occlusion classification is evidence-based.': '脑血管闭塞程度分级符合影像学特征。',
+    '脑血管闭塞程度分级符合影像学特征': '脑血管闭塞程度分级符合影像学特征',
 };
 
 const CONSENSUS_SUMMARY_TEXT_MAP = {

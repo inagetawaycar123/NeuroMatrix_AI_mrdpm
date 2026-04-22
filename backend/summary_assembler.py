@@ -13,6 +13,7 @@ KEY_CLAIM_IDS: List[str] = [
     "mismatch_ratio",
     "significant_mismatch",
     "treatment_window_notice",
+    "vessel_occlusion_classification",
 ]
 
 HIGH_RISK_CLAIM_IDS = {
@@ -20,6 +21,7 @@ HIGH_RISK_CLAIM_IDS = {
     "penumbra_volume",
     "mismatch_ratio",
     "significant_mismatch",
+    "vessel_occlusion_classification",
 }
 
 CLAIM_TITLES = {
@@ -29,6 +31,7 @@ CLAIM_TITLES = {
     "mismatch_ratio": "不匹配比值",
     "significant_mismatch": "显著不匹配",
     "treatment_window_notice": "治疗时间窗提示",
+    "vessel_occlusion_classification": "血管闭塞分级",
 }
 
 QUESTION_FOCUS_KEYWORDS = {
@@ -38,6 +41,7 @@ QUESTION_FOCUS_KEYWORDS = {
     "mismatch_ratio": ["不匹配", "mismatch ratio"],
     "significant_mismatch": ["显著不匹配", "mismatch", "可挽救"],
     "treatment_window_notice": ["时间窗", "时窗", "window", "治疗"],
+    "vessel_occlusion_classification": ["血管", "闭塞", "堵塞", "LVO", "MEVO", "vessel", "occlusion"],
 }
 
 
@@ -96,6 +100,16 @@ _EN_TO_ZH_TRANSLATIONS = {
     "not_supported": "不支持",
     "unavailable": "不可用",
     "partially_supported": "部分支持",
+    # CTP血管分类相关翻译
+    "CTP vessel occlusion classification is evidence-based": "脑血管闭塞程度分级符合影像学特征",
+    "vessel occlusion classification": "血管闭塞分级",
+    "vessel classification": "血管分类",
+    "CTP vessel": "CTP血管",
+    "occlusion": "闭塞",
+    "LVO": "大血管闭塞",
+    "MEVO": "小血管病变",
+    "vessel occlusion": "血管闭塞",
+    "occlusion classification": "闭塞分级",
 }
 
 

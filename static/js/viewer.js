@@ -981,6 +981,9 @@ function displayAnalysisResults() {
         localStorage.setItem(`stroke_analysis_${currentFileId}`, JSON.stringify(analysisResults));
     }
 
+    // 渲染CTP血管分类结果
+    displayCTPClassification();
+    
     saveAnalysisToDB();
 }
 
@@ -1007,6 +1010,119 @@ function updateStrokeImage() {
             document.getElementById('status-stroke').className = 'cell-status status-ready';
             document.getElementById('status-stroke').style.display = 'block';
         }
+    }
+}
+
+function displayCTPClassification() {
+    if (!analysisResults || !analysisResults.occlusion_classification) return;
+    
+    const occlusionData = analysisResults.occlusion_classification;
+    
+    // 显示CTP分类区域
+    const ctpSection = document.getElementById('ctpClassificationSection');
+    const gradcamSection = document.getElementById('gradcamVisualizationSection');
+    
+    if (!occlusionData.success) {
+        // 如果分类失败，隐藏区域
+        if (ctpSection) ctpSection.style.display = 'none';
+        if (gradcamSection) gradcamSection.style.display = 'none';
+        return;
+    }
+    
+    // 显示分类区域
+    if (ctpSection) ctpSection.style.display = 'block';
+    
+    // 更新分类结果
+    const classNameEl = document.getElementById('ctp-class-name');
+    const confidenceEl = document.getElementById('ctp-confidence');
+    const clinicalSignificanceEl = document.getElementById('ctp-clinical-significance');
+    const treatmentSuggestionEl = document.getElementById('ctp-treatment-suggestion');
+    
+    if (classNameEl) {
+        classNameEl.textContent = occlusionData.class_name || '--';
+        // 根据分类结果设置颜色
+        if (occlusionData.class_name === 'LVO') {
+            classNameEl.style.color = '#ef4444'; // 红色 - 大血管闭塞
+        } else if (occlusionData.class_name === 'MEVO') {
+            classNameEl.style.color = '#f59e0b'; // 橙色 - 小血管病变
+        } else {
+            classNameEl.style.color = '#10b981'; // 绿色 - 无阻塞
+        }
+    }
+    
+    if (confidenceEl) {
+        const confidence = occlusionData.confidence || 0;
+        confidenceEl.textContent = (confidence * 100).toFixed(1) + '%';
+    }
+    
+    // 从probabilities获取临床意义和治疗建议
+    // 这些信息可能在不同字段中，需要灵活处理
+    const getInterpretation = () => {
+        const className = occlusionData.class_name || '';
+        const interpretations = {
+            '无阻塞': {
+                clinical: '大血管通畅，无明显闭塞征象。建议关注小血管病变及其他可能的病因。',
+                treatment: '不建议血管内治疗，关注内科治疗和二级预防。'
+            },
+            'LVO': {
+                clinical: '检测到大血管闭塞，可能适合血管内治疗。建议结合临床症状和时间窗判断。',
+                treatment: '符合适应症的患者可考虑血管内取栓治疗（机械取栓）。'
+            },
+            'MEVO': {
+                clinical: '检测到小血管病变征象，可能为慢性小血管性脑病或腔隙性梗死。',
+                treatment: '主要为内科治疗，加强危险因素控制和二级预防。'
+            }
+        };
+        return interpretations[className] || {
+            clinical: '分类结果待确认',
+            treatment: '请结合临床实际情况判断'
+        };
+    };
+    
+    const interpretation = getInterpretation();
+    
+    if (clinicalSignificanceEl) {
+        clinicalSignificanceEl.textContent = interpretation.clinical;
+    }
+    
+    if (treatmentSuggestionEl) {
+        treatmentSuggestionEl.textContent = interpretation.treatment;
+    }
+    
+    // 显示GradCAM可视化
+    if (occlusionData.gradcam_visualizations && occlusionData.gradcam_visualizations.length > 0) {
+        if (gradcamSection) gradcamSection.style.display = 'block';
+        
+        const gradcamImagesContainer = document.getElementById('gradcam-images');
+        if (gradcamImagesContainer) {
+            // 清空现有内容
+            gradcamImagesContainer.innerHTML = '';
+            
+            // 添加GradCAM图像
+            occlusionData.gradcam_visualizations.forEach((vis, index) => {
+                const cell = document.createElement('div');
+                cell.className = 'result-img-cell';
+                
+                const label = document.createElement('div');
+                label.className = 'result-img-label';
+                label.textContent = `切片 ${index + 1} (${vis.class}, ${(vis.confidence * 100).toFixed(1)}%)`;
+                
+                const img = document.createElement('img');
+                // 构建图像路径
+                const gradcamPath = `/static/processed/${currentFileId}/gradcam/${vis.gradcam}`;
+                img.src = gradcamPath;
+                img.alt = `GradCAM ${index + 1}`;
+                img.style.width = '100%';
+                img.style.height = 'auto';
+                
+                cell.appendChild(label);
+                cell.appendChild(img);
+                gradcamImagesContainer.appendChild(cell);
+            });
+        }
+    } else {
+        // 没有GradCAM可视化
+        if (gradcamSection) gradcamSection.style.display = 'none';
     }
 }
 

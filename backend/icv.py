@@ -594,6 +594,104 @@ def evaluate_icv(
     except Exception:
         findings.append({"id": "R5_status_consistency", "status": "not_applicable", "message": "无法评估分析状态与报告语气/内容的一致性"})
 
+    # R6: CTP血管分类一致性检查
+    try:
+        occlusion_result = None
+        # 从analysis_result中提取血管分类结果
+        if analysis_result and isinstance(analysis_result, dict):
+            occlusion_result = analysis_result.get("occlusion_classification")
+        
+        # 从tool_results中提取
+        if not occlusion_result and tool_results:
+            for tr in tool_results:
+                if tr.get("status") == "completed":
+                    tool_name = (tr.get("tool_name") or "").lower()
+                    
+                    # 方法1：从classify_vessel_occlusion工具直接获取
+                    if tool_name == "classify_vessel_occlusion":
+                        so = tr.get("structured_output") or {}
+                        if so.get("success"):
+                            occlusion_result = so
+                            break
+                    
+                    # 方法2：从run_stroke_analysis工具获取
+                    if tool_name == "run_stroke_analysis":
+                        so = tr.get("structured_output") or {}
+                        occlusion_result = so.get("occlusion_classification") or (so.get("analysis_result") or {}).get("occlusion_classification")
+                        if occlusion_result:
+                            break
+        
+        if occlusion_result and isinstance(occlusion_result, dict):
+            success = occlusion_result.get("success", False)
+            class_name = occlusion_result.get("class_name", "")
+            confidence = _safe_float(occlusion_result.get("confidence"))
+            
+            if not success:
+                findings.append({
+                    "id": "R6_vessel_classification",
+                    "status": "fail",
+                    "message": f"CTP血管分类失败: {occlusion_result.get('error', '未知错误')}"
+                })
+                overall = "fail"
+            elif confidence is not None and confidence < 0.5:
+                findings.append({
+                    "id": "R6_vessel_classification",
+                    "status": "warn",
+                    "message": f"CTP血管分类置信度较低 ({confidence:.2%})，分类结果为 {class_name}，建议人工复核血管评估"
+                })
+                if overall != "fail":
+                    overall = "warn"
+            elif confidence is not None and confidence >= 0.5:
+                # 检查分类结果与定量参数的一致性
+                # LVO通常伴随较大的核心梗死或半暗带
+                # MEVO或无阻塞通常伴随较小的病灶
+                consistency_warning = False
+                consistency_msg = None
+                
+                if class_name == "LVO" and core_vol is not None and penumbra_vol is not None:
+                    total_lesion = core_vol + penumbra_vol
+                    if total_lesion < 10:  # 大血管闭塞但病灶很小
+                        consistency_warning = True
+                        consistency_msg = f"血管分类为LVO（大血管闭塞），但总病灶体积较小（{total_lesion:.1f} ml），建议复核血管评估"
+                
+                elif class_name == "无阻塞" and core_vol is not None:
+                    if core_vol > 50:  # 无明显狭窄但核心梗死很大
+                        consistency_warning = True
+                        consistency_msg = f"血管分类为无明显狭窄，但核心梗死体积较大（{core_vol:.1f} ml），建议复核血管评估"
+                
+                if consistency_warning and consistency_msg:
+                    findings.append({
+                        "id": "R6_vessel_classification",
+                        "status": "warn",
+                        "message": consistency_msg
+                    })
+                    if overall != "fail":
+                        overall = "warn"
+                else:
+                    findings.append({
+                        "id": "R6_vessel_classification",
+                        "status": "pass",
+                        "message": f"CTP血管分类结果 {class_name} (置信度: {confidence:.2%}) 与定量参数基本一致"
+                    })
+            else:
+                findings.append({
+                    "id": "R6_vessel_classification",
+                    "status": "not_applicable",
+                    "message": "CTP血管分类结果可用，但置信度信息缺失"
+                })
+        else:
+            findings.append({
+                "id": "R6_vessel_classification",
+                "status": "not_applicable",
+                "message": "未找到CTP血管分类结果"
+            })
+    except Exception as e:
+        findings.append({
+            "id": "R6_vessel_classification",
+            "status": "not_applicable",
+            "message": f"无法评估CTP血管分类一致性: {str(e)}"
+        })
+
     normalized_findings = _normalize_findings(findings)
     return {
         "success": True,

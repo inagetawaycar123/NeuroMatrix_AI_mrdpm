@@ -565,21 +565,28 @@ REPORT_PROMPT_TEMPLATE = """
 - 不匹配比值 (Mismatch Ratio): {mismatch_ratio}
 - 受累侧别: {hemisphere}
 
+【CTP血管堵塞AI分类结果】
+- 分类结论: {vessel_classification}
+- 置信度: {vessel_confidence}
+- 临床意义: {vessel_clinical_significance}
+- 治疗方向: {vessel_treatment_suggestion}
+
 【写作要求】
 1. 严格按照《中国急性缺血性脑卒中影像学诊断与治疗规范》等指南撰写，使用专业医学术语。
 2. 输出格式使用 Markdown，不要使用花哨的加粗/斜体，只用正常文本和有层级的标题。
-3. 顶层大标题使用 `##` 标记，例如 `## 检查方法`、`## 影像所见`、`## 影像结论`、`## 治疗建议`。
+3. 顶层大标题使用 `##` 标记，例如 `## 检查方法`、`## 影像所见`、`## 血管评估`、`## 影像结论`、`## 治疗建议`。
 4. 报告中需要综合描述：
-     - 检查方法（包括 NCCT、mCTA、CTP 及关键参数）。
+     - 检查方法（包括 NCCT、mCTA、CTP 及关键参数，含AI辅助血管分析）。
      - 影像所见：核心梗死范围与部位、半暗带范围、左右侧脑血流不对称情况、不匹配区域特点等。
-     - 影像学结论：是否存在大血管闭塞、梗死核心大小是否符合溶栓 / 取栓条件等。
-     - 治疗建议：结合年龄、NIHSS、时间窗、core / penumbra / mismatch 三者关系，给出是否推荐静脉溶栓、机械取栓或保守治疗的建议。
+     - **血管评估（重要新增）**：基于CTP灌注图AI分析，明确描述血管堵塞分类结果（{vessel_classification}），置信度（{vessel_confidence}），并结合临床意义（{vessel_clinical_significance}）阐述是否提示LVO（大血管闭塞）、MEVO（小血管病变）或无明显狭窄。
+     - 影像学结论：综合血管评估与定量参数，判断是否存在大血管闭塞、梗死核心大小是否符合溶栓/取栓条件等。
+     - 治疗建议：**重点结合血管分类结论（{vessel_treatment_suggestion}）**，以及年龄、NIHSS、时间窗、core/penumbra/mismatch关系，给出是否推荐静脉溶栓、机械取栓或保守治疗的建议。对于LVO患者应重点提示机械取栓的适应症，对于无明显狭窄或小血管病变患者应侧重内科治疗。
 5. 可以引用上方的量化指标，但不要机械地逐行重复，要用连续自然的中文段落表达。
 
 【输出结构示例（Markdown）】
 
 ## 检查方法
-简要说明本次检查包含的模态（NCCT、mCTA、CTP）以及主要参数。
+简要说明本次检查包含的模态（NCCT、mCTA、CTP）以及主要参数，包括AI辅助血管分析系统。
 
 ## 影像所见
 1. 核心梗死灶：描述位置、体积（约 {core_volume} ml）及是否累及关键功能区。
@@ -587,11 +594,26 @@ REPORT_PROMPT_TEMPLATE = """
 3. 灌注不匹配：说明不匹配比约为 {mismatch_ratio}，判断是否存在明显可挽救半暗带。
 4. 侧别与侧支循环：描述病变侧（{hemisphere}）及侧支循环情况（如 mCTA 评价）。
 
+## 血管评估
+基于CTP灌注图的AI辅助分析系统，对血管堵塞情况进行分类评估：
+1. **分类结果**: {vessel_classification}（置信度：{vessel_confidence}）
+2. **临床意义**: {vessel_clinical_significance}
+3. **血管特征**: 结合CTP灌注特征和动态血管显影，综合判断血管通畅情况。
+
 ## 影像学结论
-用 2–4 条要点归纳本次影像所支持的诊断结论，例如是否提示大血管闭塞、梗死核心大小与时间窗是否匹配等。
+综合影像所见与血管评估，用 2–4 条要点归纳诊断结论：
+- 是否提示大血管闭塞（LVO）或小血管病变
+- 梗死核心大小与时间窗是否匹配
+- 可挽救脑组织（半暗带）的范围
 
 ## 治疗建议
-结合 NIHSS 评分 {nihss_score}、发病至入院时间 {onset_to_admission} 以及 core / penumbra / mismatch 情况，给出是否推荐静脉溶栓、机械取栓或其他治疗策略，并给出简要理由。
+结合以下因素综合判断：
+- NIHSS 评分：{nihss_score}
+- 发病至入院时间：{onset_to_admission}
+- 定量参数：core/penumbra/mismatch
+- **血管评估结论**：{vessel_treatment_suggestion}
+
+给出具体治疗策略建议（静脉溶栓、机械取栓或保守治疗），并阐述理由。
 """
 
 REPORT_JSON_PROMPT = '''
@@ -603,6 +625,9 @@ REPORT_JSON_PROMPT = '''
 - 半暗带体积 (ml): {penumbra_volume}
 - 不匹配比值: {mismatch_ratio}
 - 受累侧别: {hemisphere}
+- CTP血管分类: {vessel_classification} (置信度: {vessel_confidence})
+- 血管临床意义: {vessel_clinical_significance}
+- 血管治疗方向: {vessel_treatment_suggestion}
 
 【输出要求】
 1. 只输出一个 JSON 对象。
@@ -610,6 +635,7 @@ REPORT_JSON_PROMPT = '''
      - "检查方法"
      - "核心梗死"：对象，包含 "体积"、"灌注标准"、"CT表现" 三个字段。
      - "半暗带"：对象，包含 "体积"、"灌注特征"、"与核心关系" 三个字段。
+     - "血管评估"：对象，包含 "分类结果"、"置信度"、"临床意义"、"堵塞类型" 四个字段。
      - "左右脑不对称分析"：对象，包含 "患侧"、"不对称指数"。
      - "DEFUSE3评估"：对象，包含 "不匹配体积"、"不匹配比值"、"是否入组"。
      - "诊断意见"：字符串。
@@ -619,7 +645,7 @@ REPORT_JSON_PROMPT = '''
 【示例结构】（注意：示例内容仅示意，实际数值请根据输入推理）
 
 {
-    "检查方法": "NCCT + mCTA + CTP",
+    "检查方法": "NCCT + mCTA + CTP + AI辅助血管分析",
     "核心梗死": {
         "体积": "20 ml",
         "灌注标准": "rCBF<30%",
@@ -630,6 +656,12 @@ REPORT_JSON_PROMPT = '''
         "灌注特征": "Tmax>6s, CBF降低、CBV相对保留",
         "与核心关系": "半暗带包绕核心区，未累及对侧"
     },
+    "血管评估": {
+        "分类结果": "{vessel_classification}",
+        "置信度": "{vessel_confidence}",
+        "临床意义": "{vessel_clinical_significance}",
+        "堵塞类型": "基于分类结果推断（LVO/MEVO/无明显狭窄）"
+    },
     "左右脑不对称分析": {
         "患侧": "{hemisphere}",
         "不对称指数": "示例值"
@@ -639,8 +671,8 @@ REPORT_JSON_PROMPT = '''
         "不匹配比值": "2.0",
         "是否入组": "是"
     },
-    "诊断意见": "……",
-    "治疗建议": ["……"]
+    "诊断意见": "……（需综合血管评估结论）",
+    "治疗建议": ["……（需结合血管分类指导治疗方向）"]
 }
 
 请严格按照上述键名和结构返回 JSON，对象外不得包含任何多余文字。
@@ -671,6 +703,38 @@ def generate_report_with_baichuan(
             if onset_to_admission is not None
             else "未记录"
         )
+        
+        # 提取CTP血管分类信息
+        occlusion_data = structured_data.get("occlusion_classification", {})
+        vessel_classification = "未评估"
+        vessel_confidence = "N/A"
+        vessel_clinical_significance = "暂无数据"
+        vessel_treatment_suggestion = "需结合临床判断"
+        
+        if occlusion_data and occlusion_data.get("success"):
+            class_name = occlusion_data.get("class_name", "未分类")
+            confidence = occlusion_data.get("confidence", 0)
+            
+            # 中文映射
+            class_name_cn = {
+                "无阻塞": "无明显血管狭窄",
+                "LVO": "大血管闭塞（LVO）",
+                "MEVO": "小血管病变"
+            }.get(class_name, class_name)
+            
+            vessel_classification = class_name_cn
+            vessel_confidence = f"{confidence * 100:.1f}%"
+            
+            # 临床意义
+            if class_name == "无阻塞":
+                vessel_clinical_significance = "大血管通畅，无明显闭塞征象。建议关注小血管病变及其他可能的病因。"
+                vessel_treatment_suggestion = "不建议血管内治疗，关注内科治疗和二级预防。"
+            elif class_name == "LVO":
+                vessel_clinical_significance = "检测到大血管闭塞，可能适合血管内治疗。建议结合临床症状和时间窗判断。"
+                vessel_treatment_suggestion = "符合适应症的患者可考虑血管内取栓治疗（机械取栓）。"
+            elif class_name == "MEVO":
+                vessel_clinical_significance = "检测到小血管病变征象，可能为慢性小血管性脑病或腔隙性梗死。"
+                vessel_treatment_suggestion = "主要为内科治疗，加强危险因素控制和二级预防。"
 
         # 准备 Prompt
         if output_format == "json":
@@ -680,6 +744,10 @@ def generate_report_with_baichuan(
                 penumbra_volume=structured_data.get("penumbra_volume", "N/A"),
                 mismatch_ratio=structured_data.get("mismatch_ratio", "N/A"),
                 hemisphere=structured_data.get("hemisphere", "未记录"),
+                vessel_classification=vessel_classification,
+                vessel_confidence=vessel_confidence,
+                vessel_clinical_significance=vessel_clinical_significance,
+                vessel_treatment_suggestion=vessel_treatment_suggestion,
             )
         else:
             from datetime import datetime
@@ -695,6 +763,10 @@ def generate_report_with_baichuan(
                 penumbra_volume=structured_data.get("penumbra_volume", "N/A"),
                 mismatch_ratio=structured_data.get("mismatch_ratio", "N/A"),
                 hemisphere=structured_data.get("hemisphere", "未记录"),
+                vessel_classification=vessel_classification,
+                vessel_confidence=vessel_confidence,
+                vessel_clinical_significance=vessel_clinical_significance,
+                vessel_treatment_suggestion=vessel_treatment_suggestion,
             )
 
         # 检查 API Key
@@ -794,13 +866,30 @@ def generate_mock_report(structured_data: dict, output_format: str = "markdown")
     penumbra_volume = structured_data.get("penumbra_volume", 0)
     mismatch_ratio = structured_data.get("mismatch_ratio", 0)
     hemisphere = structured_data.get("hemisphere", "both")
+    
+    # 提取CTP血管分类信息
+    occlusion_data = structured_data.get("occlusion_classification", {})
+    vessel_info = "未评估"
+    vessel_suggestion = "需结合临床判断"
+    
+    if occlusion_data and occlusion_data.get("success"):
+        class_name = occlusion_data.get("class_name", "未分类")
+        confidence = occlusion_data.get("confidence", 0)
+        vessel_info = f"{class_name}（置信度：{confidence * 100:.1f}%）"
+        
+        if class_name == "LVO":
+            vessel_suggestion = "检测到大血管闭塞，建议评估血管内取栓治疗适应症"
+        elif class_name == "MEVO":
+            vessel_suggestion = "检测到小血管病变，建议内科治疗为主"
+        else:
+            vessel_suggestion = "大血管通畅，建议关注其他病因"
 
     mock_report = f"""影像诊断报告
 
 患者ID: {patient_id}
 
 检查方法:
-头颅 CT 平扫 (NCCT) + 三期 CTA (mCTA: 动脉期/静脉期/延迟期)
+头颅 CT 平扫 (NCCT) + 三期 CTA (mCTA: 动脉期/静脉期/延迟期) + CTP灌注成像 + AI辅助血管分析
 
 影像学表现:
 1. 核心梗死体积约 {core_volume} ml
@@ -808,13 +897,17 @@ def generate_mock_report(structured_data: dict, output_format: str = "markdown")
 3. 不匹配比值约 {mismatch_ratio}
 4. 偏侧: {hemisphere}
 
+血管评估:
+CTP血管堵塞AI分类结果: {vessel_info}
+
 诊断意见:
-提示急性缺血性卒中影像改变，建议结合临床与后续检查综合判断。
+提示急性缺血性卒中影像改变，结合血管评估结果，建议结合临床与后续检查综合判断。
 
 治疗建议:
-1. 结合时间窗评估再灌注治疗机会
-2. 完善血管与灌注信息
-3. 动态监测神经功能评分
+1. {vessel_suggestion}
+2. 结合时间窗评估再灌注治疗机会
+3. 完善血管与灌注信息
+4. 动态监测神经功能评分
 """
 
     if output_format == "json":
@@ -3494,17 +3587,40 @@ def _tool_classify_vessel_occlusion(run):
         summary = result.get("summary", {})
         interpretation = _interpret_vessel_classification(summary)
         
-        # 简化输出，只显示关键信息
-        return (
-            True,
-            {
-                "血管分类": interpretation.get("finding", "未分类"),
-                "置信度": f"{summary.get('confidence_mean', 0):.2%}",
-                "临床意义": interpretation.get("clinical_significance", "-"),
-                "治疗建议": interpretation.get("treatment_suggestion", "-"),
-            },
-            None,
-        )
+        # 提取原始数据
+        dominant_class = summary.get("dominant_class", "")
+        confidence_mean = summary.get("confidence_mean", 0)
+        
+        # 映射class名称
+        class_name_map = {
+            "Class_0": "无阻塞",
+            "Class_1_LVO": "LVO",
+            "Class_2_MEVO": "MEVO"
+        }
+        class_name = class_name_map.get(dominant_class, dominant_class)
+        
+        # 构建完整输出（包含原始数据和展示数据）
+        structured_output = {
+            # 用户展示字段（中文）
+            "血管分类": interpretation.get("finding", "未分类"),
+            "置信度": f"{confidence_mean:.2%}",
+            "临床意义": interpretation.get("clinical_significance", "-"),
+            "治疗建议": interpretation.get("treatment_suggestion", "-"),
+            
+            # EKV/校验所需的原始字段（与occlusion_classifier.analyze_occlusion格式一致）
+            "success": True,
+            "class_id": summary.get("class_id", -1),
+            "class_name": class_name,
+            "confidence": float(confidence_mean),
+            "dominant_class": dominant_class,
+            
+            # 额外信息
+            "probabilities": summary.get("probabilities", {}),
+            "top_k_used": summary.get("top_k_used", 0),
+            "total_slices": summary.get("total_slices", 0),
+        }
+        
+        return (True, structured_output, None)
     
     except ImportError as e:
         return (

@@ -15,6 +15,7 @@ HIGH_RISK_CLAIM_IDS = {
     "mismatch_ratio",
     "significant_mismatch",
     "treatment_window_notice",
+    "vessel_occlusion_classification",
 }
 
 
@@ -72,6 +73,7 @@ def _citation_for_claim(claim_id: str, verdict: str, message: str) -> Dict[str, 
         "mismatch_ratio": "internal_guideline:mismatch_ratio_v1",
         "significant_mismatch": "internal_guideline:mismatch_presence_v1",
         "treatment_window_notice": "internal_guideline:time_window_v1",
+        "vessel_occlusion_classification": "internal_guideline:vessel_classification_ai_v1",
     }
     return {
         "evidence_id": str(uuid.uuid4()),
@@ -362,6 +364,104 @@ def evaluate_ekv(
             "Treatment-window notice is guideline-aligned.",
             "not_supported",
             f"Onset-to-admission={onset_to_admission_hours:.1f}h is outside routine reperfusion windows.",
+        )
+
+    # Claim 7: vessel_occlusion_classification (CTP血管分类)
+    occlusion_result = (analysis_result or {}).get("occlusion_classification")
+    
+    # 调试：打印analysis_result中是否有occlusion_classification
+    if occlusion_result:
+        print(f"[EKV] Found occlusion_classification in analysis_result: success={occlusion_result.get('success')}, class={occlusion_result.get('class_name')}")
+    else:
+        print(f"[EKV] occlusion_classification not found in analysis_result, searching tool_results...")
+    
+    # 如果analysis_result中没有，尝试从tool_results中提取
+    if not occlusion_result and tool_results:
+        for tr in tool_results:
+            if tr.get("status") == "completed":
+                tool_name = (tr.get("tool_name") or "").lower()
+                
+                # 方法1：从classify_vessel_occlusion工具直接获取
+                if tool_name == "classify_vessel_occlusion":
+                    so = tr.get("structured_output") or {}
+                    # 工具输出就是occlusion_classification数据
+                    if so.get("success"):
+                        occlusion_result = so
+                        print(f"[EKV] Found occlusion data from classify_vessel_occlusion tool: class={so.get('class_name')}")
+                        break
+                
+                # 方法2：从run_stroke_analysis工具获取（原有逻辑）
+                if tool_name == "run_stroke_analysis":
+                    so = tr.get("structured_output") or {}
+                    occlusion_result = so.get("occlusion_classification")
+                    if not occlusion_result:
+                        # 尝试从嵌套的analysis_result中提取
+                        nested_analysis = so.get("analysis_result") or {}
+                        occlusion_result = nested_analysis.get("occlusion_classification")
+                    if occlusion_result:
+                        print(f"[EKV] Found occlusion data from run_stroke_analysis tool")
+                        break
+    
+    if occlusion_result and isinstance(occlusion_result, dict) and occlusion_result.get("success"):
+        class_name = str(occlusion_result.get("class_name", "")).strip()
+        confidence = _safe_float(occlusion_result.get("confidence"))
+        
+        # 检查与ICV R6的一致性
+        r6_status = icv_finding_status_map.get("R6_vessel_classification")
+        
+        if confidence is not None and confidence < 0.5:
+            verdict = "partially_supported"
+            message = f"CTP血管分类结果为 {class_name}，但置信度较低 ({confidence:.2%})，建议人工复核"
+        elif r6_status == "fail":
+            verdict = "not_supported"
+            message = f"CTP血管分类结果 {class_name} 与ICV规则校验冲突"
+        elif r6_status == "warn":
+            verdict = "partially_supported"
+            message = f"CTP血管分类结果 {class_name} 存在一致性风险 (置信度: {confidence:.2%})"
+        else:
+            # 检查与定量参数的逻辑一致性
+            if class_name == "LVO" and core is not None and penumbra is not None:
+                # LVO通常提示需要机械取栓，应有较大病灶或显著不匹配
+                total_lesion = core + penumbra
+                if total_lesion > 10 or (mismatch_ratio is not None and mismatch_ratio > 1.8):
+                    verdict = "supported"
+                    message = f"CTP血管分类 {class_name} (置信度: {confidence:.2%}) 与定量参数（总病灶: {total_lesion:.1f}ml）一致，符合LVO特征"
+                else:
+                    verdict = "partially_supported"
+                    message = f"CTP血管分类 {class_name}，但定量参数（总病灶: {total_lesion:.1f}ml）提示病灶较小，建议复核"
+            elif class_name == "无阻塞" and core is not None:
+                if core < 20:
+                    verdict = "supported"
+                    message = f"CTP血管分类 {class_name} (置信度: {confidence:.2%}) 与核心梗死体积 ({core:.1f}ml) 一致"
+                else:
+                    verdict = "partially_supported"
+                    message = f"CTP血管分类 {class_name}，但核心梗死体积较大 ({core:.1f}ml)，建议复核血管状态"
+            elif class_name == "MEVO":
+                verdict = "supported"
+                message = f"CTP血管分类为小血管病变 (置信度: {confidence:.2%})，符合MEVO特征"
+            else:
+                verdict = "supported"
+                message = f"CTP血管分类结果 {class_name} (置信度: {confidence:.2%}) 可用"
+        
+        append_claim(
+            "vessel_occlusion_classification",
+            "脑血管闭塞程度分级符合影像学特征",
+            verdict,
+            message,
+        )
+    elif occlusion_result and not occlusion_result.get("success"):
+        append_claim(
+            "vessel_occlusion_classification",
+            "脑血管闭塞程度分级符合影像学特征",
+            "unavailable",
+            f"血管闭塞分级失败: {occlusion_result.get('error', '未知错误')}",
+        )
+    else:
+        append_claim(
+            "vessel_occlusion_classification",
+            "脑血管闭塞程度分级符合影像学特征",
+            "unavailable",
+            "血管闭塞分级结果不可用，请确认已执行脑卒中分析并生成CTP灌注图",
         )
 
     verdicts = [c["verdict"] for c in claims]

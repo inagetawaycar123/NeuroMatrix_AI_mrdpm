@@ -14,7 +14,7 @@ from scipy import ndimage
 import json
 import re
 import time
-from occlusion_classifier import analyze_occlusion
+from occlusion_classifier import analyze_occlusion, generate_case_gradcam_visualizations
 
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -695,7 +695,29 @@ def auto_analyze_stroke(case_id, patient_id=None):
 
         print("start stroke analysis execution...")
         analysis_result = analyze_stroke_case(case_id, parsed_hemisphere, use_real_ctp=use_real_ctp)
+        
+        # 执行血管堵塞分类并生成GradCAM可视化
+        print("[Info] Performing vessel occlusion classification...")
         occlusion_result = analyze_occlusion(case_id)
+        
+        # 生成GradCAM可视化
+        try:
+            print("[Info] Generating GradCAM visualizations...")
+            gradcam_result = generate_case_gradcam_visualizations(case_id)
+            
+            # 将分类结果和GradCAM结果合并
+            if gradcam_result.get("success"):
+                occlusion_result["gradcam_visualizations"] = gradcam_result.get("gradcam_visualizations", [])
+                occlusion_result["gradcam_output_dir"] = gradcam_result.get("output_dir", "")
+                print(f"[OK] GradCAM visualizations generated: {len(gradcam_result.get('gradcam_visualizations', []))} files")
+            else:
+                print(f"[WARN] GradCAM visualization failed: {gradcam_result.get('error', 'Unknown error')}")
+        except Exception as e:
+            print(f"[WARN] GradCAM visualization error: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            # 即使GradCAM失败，也继续保存分类结果
+        
         analysis_result["occlusion_classification"] = occlusion_result
         if analysis_result.get("success"):
             print("[OK] stroke analysis succeeded")

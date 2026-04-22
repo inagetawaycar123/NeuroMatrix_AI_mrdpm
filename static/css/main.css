@@ -1415,6 +1415,49 @@ body { font-family:Arial, sans-serif; font-size:12px; background:#000; color:#ff
 @media (max-width: 1400px) { .image-grid { grid-template-columns: repeat(3,1fr); grid-template-rows: repeat(3,1fr); } }
 @media (max-width: 1200px) { .image-grid { grid-template-columns: repeat(2,1fr); grid-template-rows: repeat(4,1fr); } }
 
+/* CTP血管分类样式 */
+#ctpClassificationSection .metric-value {
+    font-weight: 600;
+}
+
+#ctp-class-name {
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+#ctp-confidence {
+    font-weight: 700;
+}
+
+#ctp-clinical-significance,
+#ctp-treatment-suggestion {
+    font-weight: 400;
+    word-wrap: break-word;
+}
+
+/* GradCAM可视化样式 */
+#gradcamVisualizationSection .result-images {
+    grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+}
+
+#gradcamVisualizationSection .result-img-cell {
+    background: #1a1a1a;
+    border: 1px solid #2a2a2a;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+#gradcamVisualizationSection .result-img-cell:hover {
+    border-color: #00a8ff;
+}
+
+#gradcamVisualizationSection .result-img-label {
+    font-size: 8px;
+    font-weight: 600;
+    padding: 2px 4px;
+}
+
 /* 打印样式 */
 @media print {
     body { background: white !important; color: #000 !important; }
