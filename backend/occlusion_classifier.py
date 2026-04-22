@@ -28,7 +28,35 @@ CLASS_NAMES = [
 # ============================================================
 
 def load_backbone(weights, model_name, repo_dir):
-    return torch.hub.load(repo_dir, model_name, source='local', weights=weights)
+    """加载DINOv3 backbone，避免termcolor依赖问题"""
+    import sys
+    
+    # Mock termcolor to avoid import issues
+    if 'termcolor' not in sys.modules:
+        sys.modules['termcolor'] = type(sys)('mock_termcolor')
+        sys.modules['termcolor'].colored = lambda text, color=None, on_color=None, attrs=None: str(text)
+    
+    try:
+        model = torch.hub.load(
+            repo_dir, 
+            model_name, 
+            source='local', 
+            pretrained=False  # 不自动加载预训练权重
+        )
+        
+        # 如果提供了权重文件，手动加载
+        if weights and os.path.exists(weights):
+            print(f"[DINOv3] Loading pretrained weights from: {weights}")
+            state_dict = torch.load(weights, map_location='cpu')
+            model.load_state_dict(state_dict, strict=False)
+            print(f"[DINOv3] Pretrained weights loaded successfully")
+        
+        return model
+    except Exception as e:
+        print(f"[DINOv3] Loading failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
 
 
 class CAMClassifier(nn.Module):
@@ -91,20 +119,20 @@ class OcclusionModelManager:
 
         model_path = os.path.join(
             PROJECT_ROOT,
-            "dinov3",
+            "exp_dinov3",
             "src",
             "dinov3权重.pth"
         )
 
         dinov3_weights = os.path.join(
             PROJECT_ROOT,
-            "dinov3",
+            "exp_dinov3",
             "src",
             "ckpt",
             "dinov3_vitb16_pretrain_lvd1689m-73cec8be.pth"
         )
 
-        repo_dir = os.path.join(PROJECT_ROOT, "dinov3")
+        repo_dir = os.path.join(PROJECT_ROOT, "exp_dinov3", "src", "dinov3")
 
         print("加载血管堵塞分类模型...")
 
