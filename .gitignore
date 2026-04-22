@@ -42,3 +42,6 @@ MedGemma_Model/example/
 
 # 三分类权重
 backend/three_class/best_model.pt
+
+# .idea
+.idea/

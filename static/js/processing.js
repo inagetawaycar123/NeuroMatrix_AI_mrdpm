@@ -29,7 +29,7 @@ const TEMPLATES = Object.freeze({
     archive_ready: ["系统已接收病例并创建会话。", "归集 patient_id 与 file_id。", "确保全流程同一病例上下文。"],
     modality_detect: ["系统正在识别可用模态。", "判断可执行分析路径。", "避免输入缺失导致误判。"],
     three_class: ["系统正在执行 NCCT 三分类。", "同步生成 Grad-CAM 解释图。", "为后续临床判读提供快速分诊参考。"],
-    ctp_generate: ["系统正在生成 CBF/CBV/Tmax 图谱。", "输出灌注核心参数。", "支撑缺血核心与半暗带判断。"],
+    ctp_generate: ["系统将在三分类完成后启动 CTP 生成。", "输出 CBF/CBV/Tmax 灌注核心参数。", "支撑缺血核心与半暗带判断。"],
     stroke_analysis: ["系统正在做病灶分割与体积评估。", "计算病灶侧别与关键指标。", "形成治疗决策依据。"],
     ai_report: ["系统正在组装结构化报告。", "汇总推理证据与关键结论。", "减少医生重复录入负担。"],
     icv: ["系统正在执行 ICV 核验。", "检查关键指标一致性。", "降低指标冲突风险。"],
@@ -591,12 +591,16 @@ function buildNodes() {
     const nodes = [];
     const jobSteps = Object.create(null); (state.latestJob?.steps || []).forEach((s) => { if (s?.key) jobSteps[s.key] = s; });
     const runSteps = Object.create(null); (state.latestRun?.steps || []).forEach((s) => { if (s?.key) runSteps[s.key] = s; });
+    const threeClassStatus = normStatus(jobSteps.three_class?.status || "pending");
     UPLOAD_NODES.forEach((cfg, idx) => {
         const h = cfg.delegated ? state.hints[cfg.delegated] : null;
         const runStep = cfg.delegated ? runSteps[cfg.delegated] : null;
         const jobStep = jobSteps[cfg.key] || null;
         const status = normStatus(h?.status || runStep?.status || jobStep?.status || "pending");
-        const fallback = t((runStep && runStep.message) || (jobStep && jobStep.message), status === "pending" ? "节点未开始" : status === "running" ? "节点处理中" : status === "waiting" ? "等待人工确认" : status === "completed" ? "节点已完成" : "节点执行异常");
+        const fallbackDefault = status === "pending" ? "节点未开始" : status === "running" ? "节点处理中" : status === "waiting" ? "等待人工确认" : status === "completed" ? "节点已完成" : "节点执行异常";
+        const fallback = cfg.key === "ctp_generate" && status === "pending" && threeClassStatus !== "completed"
+            ? "等待 NCCT 三分类完成后启动"
+            : t((runStep && runStep.message) || (jobStep && jobStep.message), fallbackDefault);
         const inputDefault = cfg.key === "archive_ready" ? { patient_id: state.patientId || "-", file_id: state.fileId || "-" } : cfg.key === "modality_detect" ? { available_modalities: modalities() } : cfg.key === "ai_report" ? { goal_question: t(state.latestRun?.planner_input?.goal_question || state.latestRun?.planner_input?.question) } : { run_id: state.runId, tool_name: cfg.delegated || cfg.key };
         nodes.push({
             id: `upload_${cfg.key}`, key: cfg.key, title: cfg.title, subtitle: cfg.subtitle, chip: cfg.chip, status, group: "upload", order: idx + 1,

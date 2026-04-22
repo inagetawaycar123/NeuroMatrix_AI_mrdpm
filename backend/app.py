@@ -1220,13 +1220,19 @@ def _build_three_class_view(file_id, rgb_files):
             payload["summary"]["display"] = "三分类失败"
             return payload
 
+        predictions = inference.get("predictions") or []
         by_index = {}
-        for item in inference.get("predictions") or []:
+        for item in predictions:
             idx = _slice_index_from_name(item.get("slice_file"))
             if idx is not None:
                 by_index[idx] = item
 
         counts = {"normal": 0, "hemo": 0, "infarct": 0}
+        for item in predictions:
+            label = str(item.get("pred_label") or "").strip().lower()
+            if label in counts:
+                counts[label] += 1
+
         for slice_item in rgb_files or []:
             slice_idx = slice_item.get("slice_index")
             pred = by_index.get(slice_idx)
@@ -1238,8 +1244,6 @@ def _build_three_class_view(file_id, rgb_files):
 
             label = str(pred.get("pred_label") or "").strip().lower()
             confidence = float(pred.get("confidence") or 0.0)
-            if label in counts:
-                counts[label] += 1
 
             slice_item["three_class_label"] = label
             slice_item["three_class_label_cn"] = _THREE_CLASS_LABEL_CN.get(label, label)
@@ -1250,10 +1254,13 @@ def _build_three_class_view(file_id, rgb_files):
             display_parts.append(f"{_THREE_CLASS_LABEL_CN[key]} {counts[key]}")
 
         payload["success"] = True
+        payload["predictions"] = predictions
         payload["summary"] = {
             "display": " | ".join(display_parts),
             "counts": counts,
-            "total_slices": int(inference.get("total_slices") or len(rgb_files or [])),
+            "total_slices": int(
+                inference.get("total_slices") or len(predictions) or len(rgb_files or [])
+            ),
             "output": inference.get("output") or {},
         }
         return payload
@@ -1292,6 +1299,27 @@ def _invoke_internal_upload(payload):
             if not result.get("success"):
                 return False, result.get("error", "涓婁紶澶勭悊澶辫触"), result
             return True, "ok", result
+
+
+def _attach_three_class_to_rgb_files(rgb_files, predictions):
+    by_index = {}
+    for item in predictions or []:
+        idx = _slice_index_from_name(item.get("slice_file"))
+        if idx is not None:
+            by_index[idx] = item
+
+    for slice_item in rgb_files or []:
+        pred = by_index.get(slice_item.get("slice_index"))
+        if not pred:
+            slice_item["three_class_label"] = ""
+            slice_item["three_class_label_cn"] = ""
+            slice_item["three_class_confidence"] = 0.0
+            continue
+
+        label = str(pred.get("pred_label") or "").strip().lower()
+        slice_item["three_class_label"] = label
+        slice_item["three_class_label_cn"] = _THREE_CLASS_LABEL_CN.get(label, label)
+        slice_item["three_class_confidence"] = float(pred.get("confidence") or 0.0)
 
 
 def _invoke_internal_generate_report(patient_id, file_id):
@@ -1354,27 +1382,23 @@ def _run_upload_processing_job(job_id, payload):
         should_ctp_generate = can_mcta and not has_real_ctp
         should_stroke = can_mcta
 
-        if should_ctp_generate:
-            _update_step(
-                job_id, "ctp_generate", "running", "正在基于 mCTA 生成 CTP 灌注图"
-            )
-        else:
-            reason = (
-                "已上传真实 CTP 数据，无需生成"
-                if has_real_ctp
-                else "当前模态不支持 CTP 生成"
-            )
-            _update_step(job_id, "ctp_generate", "skipped", reason)
+        _update_step(job_id, "three_class", "running", "正在执行 NCCT 三分类与 Grad-CAM")
 
         ok, upload_msg, upload_result = _invoke_internal_upload(payload)
         if not ok:
             _update_step(job_id, "three_class", "failed", upload_msg)
             if should_ctp_generate:
                 _update_step(job_id, "ctp_generate", "failed", upload_msg)
+            else:
+                reason = (
+                    "已上传真实 CTP 数据，无需生成"
+                    if has_real_ctp
+                    else "当前模态不支持 CTP 生成"
+                )
+                _update_step(job_id, "ctp_generate", "skipped", reason)
             _set_job_status(job_id, "failed", upload_msg)
             return
 
-        _update_step(job_id, "three_class", "running", "正在执行 NCCT 三分类与 Grad-CAM")
         three_class_summary = (upload_result or {}).get("three_class_summary") or {}
         rgb_files = (upload_result or {}).get("rgb_files") or []
         gradcam_status = (
@@ -1424,6 +1448,9 @@ def _run_upload_processing_job(job_id, payload):
             _add_job_warning(job_id, f"three_class degraded: {fail_msg}")
 
         if should_ctp_generate:
+            _update_step(
+                job_id, "ctp_generate", "running", "三分类完成，开始基于 mCTA 生成 CTP 灌注图"
+            )
             has_complete_ctp = _result_has_ctp_images(upload_result)
             if not has_complete_ctp:
                 ctp_error = (
@@ -1433,6 +1460,13 @@ def _run_upload_processing_job(job_id, payload):
                 _set_job_status(job_id, "failed", ctp_error)
                 return
             _update_step(job_id, "ctp_generate", "completed", "CTP 灌注图生成完成")
+        else:
+            reason = (
+                "已上传真实 CTP 数据，无需生成"
+                if has_real_ctp
+                else "当前模态不支持 CTP 生成"
+            )
+            _update_step(job_id, "ctp_generate", "skipped", reason)
 
         if should_stroke:
             _update_step(job_id, "stroke_analysis", "running", "正在执行脑卒中自动分析")
@@ -10102,8 +10136,16 @@ def upload_files():
                 }
             )
         else:
+            # 先完成 NCCT 三分类，再进入 CTP 相关推理
+            print("开始执行 NCCT 三分类与 Grad-CAM（先于 CTP 推理）...")
+            three_class_view = _build_three_class_view(file_id, [])
+            if not three_class_view.get("success"):
+                err = three_class_view.get("error") or "NCCT 三分类失败，已阻止 CTP 推理"
+                print(f"[ERROR] {err}")
+                return jsonify({"success": False, "error": err})
+
             # 处理 RGB 合成并执行多模型 AI 推理
-            print("开始处理 RGB 合成和多模型 AI 推理...")
+            print("NCCT 三分类完成，开始处理 RGB 合成和多模型 AI 推理...")
             result = process_rgb_synthesis(
                 mcta_path, vcta_path, dcta_path, ncct_path, output_dir, model_type
             )
@@ -10111,13 +10153,10 @@ def upload_files():
             if result["success"]:
                 print("RGB 合成和多模型 AI 推理处理成功")
 
-                three_class_view = _build_three_class_view(
-                    file_id, result.get("rgb_files") or []
+                _attach_three_class_to_rgb_files(
+                    result.get("rgb_files") or [],
+                    three_class_view.get("predictions") or [],
                 )
-                if not three_class_view.get("success"):
-                    print(
-                        f"[WARN] three_class inference failed: {three_class_view.get('error')}"
-                    )
 
                 # 自动触发脑卒中分析（如果满足条件）
                 if patient_id and not defer_stroke_analysis:

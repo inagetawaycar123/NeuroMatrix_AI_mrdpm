@@ -11,6 +11,8 @@ from PIL import Image, ImageDraw
 from torch import nn
 from torchvision import models, transforms
 
+from .preprocess import ensure_ncct_png_slices
+
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(os.path.dirname(BACKEND_DIR))
@@ -153,6 +155,17 @@ def generate_gradcam(file_id, output_base_dir=None):
             return {
                 "success": False,
                 "error": f"Model checkpoint not found: {MODEL_PATH}",
+                "file_id": str(file_id),
+            }
+
+        prep_result = ensure_ncct_png_slices(
+            str(file_id),
+            output_base_dir=output_base_dir,
+        )
+        if not prep_result.get("success"):
+            return {
+                "success": False,
+                "error": prep_result.get("error") or "NCCT preprocessing failed",
                 "file_id": str(file_id),
             }
 
