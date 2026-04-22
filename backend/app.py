@@ -1449,6 +1449,7 @@ AGENT_TOOL_SEQUENCE_MAP = {
         "detect_modalities",
         "load_patient_context",
         "generate_ctp_maps",
+        "classify_vessel_occlusion",
         "run_stroke_analysis",
         "icv",
         "ekv",
@@ -1469,6 +1470,7 @@ AGENT_TOOL_SEQUENCE_MAP = {
 POST_UPLOAD_SUMMARY_TOOL_SEQUENCE = [
     "detect_modalities",
     "load_patient_context",
+    "classify_vessel_occlusion",
     "run_stroke_analysis",
     "icv",
     "ekv",
@@ -1478,6 +1480,7 @@ POST_UPLOAD_SUMMARY_TOOL_SEQUENCE = [
 
 AGENT_TOOL_RETRY_LIMITS = {
     "generate_ctp_maps": 1,
+    "classify_vessel_occlusion": 1,
     "run_stroke_analysis": 1,
     "ekv": 1,
     "consensus_lite": 1,
@@ -1495,6 +1498,7 @@ AGENT_TOOL_LABELS = {
     "detect_modalities": "Case_Intake.parse()",
     "load_patient_context": "Image_QC.validate()",
     "generate_ctp_maps": "MRDPM_Generate.run()",
+    "classify_vessel_occlusion": "Vessel_Classification.classify()",
     "run_stroke_analysis": "Stroke_Analysis.segment()",
     "icv": "Evidence_Check.icv()",
     "ekv": "Evidence_Check.ekv()",
@@ -1506,6 +1510,7 @@ AGENT_TOOL_DESCRIPTIONS = {
     "detect_modalities": "识别病例模态组合并确定任务路径",
     "load_patient_context": "加载病例上下文并完成输入校验",
     "generate_ctp_maps": "按需生成 CTP 灌注图谱",
+    "classify_vessel_occlusion": "血管堵塞三分类分析（大血管闭塞/小血管病变/无明显狭窄）",
     "run_stroke_analysis": "执行卒中定量分析并产出关键指标",
     "icv": "执行内在一致性校验",
     "ekv": "执行外部证据与指南核验",
@@ -3435,6 +3440,200 @@ def _tool_generate_ctp_maps(run):
     )
 
 
+def _tool_classify_vessel_occlusion(run):
+    """
+    血管堵塞三分类工具
+    使用DINOv3模型对CTP图像进行分类：
+    - Class_0: 无明显狭窄
+    - Class_1_LVO: 大血管闭塞 (Large Vessel Occlusion)
+    - Class_2_MEVO: 小血管病变 (Medium/Small Vessel Disease)
+    """
+    planner_input = run.get("planner_input") or {}
+    file_id = planner_input.get("file_id")
+    patient_id = planner_input.get("patient_id")
+    
+    if not file_id or not patient_id:
+        return (
+            False,
+            None,
+            _tool_error_contract("TOOL_INPUT_INVALID", "Missing patient_id or file_id"),
+        )
+    
+    # 确保file_id和patient_id是字符串类型
+    file_id = str(file_id)
+    patient_id = str(patient_id)
+    
+    try:
+        # 导入DINOv3预测模块
+        import sys
+        dinov3_path = os.path.join(os.path.dirname(__file__), '..', 'exp_dinov3', 'src')
+        if dinov3_path not in sys.path:
+            sys.path.insert(0, dinov3_path)
+        
+        from predict_ctp import predict_ctp_sequence
+        
+        # 查找CTP图像文件夹
+        ctp_folder = _find_ctp_folder(file_id, patient_id)
+        if not ctp_folder or not os.path.exists(ctp_folder):
+            return (
+                False,
+                None,
+                _tool_error_contract(
+                    "TOOL_DEPENDENCY_MISSING",
+                    "CTP images folder not found. Please run generate_ctp_maps first.",
+                ),
+            )
+        
+        # 执行预测
+        result = predict_ctp_sequence(
+            ctp_folder=ctp_folder,
+            output_json=None,
+            verbose=False
+        )
+        
+        summary = result.get("summary", {})
+        interpretation = _interpret_vessel_classification(summary)
+        
+        # 简化输出，只显示关键信息
+        return (
+            True,
+            {
+                "血管分类": interpretation.get("finding", "未分类"),
+                "置信度": f"{summary.get('confidence_mean', 0):.2%}",
+                "临床意义": interpretation.get("clinical_significance", "-"),
+                "治疗建议": interpretation.get("treatment_suggestion", "-"),
+            },
+            None,
+        )
+    
+    except ImportError as e:
+        return (
+            False,
+            None,
+            _tool_error_contract(
+                "TOOL_DEPENDENCY_MISSING",
+                f"DINOv3 model not available: {str(e)}",
+            ),
+        )
+    except Exception as e:
+        return (
+            False,
+            None,
+            _tool_error_contract(
+                "TOOL_EXECUTION_FAILED",
+                f"Vessel classification failed: {str(e)}",
+            ),
+        )
+
+
+def _find_ctp_folder(file_id, patient_id):
+    """查找CTP图像文件夹"""
+    # 确保参数是字符串类型
+    file_id = str(file_id)
+    patient_id = str(patient_id)
+    
+    print(f"[Vessel Classification] Searching CTP folder for file_id={file_id}, patient_id={patient_id}")
+    
+    # 优先查找processed目录（系统生成的CTP图像位置）
+    processed_path = os.path.join("static", "processed", file_id)
+    if os.path.exists(processed_path):
+        try:
+            files = os.listdir(processed_path)
+            # 查找tmax图像（用于血管分类）
+            tmax_images = [f for f in files if '_tmax.png' in f.lower() and not 'pseudocolor' in f.lower()]
+            if tmax_images:
+                print(f"[Vessel Classification] Found {len(tmax_images)} Tmax images in: {processed_path}")
+                return processed_path
+            
+            # 如果没有tmax，查找cbf或cbv
+            ctp_images = [f for f in files if any(marker in f.lower() for marker in ['_cbf.png', '_cbv.png', '_tmax.png']) 
+                         and not 'pseudocolor' in f.lower()]
+            if ctp_images:
+                print(f"[Vessel Classification] Found {len(ctp_images)} CTP images in: {processed_path}")
+                return processed_path
+        except Exception as e:
+            print(f"[Vessel Classification] Error accessing {processed_path}: {e}")
+    
+    # 尝试其他可能的路径
+    base_paths = [
+        os.path.join("static", "uploads", patient_id, file_id),
+        os.path.join("uploads", patient_id, file_id),
+        os.path.join("static", "uploads", file_id),
+        os.path.join("static", "uploads", patient_id),
+    ]
+    
+    for base_path in base_paths:
+        print(f"[Vessel Classification] Checking base_path: {base_path}")
+        
+        # 查找CTP相关文件夹
+        ctp_folders = ["ctp", "tmax", "cbf", "cbv", "CTP", "Tmax", "CBF", "CBV"]
+        for folder_name in ctp_folders:
+            ctp_path = os.path.join(base_path, folder_name)
+            if os.path.exists(ctp_path):
+                # 检查是否包含图像文件
+                try:
+                    files = os.listdir(ctp_path)
+                    image_files = [f for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tif'))]
+                    if image_files:
+                        print(f"[Vessel Classification] Found CTP folder with {len(image_files)} images: {ctp_path}")
+                        return ctp_path
+                except Exception as e:
+                    print(f"[Vessel Classification] Error accessing {ctp_path}: {e}")
+                    continue
+        
+        # 如果base_path本身包含CTP图像
+        if os.path.exists(base_path):
+            try:
+                files = os.listdir(base_path)
+                image_files = [f for f in files if f.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tif'))]
+                if image_files:
+                    print(f"[Vessel Classification] Found {len(image_files)} images in base_path: {base_path}")
+                    return base_path
+            except Exception as e:
+                print(f"[Vessel Classification] Error accessing {base_path}: {e}")
+                continue
+    
+    print(f"[Vessel Classification] CTP folder not found for file_id={file_id}, patient_id={patient_id}")
+    return None
+
+
+def _interpret_vessel_classification(summary):
+    """解释血管分类结果的临床意义"""
+    dominant_class = summary.get("dominant_class", "")
+    confidence = summary.get("confidence_mean", 0)
+    
+    interpretations = {
+        "Class_0": {
+            "finding": "无明显血管狭窄",
+            "clinical_significance": "大血管通畅，无明显闭塞征象。建议关注小血管病变及其他可能的病因。",
+            "treatment_suggestion": "不建议血管内治疗，关注内科治疗和二级预防。",
+        },
+        "Class_1_LVO": {
+            "finding": "大血管闭塞（LVO）",
+            "clinical_significance": "检测到大血管闭塞，可能适合血管内治疗。建议结合临床症状和时间窗判断。",
+            "treatment_suggestion": "符合适应症的患者可考虑血管内取栓治疗（机械取栓）。",
+        },
+        "Class_2_MEVO": {
+            "finding": "小血管病变",
+            "clinical_significance": "检测到小血管病变征象，可能为慢性小血管性脑病或腔隙性梗死。",
+            "treatment_suggestion": "主要为内科治疗，加强危险因素控制和二级预防。",
+        },
+    }
+    
+    interpretation = interpretations.get(dominant_class, {
+        "finding": "分类未明确",
+        "clinical_significance": "血管分类结果不确定，建议人工复核。",
+        "treatment_suggestion": "建议进一步影像学评估和临床判断。",
+    })
+    
+    interpretation["confidence"] = confidence
+    interpretation["confidence_level"] = (
+        "高" if confidence >= 0.8 else "中" if confidence >= 0.6 else "低"
+    )
+    
+    return interpretation
+
+
 def _tool_run_stroke_analysis(run):
     planner_input = run.get("planner_input") or {}
     file_id = planner_input.get("file_id")
@@ -4081,6 +4280,9 @@ def _execute_agent_tool(run_id, tool_name):
         elif tool_name == "generate_ctp_maps":
             ok, output, err = _tool_generate_ctp_maps(run)
             agent_name = "Clinical Tool Agent"
+        elif tool_name == "classify_vessel_occlusion":
+            ok, output, err = _tool_classify_vessel_occlusion(run)
+            agent_name = "Vessel Classification Agent"
         elif tool_name == "run_stroke_analysis":
             ok, output, err = _tool_run_stroke_analysis(run)
             agent_name = "Clinical Tool Agent"
