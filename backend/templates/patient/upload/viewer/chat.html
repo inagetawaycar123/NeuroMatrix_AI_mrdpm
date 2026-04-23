@@ -51,7 +51,8 @@
                             <div class="kb-list" id="kb-list" style="display: none;">
                                 <div class="kb-loading" id="kb-loading">加载中...</div>
                                 <div class="kb-empty" id="kb-empty" style="display: none;">暂无文献</div>
-                                <div class="kb-items" id="kb-items"></div>
+                                <div class="kb-meta" id="kb-meta" style="display: none;"></div>
+                                <div class="kb-shelves" id="kb-shelves"></div>
                             </div>
                         </div>
                         <p class="chat-hint">支持脑卒中诊断、CTP参数解读、治疗方案建议等专业问题</p>
@@ -513,14 +514,14 @@
     position: absolute;
     left: 0;
     bottom: 36px;
-    width: 220px;
+    width: min(680px, 80vw);
     background: #0a0a0a;
     border: 1px solid #333;
-    border-radius: 6px;
-    padding: 8px;
+    border-radius: 10px;
+    padding: 10px;
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
     z-index: 20;
-    max-height: 200px;
+    max-height: min(60vh, 520px);
     overflow-y: auto;
 }
 
@@ -531,24 +532,110 @@
     padding: 6px 4px;
 }
 
-.kb-item-btn {
-    width: 100%;
-    background: transparent;
-    border: none;
-    color: #9fe6ff;
-    text-align: left;
-    padding: 6px 4px;
-    font-size: 12px;
-    cursor: pointer;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+.kb-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 8px 0 10px;
 }
 
-.kb-item-btn:hover {
+.kb-chip {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid #2f3b52;
+    color: #b8c7dd;
+    background: #0f1724;
+}
+
+.kb-shelves {
+    display: grid;
+    gap: 10px;
+}
+
+.kb-shelf {
+    border: 1px solid #273246;
+    border-radius: 8px;
+    padding: 8px;
+    background: #0c111b;
+}
+
+.kb-shelf-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+    color: #d8e6ff;
+    font-size: 12px;
+}
+
+.kb-shelf-empty {
+    margin: 0;
+    color: #7b8794;
+    font-size: 12px;
+}
+
+.kb-doc-card {
+    border: 1px solid #2b3a52;
+    border-radius: 8px;
+    padding: 8px;
+    margin-top: 8px;
+    background: #0f1724;
+}
+
+.kb-doc-title-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: flex-start;
+    margin-bottom: 6px;
+}
+
+.kb-doc-title {
+    margin: 0;
+    font-size: 13px;
+    color: #e3f0ff;
+}
+
+.kb-grade-badge {
+    font-size: 11px;
+    font-weight: 600;
+    border: 1px solid #3a4f6f;
+    border-radius: 999px;
+    padding: 2px 8px;
+    white-space: nowrap;
+}
+
+.kb-grade-s { color: #6ce3a6; border-color: #2e7f5a; }
+.kb-grade-a { color: #7cc6ff; border-color: #2f6294; }
+.kb-grade-b { color: #a6bde2; border-color: #53698c; }
+.kb-grade-c { color: #e8ca87; border-color: #8b6d2d; }
+.kb-grade-d { color: #f0a8a8; border-color: #944646; }
+
+.kb-doc-summary {
+    margin: 0 0 6px;
+    color: #9eb2cf;
+    font-size: 12px;
+    line-height: 1.4;
+}
+
+.kb-doc-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    color: #7f93b1;
+    font-size: 11px;
+    margin-bottom: 6px;
+}
+
+.kb-doc-open {
+    font-size: 12px;
+    color: #9fe6ff;
+    text-decoration: none;
+}
+
+.kb-doc-open:hover {
     color: #4facfe;
-    background: rgba(79, 172, 254, 0.1);
-    border-radius: 4px;
 }
 
 .kb-preview-overlay {
@@ -1004,31 +1091,104 @@ function renderMarkdown(content) {
 }
 
 // 知识库文献
+const KB_GRADES = ['S', 'A', 'B', 'C', 'D'];
 let kbDocs = [];
 let kbLoaded = false;
 
-function toggleKbPanel() {
-    const list = document.getElementById('kb-list');
-    if (!list) return;
-    const isOpen = list.style.display !== 'none';
-    list.style.display = isOpen ? 'none' : 'block';
+function _gradeClass(grade) {
+    const key = String(grade || 'C').toUpperCase();
+    return `kb-grade-${key.toLowerCase()}`;
 }
 
-function closeKbPanel() {
-    const list = document.getElementById('kb-list');
-    if (!list) return;
-    list.style.display = 'none';
+function _buildKbBuckets(docs) {
+    const buckets = { S: [], A: [], B: [], C: [], D: [] };
+    (docs || []).forEach(doc => {
+        const grade = String(doc?.confidence_grade || 'C').toUpperCase();
+        if (buckets[grade]) buckets[grade].push(doc);
+        else buckets.C.push(doc);
+    });
+    return buckets;
+}
+
+function _renderKbShelves() {
+    const meta = document.getElementById('kb-meta');
+    const shelves = document.getElementById('kb-shelves');
+    const empty = document.getElementById('kb-empty');
+    if (!meta || !shelves || !empty) return;
+
+    const buckets = _buildKbBuckets(kbDocs);
+    const total = kbDocs.length;
+
+    if (!total) {
+        meta.style.display = 'none';
+        shelves.innerHTML = '';
+        empty.style.display = 'block';
+        return;
+    }
+
+    empty.style.display = 'none';
+    meta.style.display = 'flex';
+    meta.innerHTML = [`<span class="kb-chip">文档 ${total}</span>`]
+        .concat(KB_GRADES.map(g => `<span class="kb-chip">${g}:${(buckets[g] || []).length}</span>`))
+        .join('');
+
+    shelves.innerHTML = KB_GRADES.map(grade => {
+        const docs = buckets[grade] || [];
+        const cards = docs.map(doc => {
+            const score = Number(doc.confidence_score || 0);
+            const pct = Number.isFinite(score) ? Math.round(score * 100) : 0;
+            const docKey = `${String(doc.source_bucket || 'kb')}::${String(doc.fileName || '')}`;
+            return `
+                <article class="kb-doc-card">
+                    <div class="kb-doc-title-row">
+                        <h5 class="kb-doc-title">${escapeHtml(String(doc.title || doc.fileName || 'Untitled'))}</h5>
+                        <span class="kb-grade-badge ${_gradeClass(grade)}">${grade} ${pct}%</span>
+                    </div>
+                    <p class="kb-doc-summary">${escapeHtml(String(doc.summary || '暂无摘要'))}</p>
+                    <div class="kb-doc-meta">
+                        <span>来源 ${escapeHtml(String(doc.source || '-'))}</span>
+                        <span>版本 ${escapeHtml(String(doc.version || '-'))}</span>
+                        <span>类型 ${escapeHtml(String(doc.doc_type || 'guideline'))}</span>
+                        <span>分桶 ${escapeHtml(String(doc.source_bucket || 'kb'))}</span>
+                    </div>
+                    <a href="${escapeHtml(String(doc.url || '#'))}" class="kb-doc-open" data-doc-key="${escapeHtml(docKey)}">打开文档</a>
+                </article>
+            `;
+        }).join('');
+
+        return `
+            <section class="kb-shelf">
+                <div class="kb-shelf-head">
+                    <strong>${grade} 级书架</strong>
+                    <span class="kb-chip">${docs.length}</span>
+                </div>
+                ${cards || '<p class="kb-shelf-empty">暂无文档</p>'}
+            </section>
+        `;
+    }).join('');
+
+    shelves.querySelectorAll('.kb-doc-open').forEach(link => {
+        link.addEventListener('click', (event) => {
+            event.preventDefault();
+            const docKey = String(link.dataset.docKey || '');
+            const doc = kbDocs.find(d => `${String(d.source_bucket || 'kb')}::${String(d.fileName || '')}` === docKey);
+            if (doc) openKbPreview(doc);
+        });
+    });
 }
 
 function loadKbDocs() {
     const loading = document.getElementById('kb-loading');
     const empty = document.getElementById('kb-empty');
-    const items = document.getElementById('kb-items');
-    if (!loading || !empty || !items) return;
+    const meta = document.getElementById('kb-meta');
+    const shelves = document.getElementById('kb-shelves');
+    if (!loading || !empty || !meta || !shelves) return;
 
     loading.style.display = 'block';
     empty.style.display = 'none';
-    items.innerHTML = '';
+    meta.style.display = 'none';
+    meta.innerHTML = '';
+    shelves.innerHTML = '';
 
     fetch('/api/kb/docs')
         .then(res => {
@@ -1037,27 +1197,48 @@ function loadKbDocs() {
         })
         .then(data => {
             kbDocs = Array.isArray(data?.docs) ? data.docs : [];
-            if (kbDocs.length === 0) {
-                empty.style.display = 'block';
-                return;
-            }
-            kbDocs.forEach(doc => {
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = 'kb-item-btn';
-                btn.textContent = doc.title || doc.fileName || '未命名文献';
-                btn.title = doc.title || doc.fileName || '';
-                btn.onclick = () => openKbPreview(doc);
-                items.appendChild(btn);
-            });
+            _renderKbShelves();
         })
         .catch(() => {
+            kbDocs = [];
+            meta.style.display = 'none';
+            shelves.innerHTML = '';
             empty.style.display = 'block';
         })
         .finally(() => {
             loading.style.display = 'none';
             kbLoaded = true;
         });
+}
+
+function handleKbOutsideClick(event) {
+    const panel = document.getElementById('kb-list');
+    const container = document.querySelector('.kb-panel');
+    if (!panel || !container) return;
+    if (!container.contains(event.target)) {
+        closeKbPanel();
+    }
+}
+
+function toggleKbPanel() {
+    const panel = document.getElementById('kb-list');
+    if (!panel) return;
+    const opening = panel.style.display !== 'block';
+    if (!opening) {
+        closeKbPanel();
+        return;
+    }
+    panel.style.display = 'block';
+    if (!kbLoaded) {
+        loadKbDocs();
+    }
+    setTimeout(() => document.addEventListener('click', handleKbOutsideClick), 0);
+}
+
+function closeKbPanel() {
+    const panel = document.getElementById('kb-list');
+    if (panel) panel.style.display = 'none';
+    document.removeEventListener('click', handleKbOutsideClick);
 }
 
 function openKbPreview(doc) {

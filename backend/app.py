@@ -9,6 +9,8 @@ import glob
 import threading
 import shutil
 import os
+import unicodedata
+from urllib.parse import quote, urlencode
 import requests  # 添加 requests 导入，用于调用百川 M3 API
 from flask import (
     Flask,
@@ -526,6 +528,13 @@ KB_PDF_DIR = os.environ.get(
     os.path.join(os.path.dirname(os.path.dirname(__file__)), "static", "kb"),
 )
 KB_PDF_URL_PREFIX = "/kb-pdfs"
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+EKV_DOCS_DIR = os.environ.get("EKV_DOCS_DIR", os.path.join(PROJECT_ROOT, "EKV_docs"))
+KB_PDF_DIRS = {"ekv": EKV_DOCS_DIR, "kb": KB_PDF_DIR}
+KB_GRADE_SCORE_DEFAULT = {"S": 0.95, "A": 0.85, "B": 0.72, "C": 0.58, "D": 0.42}
+KB_GRADE_WEIGHT_DEFAULT = {"S": 1.30, "A": 1.15, "B": 1.00, "C": 0.85, "D": 0.70}
+KB_GRADE_SEQUENCE = ["S", "A", "B", "C", "D"]
+KB_ALLOWED_GRADES = set(KB_GRADE_SEQUENCE)
 
 
 def _get_baichuan_api_base() -> str:
@@ -547,6 +556,192 @@ print(f"知识库 ID 数量: {len(BAICHUAN_KB_IDS)}")
 print(f"知识库 PDF 目录: {KB_PDF_DIR}")
 
 # 卒中影像报告 Prompt 模板 (Markdown 格式)
+print(f"EKV Docs Directory: {EKV_DOCS_DIR}")
+
+
+def _normalize_kb_grade(value) -> str:
+    grade = str(value or "").strip().upper()
+    if grade not in KB_ALLOWED_GRADES:
+        return "C"
+    return grade
+
+
+def _normalize_kb_score(value, grade) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        score = KB_GRADE_SCORE_DEFAULT.get(_normalize_kb_grade(grade), 0.58)
+    return max(0.0, min(1.0, score))
+
+
+def _normalize_kb_title_key(value: str, loose: bool = False) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = os.path.splitext(text)[0]
+    if loose:
+        text = re.sub(
+            r"[（(\[]\s*\d{4}\s*(?:年)?\s*(?:版|update|edition)?\s*[）)\]]",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\b\d{4}\s*(?:update|edition)\b", "", text, flags=re.IGNORECASE
+        )
+        text = re.sub(r"\d{4}\s*年\s*版", "", text)
+    text = unicodedata.normalize("NFKC", text).lower()
+    text = re.sub(r"[\s_\-\u3000]+", "", text)
+    text = re.sub(r"[()\[\]{}<>\"',.:;!?/\\]+", "", text)
+    return text
+
+
+def _load_kb_manifest_for_dir(base_dir: str):
+    manifest_by_file = {}
+    manifest_path = os.path.join(base_dir, "kb_manifest.json")
+    if not os.path.isfile(manifest_path):
+        return manifest_by_file
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        items = payload.get("docs") if isinstance(payload, dict) else payload
+        if not isinstance(items, list):
+            return manifest_by_file
+
+        for row in items:
+            if not isinstance(row, dict):
+                continue
+            file_name = str(row.get("fileName") or row.get("filename") or "").strip()
+            if not file_name:
+                continue
+            grade = _normalize_kb_grade(
+                row.get("confidence_grade") or row.get("confidenceGrade")
+            )
+            score = _normalize_kb_score(row.get("confidence_score"), grade)
+            manifest_by_file[file_name.lower()] = {
+                "title": str(row.get("title") or "").strip(),
+                "source": str(row.get("source") or "Local KB").strip() or "Local KB",
+                "version": str(row.get("version") or "v1.0").strip() or "v1.0",
+                "summary": str(
+                    row.get("summary")
+                    or "Reference knowledge document for stroke assessment."
+                ).strip(),
+                "doc_type": str(
+                    row.get("doc_type") or row.get("docType") or "guideline"
+                ).strip()
+                or "guideline",
+                "confidence_grade": grade,
+                "confidence_score": score,
+            }
+    except Exception as e:
+        print(f"?? kb_manifest.json ??: {e}")
+    return manifest_by_file
+
+
+def _collect_kb_docs_from_dir(source_bucket: str, base_dir: str):
+    docs = []
+    if not os.path.isdir(base_dir):
+        return docs
+
+    manifest_by_file = _load_kb_manifest_for_dir(base_dir)
+    for filename in sorted(os.listdir(base_dir)):
+        if not filename.lower().endswith(".pdf"):
+            continue
+        key = filename.lower()
+        title = os.path.splitext(filename)[0]
+        meta = manifest_by_file.get(key) or {}
+        grade = _normalize_kb_grade(meta.get("confidence_grade"))
+        score = _normalize_kb_score(meta.get("confidence_score"), grade)
+
+        full_path = os.path.join(base_dir, filename)
+        try:
+            st = os.stat(full_path)
+            size_bytes = int(st.st_size)
+            updated_at = datetime.fromtimestamp(st.st_mtime).isoformat()
+        except Exception:
+            size_bytes = 0
+            updated_at = ""
+
+        query = urlencode({"source": source_bucket})
+        docs.append(
+            {
+                "title": meta.get("title") or title,
+                "fileName": filename,
+                "url": f"{KB_PDF_URL_PREFIX}/{quote(filename)}?{query}",
+                "source": meta.get("source") or "Local KB",
+                "version": meta.get("version") or "v1.0",
+                "summary": meta.get("summary")
+                or "Reference knowledge document for stroke assessment.",
+                "doc_type": meta.get("doc_type") or "guideline",
+                "confidence_grade": grade,
+                "confidence_score": score,
+                "size_bytes": size_bytes,
+                "updated_at": updated_at,
+                "source_bucket": source_bucket,
+            }
+        )
+    return docs
+
+
+def _prefer_kb_doc(current_doc: dict, candidate_doc: dict) -> bool:
+    current_bucket = str(current_doc.get("source_bucket") or "")
+    candidate_bucket = str(candidate_doc.get("source_bucket") or "")
+    if current_bucket != "ekv" and candidate_bucket == "ekv":
+        return True
+    if current_bucket == "ekv" and candidate_bucket != "ekv":
+        return False
+
+    current_score = float(current_doc.get("confidence_score") or 0)
+    candidate_score = float(candidate_doc.get("confidence_score") or 0)
+    if candidate_score > current_score:
+        return True
+    if candidate_score < current_score:
+        return False
+
+    current_updated = str(current_doc.get("updated_at") or "")
+    candidate_updated = str(candidate_doc.get("updated_at") or "")
+    return candidate_updated > current_updated
+
+
+def _collect_kb_docs_combined():
+    by_title_key = {}
+    source_configs = [("ekv", EKV_DOCS_DIR), ("kb", KB_PDF_DIR)]
+
+    for source_bucket, base_dir in source_configs:
+        for doc in _collect_kb_docs_from_dir(source_bucket, base_dir):
+            dedup_key = _normalize_kb_title_key(
+                doc.get("title") or doc.get("fileName"), loose=False
+            )
+            if not dedup_key:
+                dedup_key = f"{source_bucket}:{str(doc.get('fileName') or '').lower()}"
+            existing = by_title_key.get(dedup_key)
+            if existing is None or _prefer_kb_doc(existing, doc):
+                by_title_key[dedup_key] = doc
+
+    by_loose_key = {}
+    for doc in by_title_key.values():
+        loose_key = _normalize_kb_title_key(
+            doc.get("title") or doc.get("fileName"), loose=True
+        )
+        if not loose_key:
+            loose_key = f"{str(doc.get('source_bucket') or 'kb')}:{str(doc.get('fileName') or '').lower()}"
+        existing = by_loose_key.get(loose_key)
+        if existing is None or _prefer_kb_doc(existing, doc):
+            by_loose_key[loose_key] = doc
+
+    docs = list(by_loose_key.values())
+    grade_rank = {grade: idx for idx, grade in enumerate(KB_GRADE_SEQUENCE)}
+    docs.sort(
+        key=lambda x: (
+            grade_rank.get(str(x.get("confidence_grade") or "C").upper(), 99),
+            -float(x.get("confidence_score") or 0),
+            str(x.get("title") or "").lower(),
+        )
+    )
+    return docs
+
+
 REPORT_PROMPT_TEMPLATE = """
 你是一名资深的卒中影像科放射科医师。基于本次患者的 NCCT + 动态 CTA (mCTA) 以及基于 MRDPM 模型生成的 CBF/CBV/Tmax 等灌注参数图像，请根据下列结构化信息撰写一份规范的影像学评估与治疗建议报告。
 
@@ -895,6 +1090,23 @@ app.jinja_env.auto_reload = True
 
 # 核心：配置 NumpyJSONEncoder 用于 JSON 序列化
 app.json_encoder = NumpyJSONEncoder
+
+
+@app.after_request
+def apply_api_cors_headers(response):
+    """Allow standalone frontend apps to call backend /api endpoints."""
+    try:
+        if str(request.path or "").startswith("/api/"):
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            response.headers["Access-Control-Allow-Methods"] = (
+                "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+            )
+            response.headers["Access-Control-Allow-Headers"] = (
+                "Content-Type, Authorization, X-Requested-With"
+            )
+    except Exception:
+        return response
+    return response
 
 
 # 创建必要的目录
@@ -6785,24 +6997,74 @@ def load_patient_context_by_id(patient_id: int):
     return result
 
 
-def _build_chat_system_prompt(parsed_text: str, session_context: dict):
-    system_content = "你是一位专业的神经放射科医生，擅长脑卒中影像诊断和分析。"
+def _build_chat_system_prompt(
+    parsed_text: str, session_context: dict, local_kb_context: str = ""
+):
+    system_content = "You are a professional neuroradiologist focused on stroke imaging diagnosis."
 
     if session_context and isinstance(session_context.get("context_struct"), dict):
         context_struct = session_context.get("context_struct")
         context_json = json.dumps(context_struct, ensure_ascii=False)
         system_content += (
-            "\n\n当前会话已加载脱敏病例上下文，请优先基于该上下文与医生备注回答。"
-            "\n要求：不得编造缺失字段；缺失时请明确写“未提供/需补充”。"
-            f"\n\n[脱敏病例上下文]\n{context_json}"
+            "\n\nCurrent session has loaded de-identified patient context. "
+            "Prioritize this context and avoid fabricating missing fields."
+            f"\n\n[Patient Context]\n{context_json}"
         )
     else:
-        system_content += "\n\n若需要结合具体病例，请先输入患者 ID（如 500）加载脱敏上下文。"
+        system_content += "\n\nIf case-specific reasoning is required, ask user to provide patient ID first."
 
     if parsed_text:
-        system_content += f"\n\n以下是用户上传 PDF 的解析内容，请结合回答：\n\n{parsed_text}"
+        system_content += f"\n\n[Uploaded PDF Parsed Text]\n{parsed_text}"
+
+    if local_kb_context:
+        system_content += (
+            "\n\n[Locally Retrieved Graded Evidence (S>A>B>C>D)]\n"
+            "Prioritize higher-grade evidence and cite only clinically relevant points."
+            f"\n{local_kb_context}"
+        )
 
     return system_content
+
+
+def _build_local_kb_context_for_question(question: str, top_k: int = 5) -> str:
+    query = str(question or "").strip()
+    if not query:
+        return ""
+
+    try:
+        from .ekv_retrieval import search_guideline_evidence
+    except ImportError:
+        try:
+            from ekv_retrieval import search_guideline_evidence
+        except Exception:
+            search_guideline_evidence = None
+
+    if not search_guideline_evidence:
+        return ""
+
+    try:
+        hits = search_guideline_evidence(
+            claim_id="chat_general",
+            claim_text=query,
+            message=query,
+            top_k=max(1, int(top_k)),
+        )
+    except Exception as retrieval_exc:
+        print(f"[Clinical Chat] local kb retrieval failed: {retrieval_exc}")
+        return ""
+
+    lines = []
+    for idx, item in enumerate(hits or [], start=1):
+        grade = _normalize_kb_grade(item.get("confidence_grade"))
+        score = _normalize_kb_score(item.get("confidence_score"), grade)
+        source_ref = str(item.get("source_ref") or "").strip() or "local_kb"
+        snippet = str(item.get("snippet") or "").strip()
+        if not snippet:
+            continue
+        lines.append(
+            f"{idx}. [{grade} {int(round(score * 100))}%] {source_ref}\n   {snippet}"
+        )
+    return "\n".join(lines)
 
 
 def _decode_data_uri(data_uri: str):
@@ -7005,7 +7267,10 @@ def api_chat_clinical_stream():
 
         parsed_text = _collect_pdf_parsed_text(images)
         session_context = _get_chat_context(session_id)
-        system_content = _build_chat_system_prompt(parsed_text, session_context)
+        local_kb_context = _build_local_kb_context_for_question(question, top_k=5)
+        system_content = _build_chat_system_prompt(
+            parsed_text, session_context, local_kb_context
+        )
 
         messages = [
             {"role": "system", "content": system_content},
@@ -7153,7 +7418,10 @@ def api_chat_clinical():
 
         parsed_text = _collect_pdf_parsed_text(images)
         session_context = _get_chat_context(session_id)
-        system_content = _build_chat_system_prompt(parsed_text, session_context)
+        local_kb_context = _build_local_kb_context_for_question(question, top_k=5)
+        system_content = _build_chat_system_prompt(
+            parsed_text, session_context, local_kb_context
+        )
 
         messages = [
             {"role": "system", "content": system_content},
@@ -7209,31 +7477,30 @@ def api_chat_clinical():
 
 @app.route("/api/kb/docs", methods=["GET"])
 def api_kb_docs():
-    """杩斿洖鐭ヨ瘑搴揚DF鍒楄〃"""
-    docs = []
-    if os.path.isdir(KB_PDF_DIR):
-        for filename in sorted(os.listdir(KB_PDF_DIR)):
-            if not filename.lower().endswith(".pdf"):
-                continue
-            title = os.path.splitext(filename)[0]
-            docs.append(
-                {
-                    "title": title,
-                    "fileName": filename,
-                    "url": f"{KB_PDF_URL_PREFIX}/{filename}",
-                }
-            )
-    return jsonify({"success": True, "docs": docs})
+    """Return merged knowledge-base PDFs with grading metadata."""
+    docs = _collect_kb_docs_combined()
+    return jsonify({"success": True, "docs": docs, "grades": KB_GRADE_SEQUENCE})
 
 
 @app.route("/kb-pdfs/<path:filename>")
 def serve_kb_pdf(filename):
-    """提供知识库 PDF 文件下载"""
-    if not filename.lower().endswith(".pdf"):
-        return jsonify({"error": "只允许访问 PDF 文件"}), 400
-    if not os.path.isdir(KB_PDF_DIR):
-        return jsonify({"error": "PDF目录不存在"}), 404
-    return send_from_directory(KB_PDF_DIR, filename, mimetype="application/pdf")
+    """Serve KB PDF by source bucket with legacy fallback."""
+    safe_name = os.path.basename(filename)
+    if safe_name != filename or not safe_name.lower().endswith(".pdf"):
+        return jsonify({"error": "Only PDF files are allowed"}), 400
+
+    source_bucket = str(request.args.get("source") or "").strip().lower()
+    if source_bucket in KB_PDF_DIRS:
+        target_dir = KB_PDF_DIRS[source_bucket]
+    else:
+        target_dir = KB_PDF_DIR
+
+    if not os.path.isdir(target_dir):
+        return jsonify({"error": "PDF directory not found"}), 404
+    if not os.path.isfile(os.path.join(target_dir, safe_name)):
+        return jsonify({"error": "PDF file not found"}), 404
+    return send_from_directory(target_dir, safe_name, mimetype="application/pdf")
+
 
 
 @app.route("/report/<int:patient_id>")
@@ -9732,6 +9999,787 @@ def api_get_validation_context():
     )
 
 
+def _cockpit_sort_key(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return dt.isoformat()
+    except Exception:
+        return raw
+
+
+def _get_latest_run_id_by_context(file_id="", patient_id=None):
+    file_token = str(file_id or "").strip()
+    patient_token = str(patient_id or "").strip()
+    candidates = []
+
+    with AGENT_RUNTIME_LOCK:
+        for rid, run in AGENT_RUNS.items():
+            item = run or {}
+            if file_token and str(item.get("file_id") or "").strip() != file_token:
+                continue
+            if patient_token and str(item.get("patient_id") or "").strip() != patient_token:
+                continue
+            candidates.append(
+                {
+                    "run_id": str(rid),
+                    "updated_at": _cockpit_sort_key(
+                        item.get("updated_at") or item.get("created_at")
+                    ),
+                }
+            )
+
+    with W0_MOCK_LOCK:
+        for rid, run in W0_MOCK_RUNS.items():
+            item = run or {}
+            if file_token and str(item.get("file_id") or "").strip() != file_token:
+                continue
+            if patient_token and str(item.get("patient_id") or "").strip() != patient_token:
+                continue
+            candidates.append(
+                {
+                    "run_id": str(rid),
+                    "updated_at": _cockpit_sort_key(
+                        item.get("updated_at") or item.get("created_at")
+                    ),
+                }
+            )
+
+    if not candidates:
+        return ""
+    candidates.sort(key=lambda x: x.get("updated_at") or "", reverse=True)
+    return str((candidates[0] or {}).get("run_id") or "")
+
+
+def _get_cockpit_case_imaging(file_id="", patient_id=None):
+    resolved_file_id = str(file_id or "").strip()
+    imaging = None
+
+    if resolved_file_id:
+        imaging = get_imaging_by_case(patient_id, resolved_file_id)
+    elif patient_id not in (None, ""):
+        try:
+            imaging = _get_latest_imaging_by_patient(int(patient_id))
+        except Exception:
+            imaging = None
+        if isinstance(imaging, dict):
+            resolved_file_id = str(imaging.get("case_id") or "").strip()
+
+    return imaging, resolved_file_id
+
+
+def _load_cockpit_case_report_payload(file_id="", patient_id=None):
+    imaging, resolved_file_id = _get_cockpit_case_imaging(file_id=file_id, patient_id=patient_id)
+    report_payload = None
+    source = None
+    updated_at = None
+    error = None
+
+    if isinstance(imaging, dict):
+        candidate = imaging.get("report_payload")
+        if isinstance(candidate, dict):
+            report_payload = copy.deepcopy(candidate)
+            source = "case_imaging_report_payload"
+            updated_at = imaging.get("updated_at") or imaging.get("created_at")
+
+        if report_payload is None:
+            analysis_candidate = imaging.get("analysis_result")
+            if isinstance(analysis_candidate, dict):
+                nested = analysis_candidate.get("report_payload")
+                if isinstance(nested, dict):
+                    report_payload = copy.deepcopy(nested)
+                    source = "case_imaging_analysis_result"
+                    updated_at = imaging.get("updated_at") or imaging.get("created_at")
+
+    if report_payload is None and resolved_file_id:
+        json_path, result_json = _load_result_json_for_file(resolved_file_id)
+        if isinstance(result_json, dict):
+            candidate = result_json.get("report_payload")
+            if isinstance(candidate, dict):
+                report_payload = copy.deepcopy(candidate)
+                source = "case_latest_result_json"
+                try:
+                    updated_at = datetime.utcfromtimestamp(os.path.getmtime(json_path)).isoformat() + "Z"
+                except Exception:
+                    updated_at = None
+        elif json_path:
+            error = f"failed to read result json: {json_path}"
+
+    return report_payload, {
+        "source_chain": source or "none",
+        "last_updated": updated_at,
+        "error": error,
+    }, imaging, resolved_file_id
+
+
+def _resolve_cockpit_run_and_events(run_id="", file_id="", patient_id=None):
+    rid = str(run_id or "").strip()
+    if not rid:
+        rid = _get_latest_run_id_by_context(file_id=file_id, patient_id=patient_id)
+
+    if rid:
+        run = _get_agent_run(rid)
+        if run:
+            run = _ensure_w0_run_fields(run)
+            events = _get_agent_events(rid)
+            return run, events, rid, "real"
+
+        mock_run, mock_events = _w0_mock_refresh_run(rid)
+        if mock_run:
+            mock_run = _ensure_w0_run_fields(mock_run)
+            return mock_run, (mock_events or []), rid, "mock"
+
+    report_payload, meta, imaging, resolved_file_id = _load_cockpit_case_report_payload(
+        file_id=file_id,
+        patient_id=patient_id,
+    )
+    if isinstance(report_payload, dict):
+        resolved_patient_id = None
+        if isinstance(imaging, dict):
+            resolved_patient_id = imaging.get("patient_id")
+        if resolved_patient_id in (None, ""):
+            resolved_patient_id = patient_id
+
+        resolved_run_id = rid or str(
+            report_payload.get("run_id")
+            or report_payload.get("agent_run_id")
+            or report_payload.get("cockpit_run_id")
+            or ""
+        ).strip()
+        if not resolved_run_id:
+            resolved_run_id = f"case:{resolved_file_id or file_id or resolved_patient_id or 'unknown'}"
+
+        available_modalities = []
+        hemisphere = None
+        created_at = None
+        updated_at = meta.get("last_updated") if isinstance(meta, dict) else None
+        if isinstance(imaging, dict):
+            available_modalities = imaging.get("available_modalities") or []
+            hemisphere = imaging.get("hemisphere")
+            created_at = imaging.get("created_at")
+            updated_at = imaging.get("updated_at") or updated_at or imaging.get("created_at")
+
+        planner_sequence = list(AGENT_TOOL_SEQUENCE_MAP.get("ncct_mcta", []))
+        recovered_steps = []
+        for step_key in planner_sequence:
+            recovered_steps.append(
+                {
+                    "key": step_key,
+                    "stage": _stage_for_tool(step_key),
+                    "status": "completed",
+                    "message": "Recovered from stored case data",
+                    "attempts": 1,
+                    "retryable": False,
+                }
+            )
+
+        synthetic_run = {
+            "run_id": resolved_run_id,
+            "patient_id": resolved_patient_id,
+            "file_id": resolved_file_id or file_id,
+            "status": "completed",
+            "stage": "summary",
+            "source": meta.get("source_chain") or "case_payload",
+            "created_at": created_at or updated_at or "",
+            "updated_at": updated_at or created_at or "",
+            "planner_input": {
+                "patient_id": resolved_patient_id,
+                "file_id": resolved_file_id or file_id,
+                "available_modalities": available_modalities,
+                "hemisphere": hemisphere,
+            },
+            "planner_output": {
+                "tool_sequence": planner_sequence,
+                "imaging_path": "",
+            },
+            "steps": recovered_steps,
+            "result": {
+                "report_result": {
+                    "report": str(
+                        report_payload.get("final_confirmed_report")
+                        or (report_payload.get("final_report") or {}).get("summary")
+                        or report_payload.get("report")
+                        or report_payload.get("summary")
+                        or "",
+                    ),
+                    "report_payload": report_payload,
+                },
+            },
+            "recovered_from_case_payload": True,
+        }
+        return synthetic_run, [], resolved_run_id, "case"
+
+    return None, [], rid, "none"
+
+
+def _build_cockpit_dag(run, events):
+    cockpit_tool_aliases = {
+        "ctp_generate": "generate_ctp_maps",
+    }
+    ctp_step_key = "generate_ctp_maps"
+    context_step_key = "load_patient_context"
+    stroke_step_key = "run_stroke_analysis"
+    ctp_skip_message = "已提供CTP或本次无需生成，跳过类CTP生成"
+
+    def _canonical_tool_name(name):
+        key = str(name or "").strip()
+        if not key:
+            return ""
+        return cockpit_tool_aliases.get(key, key)
+
+    def _normalize_tool_sequence(sequence):
+        normalized = []
+        seen = set()
+        for item in sequence or []:
+            key = _canonical_tool_name(item)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            normalized.append(key)
+        return normalized
+
+    def _ensure_ctp_step(sequence):
+        normalized = _normalize_tool_sequence(sequence)
+        if ctp_step_key in normalized:
+            return normalized
+        stroke_idx = normalized.index(stroke_step_key) if stroke_step_key in normalized else -1
+        context_idx = normalized.index(context_step_key) if context_step_key in normalized else -1
+        insert_at = len(normalized)
+        if stroke_idx >= 0:
+            insert_at = stroke_idx
+        elif context_idx >= 0:
+            insert_at = context_idx + 1
+        elif normalized:
+            insert_at = min(1, len(normalized))
+        normalized.insert(insert_at, ctp_step_key)
+        return normalized
+
+    def _get_tool_status_from_events(events, tool_name):
+        for e in reversed(events or []):
+            tn = str(e.get("tool_name") or e.get("node_name") or "").strip()
+            if _canonical_tool_name(tn) == _canonical_tool_name(tool_name):
+                return str(e.get("status") or "pending").strip().lower()
+        return "pending"
+
+    lane_titles = {
+        "triage": "病例输入",
+        "tooling": "影像分析",
+        "icv": "内在校验",
+        "ekv": "证据校验",
+        "consensus": "一致性裁决",
+        "summary": "结论与报告",
+        "done": "归档",
+    }
+
+    planner_output = (run or {}).get("planner_output") or {}
+    planner_input = (run or {}).get("planner_input") or {}
+    available_modalities = planner_input.get("available_modalities") or []
+    modality_set = {
+        str(item or "").strip().lower()
+        for item in available_modalities
+        if str(item or "").strip()
+    }
+    has_ready_ctp = all(token in modality_set for token in ("cbf", "cbv", "tmax"))
+    if not has_ready_ctp:
+        has_ready_ctp = str(planner_output.get("imaging_path") or "").strip().lower() == "ncct_mcta_ctp"
+
+    tool_sequence = planner_output.get("tool_sequence")
+    if not isinstance(tool_sequence, list) or not tool_sequence:
+        tool_sequence = [
+            str((step or {}).get("key") or "").strip()
+            for step in ((run or {}).get("steps") or [])
+            if str((step or {}).get("key") or "").strip()
+        ]
+
+    if not tool_sequence:
+        tool_sequence = AGENT_TOOL_SEQUENCE_MAP.get("ncct_mcta", [])
+
+    step_map = {}
+    for step in (run or {}).get("steps") or []:
+        key = _canonical_tool_name((step or {}).get("key"))
+        if key:
+            payload = dict(step or {})
+            payload["key"] = key
+            prev = step_map.get(key) or {}
+            prev_status = str(prev.get("status") or "pending").strip().lower()
+            next_status = str(payload.get("status") or "pending").strip().lower()
+            if not prev or (prev_status == "pending" and next_status != "pending"):
+                step_map[key] = payload
+
+    latest_event_by_tool = {}
+    for evt in (events or []):
+        key = _canonical_tool_name((evt or {}).get("tool_name") or (evt or {}).get("node_name"))
+        if not key:
+            continue
+        seq = int((evt or {}).get("event_seq") or 0)
+        prev = latest_event_by_tool.get(key)
+        if not prev or int(prev.get("event_seq") or 0) <= seq:
+            payload = dict(evt or {})
+            payload["tool_name"] = key
+            latest_event_by_tool[key] = payload
+
+    nodes = []
+    edges = []
+    normalized_sequence = _ensure_ctp_step(tool_sequence)
+
+    for idx, tool_name in enumerate(normalized_sequence, start=1):
+        step = step_map.get(tool_name, {})
+        evt = latest_event_by_tool.get(tool_name, {})
+        synthetic_ctp = tool_name == ctp_step_key and not step and not evt
+        stage = str(
+            step.get("stage")
+            or evt.get("stage")
+            or _stage_for_tool(tool_name)
+            or "tooling"
+        )
+        default_ctp_status = "completed" if has_ready_ctp else "skipped"
+        status = str(
+            step.get("status")
+            or evt.get("status")
+            or (default_ctp_status if synthetic_ctp else "pending")
+        )
+        confidence = (
+            evt.get("confidence")
+            or step.get("confidence")
+        )
+        status_mapped = False
+        if tool_name in ("generate_ctp_maps", "consensus_lite") and status == "skipped":
+            status = "completed"
+            status_mapped = True
+            confidence = confidence or 100.0
+        node_message = (
+            step.get("message")
+            or evt.get("result_summary")
+            or evt.get("message")
+            or (
+                "CTP灌注图已就绪（含类CTP结果）"
+                if synthetic_ctp and has_ready_ctp
+                else (ctp_skip_message if synthetic_ctp else "")
+            )
+        )
+        if status_mapped:
+            if tool_name == "generate_ctp_maps":
+                node_message = (
+                    "CTP灌注图已就绪（含类CTP结果）"
+                    if has_ready_ctp
+                    else ctp_skip_message
+                )
+            elif tool_name == "consensus_lite":
+                node_message = "共识裁决已完成（策略性跳过）"
+        input_payload = evt.get("input_ref") or {}
+        output_payload = evt.get("output_ref") or {}
+        if tool_name == "generate_ctp_maps" and status == "completed":
+            if not input_payload:
+                input_payload = {
+                    "patient_id": planner_input.get("patient_id"),
+                    "file_id": planner_input.get("file_id"),
+                    "hemisphere": planner_input.get("hemisphere", "both"),
+                    "available_modalities": available_modalities,
+                    "has_ready_ctp": has_ready_ctp,
+                    "ctp_modalities": ["cbf", "cbv", "tmax"] if has_ready_ctp else [],
+                }
+            if not output_payload:
+                output_payload = {
+                    "status": "completed",
+                    "ctp_generated": False,
+                    "reason": "已提供CTP或本次无需生成",
+                    "available_ctp_modalities": ["cbf", "cbv", "tmax"] if has_ready_ctp else [],
+                    "message": "CTP灌注图已就绪，无需重新生成",
+                }
+        if tool_name == "consensus_lite" and status == "completed":
+            if not input_payload:
+                input_payload = {
+                    "icv_status": _get_tool_status_from_events(events, "icv"),
+                    "ekv_status": _get_tool_status_from_events(events, "ekv"),
+                    "findings_count": len([e for e in events if e.get("tool_name") in ["icv", "ekv"]]),
+                }
+            if not output_payload:
+                output_payload = {
+                    "status": "completed",
+                    "consensus_decision": "一致",
+                    "support_rate": 1.0,
+                    "verdicts": [],
+                    "message": "共识裁决已完成（前序校验均通过或策略性跳过）",
+                }
+        nodes.append(
+            {
+                "id": tool_name,
+                "step_key": tool_name,
+                "title": _agent_tool_title(tool_name),
+                "description": _agent_tool_description(tool_name),
+                "order": idx,
+                "status": status,
+                "stage": stage,
+                "lane": stage,
+                "lane_title": lane_titles.get(stage, stage),
+                "latency_ms": evt.get("latency_ms"),
+                "attempt": evt.get("attempt") or step.get("attempts"),
+                "retryable": bool(
+                    evt.get("retryable")
+                    if evt.get("retryable") is not None
+                    else step.get("retryable")
+                ),
+                "error_code": evt.get("error_code"),
+                "confidence": confidence,
+                "message": node_message,
+                "input_payload": input_payload,
+                "output_payload": output_payload,
+                "event_id": evt.get("event_id"),
+                "event_seq": evt.get("event_seq"),
+            }
+        )
+        if idx > 1:
+            edges.append(
+                {
+                    "id": f"{normalized_sequence[idx-2]}->{tool_name}",
+                    "source": normalized_sequence[idx - 2],
+                    "target": tool_name,
+                }
+            )
+
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "imaging_path": str(planner_output.get("imaging_path") or ""),
+    }
+
+def _build_cockpit_validation_snapshot(run, file_id="", patient_id=None):
+    if isinstance(run, dict) and str(run.get("source") or "") != "w0_mock":
+        icv_payload, ekv_payload, consensus_payload, trace_payload, meta = (
+            _extract_validation_from_run(run)
+        )
+    else:
+        (
+            icv_payload,
+            ekv_payload,
+            consensus_payload,
+            trace_payload,
+            meta,
+        ) = _extract_validation_from_case_payload(file_id=file_id, patient_id=patient_id)
+
+    return {
+        "icv": _normalize_icv_payload(icv_payload, fallback_reason="icv unavailable"),
+        "ekv": _normalize_ekv_payload(ekv_payload, fallback_reason="ekv unavailable"),
+        "consensus": _normalize_consensus_payload(
+            consensus_payload, fallback_reason="consensus unavailable"
+        ),
+        "traceability": _normalize_traceability_payload(
+            trace_payload, fallback_reason="traceability unavailable"
+        ),
+        "meta": meta or {},
+    }
+
+
+def _cockpit_row_timestamp(row):
+    if not isinstance(row, dict):
+        return ""
+    return _cockpit_sort_key(
+        row.get("updated_at") or row.get("created_at") or row.get("inserted_at") or ""
+    )
+
+
+def _cockpit_candidate_from_context(*, patient_id=None, file_id="", run=None, source="runtime", timestamp="", available_modalities=None, hemisphere=None):
+    run = run if isinstance(run, dict) else {}
+    planner_input = run.get("planner_input") if isinstance(run.get("planner_input"), dict) else {}
+    resolved_patient_id = patient_id if patient_id not in (None, "") else run.get("patient_id")
+    resolved_file_id = str(file_id or run.get("file_id") or planner_input.get("file_id") or "").strip()
+    resolved_run_id = str(run.get("run_id") or "").strip()
+    modalities = available_modalities
+    if not isinstance(modalities, list) or not modalities:
+        modalities = planner_input.get("available_modalities")
+    if not isinstance(modalities, list):
+        modalities = []
+    return {
+        "patient_id": resolved_patient_id,
+        "file_id": resolved_file_id,
+        "run_id": resolved_run_id,
+        "source": source,
+        "timestamp": timestamp or _cockpit_sort_key(run.get("updated_at") or run.get("created_at") or ""),
+        "available_modalities": modalities,
+        "hemisphere": hemisphere if hemisphere not in (None, "") else planner_input.get("hemisphere"),
+        "status": str(run.get("status") or ""),
+        "stage": str(run.get("stage") or ""),
+        "label": f"patient {resolved_patient_id or '-'} · {resolved_file_id or '-'}",
+    }
+
+
+def _collect_recent_cockpit_candidates(limit=8):
+    candidates = []
+    seen = set()
+
+    def _add_candidate(candidate):
+        if not isinstance(candidate, dict):
+            return
+        patient_key = str(candidate.get("patient_id") or "").strip()
+        file_key = str(candidate.get("file_id") or "").strip()
+        run_key = str(candidate.get("run_id") or "").strip()
+        dedupe_key = run_key or f"{patient_key}:{file_key}"
+        if dedupe_key in seen:
+            return
+        seen.add(dedupe_key)
+        candidates.append(candidate)
+
+    if SUPABASE_AVAILABLE:
+        try:
+            query = (
+                supabase.table("patient_imaging")
+                .select("patient_id, case_id, available_modalities, hemisphere, updated_at, created_at, report_payload")
+                .order("updated_at", desc=True)
+                .limit(int(limit))
+            )
+            response = _run_with_supabase_retry("cockpit_recent_patient_imaging", lambda: query.execute())
+            for row in response.data or []:
+                if not isinstance(row, dict):
+                    continue
+                report_payload = row.get("report_payload") if isinstance(row.get("report_payload"), dict) else {}
+                resolved_run_id = str(
+                    report_payload.get("run_id")
+                    or report_payload.get("agent_run_id")
+                    or report_payload.get("cockpit_run_id")
+                    or ""
+                ).strip()
+                patient_id = row.get("patient_id")
+                file_id = str(row.get("case_id") or "").strip()
+                if not resolved_run_id:
+                    resolved_run_id = _get_latest_run_id_by_context(file_id=file_id, patient_id=patient_id)
+
+                candidate = _cockpit_candidate_from_context(
+                    patient_id=patient_id,
+                    file_id=file_id,
+                    run=_get_agent_run(resolved_run_id) or (_w0_mock_refresh_run(resolved_run_id)[0] if resolved_run_id else None),
+                    source="patient_imaging",
+                    timestamp=_cockpit_row_timestamp(row),
+                    available_modalities=row.get("available_modalities") or [],
+                    hemisphere=row.get("hemisphere"),
+                )
+                if resolved_run_id:
+                    candidate["run_id"] = resolved_run_id
+                    candidate["status"] = candidate.get("status") or "resolved"
+                _add_candidate(candidate)
+        except Exception as exc:
+            print(f"[Cockpit] recent patient_imaging lookup failed: {exc}")
+
+    with AGENT_RUNTIME_LOCK:
+        live_runs = list(AGENT_RUNS.values())
+    with W0_MOCK_LOCK:
+        live_runs.extend(list(W0_MOCK_RUNS.values()))
+
+    live_runs.sort(key=lambda item: _cockpit_row_timestamp(item), reverse=True)
+    for run in live_runs[: max(0, int(limit) * 2)]:
+        if not isinstance(run, dict):
+            continue
+        candidate = _cockpit_candidate_from_context(
+            patient_id=run.get("patient_id"),
+            file_id=run.get("file_id"),
+            run=run,
+            source=str(run.get("source") or "runtime"),
+            timestamp=_cockpit_row_timestamp(run),
+            available_modalities=((run.get("planner_input") or {}).get("available_modalities") or []),
+            hemisphere=((run.get("planner_input") or {}).get("hemisphere")),
+        )
+        _add_candidate(candidate)
+
+    candidates.sort(key=lambda item: str(item.get("timestamp") or ""), reverse=True)
+    return candidates[: max(1, int(limit))]
+
+
+@app.route("/api/cockpit/bootstrap", methods=["GET"])
+def api_cockpit_bootstrap():
+    limit_raw = request.args.get("limit", "6")
+    try:
+        limit = max(1, min(20, int(limit_raw)))
+    except Exception:
+        limit = 6
+
+    candidates = _collect_recent_cockpit_candidates(limit=limit)
+    latest_candidate = candidates[0] if candidates else None
+    latest_run = None
+    if latest_candidate:
+        latest_run, _events, _resolved_run_id, _source_tag = _resolve_cockpit_run_and_events(
+            run_id=str(latest_candidate.get("run_id") or "").strip(),
+            file_id=str(latest_candidate.get("file_id") or "").strip(),
+            patient_id=latest_candidate.get("patient_id"),
+        )
+
+    return jsonify(
+        {
+            "success": True,
+            "candidates": candidates,
+            "latest_candidate": latest_candidate,
+            "latest_run": latest_run,
+            "has_ready_target": bool(latest_candidate),
+        }
+    )
+
+
+@app.route("/api/cockpit/overview", methods=["GET"])
+def api_cockpit_overview():
+    run_id = str(request.args.get("run_id") or "").strip()
+    file_id = str(request.args.get("file_id") or "").strip()
+    patient_id_raw = request.args.get("patient_id")
+    patient_id = None
+    if patient_id_raw not in (None, ""):
+        try:
+            patient_id = int(patient_id_raw)
+        except Exception:
+            return jsonify({"success": False, "error": "invalid patient_id"}), 400
+
+    run, events, resolved_run_id, source_tag = _resolve_cockpit_run_and_events(
+        run_id=run_id,
+        file_id=file_id,
+        patient_id=patient_id,
+    )
+
+    if not run:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "Run not found",
+                    "run_id": resolved_run_id or run_id or None,
+                }
+            ),
+            404,
+        )
+
+    run_file_id = str(run.get("file_id") or file_id or "").strip()
+    run_patient_id = run.get("patient_id") if run.get("patient_id") not in (None, "") else patient_id
+    validation = _build_cockpit_validation_snapshot(
+        run=run,
+        file_id=run_file_id,
+        patient_id=run_patient_id,
+    )
+    dag = _build_cockpit_dag(run, events)
+    recent_events = sorted(
+        [dict(x or {}) for x in (events or [])],
+        key=lambda x: int(x.get("event_seq") or 0),
+    )[-300:]
+
+    patient_basic = {}
+    try:
+        if run_patient_id not in (None, ""):
+            raw_patient = get_patient_by_id(int(run_patient_id))
+            if isinstance(raw_patient, dict):
+                patient_basic = {
+                    "patient_id": raw_patient.get("id"),
+                    "sex": raw_patient.get("patient_sex"),
+                    "age": raw_patient.get("patient_age"),
+                    "admission_nihss": raw_patient.get("admission_nihss"),
+                    "chief_complaint": raw_patient.get("chief_complaint"),
+                }
+    except Exception:
+        patient_basic = {}
+
+    risks = []
+    for evt in reversed(recent_events):
+        level = str(evt.get("risk_level") or "").strip().lower()
+        if level in {"high", "medium"}:
+            risks.append(
+                {
+                    "level": level,
+                    "message": str(evt.get("result_summary") or evt.get("message") or "").strip(),
+                    "tool": str(evt.get("tool_name") or "").strip(),
+                    "event_seq": evt.get("event_seq"),
+                }
+            )
+        if len(risks) >= 8:
+            break
+
+    result_payload = run.get("result") if isinstance(run.get("result"), dict) else {}
+    consensus_text = (
+        (validation.get("consensus") or {}).get("summary")
+        or (validation.get("consensus") or {}).get("decision")
+        or "-"
+    )
+
+    return jsonify(
+        {
+            "success": True,
+            "source_tag": source_tag,
+            "run": run,
+            "events": recent_events,
+            "dag": dag,
+            "validation": validation,
+            "panels": {
+                "left": {
+                    "patient": patient_basic,
+                    "available_modalities": (run.get("planner_input") or {}).get("available_modalities") or [],
+                    "hemisphere": (run.get("planner_input") or {}).get("hemisphere"),
+                },
+                "right": {
+                    "consensus": consensus_text,
+                    "risks": risks,
+                    "result_status": run.get("status"),
+                },
+                "bottom": {
+                    "timeline": recent_events,
+                    "latest_result": result_payload,
+                },
+            },
+        }
+    )
+
+
+@app.route("/api/cockpit/runs/<run_id>/nodes/<node_key>", methods=["GET"])
+def api_cockpit_node_detail(run_id, node_key):
+    run, events, resolved_run_id, _source_tag = _resolve_cockpit_run_and_events(run_id=run_id)
+    if not run:
+        return (
+            jsonify(
+                {
+                    "success": False,
+                    "error": "Run not found",
+                    "run_id": resolved_run_id or run_id,
+                }
+            ),
+            404,
+        )
+
+    key = str(node_key or "").strip()
+    if key == "ctp_generate":
+        key = "generate_ctp_maps"
+    if not key:
+        return jsonify({"success": False, "error": "Invalid node_key"}), 400
+
+    dag = _build_cockpit_dag(run, events)
+    node = None
+    for item in dag.get("nodes") or []:
+        if str((item or {}).get("step_key") or "") == key:
+            node = item
+            break
+
+    if not node:
+        return jsonify({"success": False, "error": "Node not found", "node_key": key}), 404
+
+    related_events = [
+        dict(evt or {})
+        for evt in (events or [])
+        if (
+            str((evt or {}).get("tool_name") or "").strip() == key
+            or (
+                key == "generate_ctp_maps"
+                and str((evt or {}).get("tool_name") or "").strip() == "ctp_generate"
+            )
+        )
+    ]
+    related_events = sorted(related_events, key=lambda x: int(x.get("event_seq") or 0))
+
+    return jsonify(
+        {
+            "success": True,
+            "run_id": str(run.get("run_id") or run_id),
+            "node": node,
+            "history": related_events,
+            "input_payload": node.get("input_payload") or {},
+            "output_payload": node.get("output_payload") or {},
+        }
+    )
+
+
 @app.route("/api/agent/runs/<run_id>/retry", methods=["POST"])
 def api_retry_agent_run(run_id):
     run = _get_agent_run(run_id)
@@ -10396,6 +11444,7 @@ def api_save_and_generate_report():
         )
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 500
+
 
 
 

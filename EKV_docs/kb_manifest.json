@@ -1,0 +1,54 @@
+{
+  "docs": [
+    {
+      "fileName": "\u4e2d\u56fd\u8111\u5352\u4e2d\u9632\u6cbb\u6307\u5bfc\u89c4\u8303\uff082021 \u5e74\u7248\uff09.pdf",
+      "title": "\u4e2d\u56fd\u8111\u5352\u4e2d\u9632\u6cbb\u6307\u5bfc\u89c4\u8303\uff082021\u5e74\u7248\uff09",
+      "source": "\u56fd\u5bb6\u7ea7\u6307\u5357",
+      "version": "2021",
+      "doc_type": "guideline",
+      "summary": "\u56fd\u5185\u5352\u4e2d\u9632\u6cbb\u7efc\u5408\u6027\u6307\u5357\uff0c\u8986\u76d6\u8bca\u65ad\u3001\u6cbb\u7597\u4e0e\u7ba1\u7406\u5168\u6d41\u7a0b\u3002",
+      "confidence_grade": "S",
+      "confidence_score": 0.96
+    },
+    {
+      "fileName": "Guidelines-for-Mangaging-Patients-with-AIS-2019-Update-to-2018-Guidelines.pdf",
+      "title": "Guidelines for Managing Patients with AIS (2019 Update)",
+      "source": "AHA/ASA",
+      "version": "2019",
+      "doc_type": "guideline",
+      "summary": "International guideline update for acute ischemic stroke diagnosis and treatment.",
+      "confidence_grade": "A",
+      "confidence_score": 0.88
+    },
+    {
+      "fileName": "\u4e2d\u56fd\u6025\u6027\u7f3a\u8840\u6027\u8111\u5352\u4e2d\u9759\u8109\u6eb6\u6813\u6307\u5bfc\u89c4\u8303.pdf",
+      "title": "\u4e2d\u56fd\u6025\u6027\u7f3a\u8840\u6027\u8111\u5352\u4e2d\u9759\u8109\u6eb6\u6813\u6307\u5bfc\u89c4\u8303",
+      "source": "\u4e13\u9879\u8bca\u7597\u89c4\u8303",
+      "version": "v1",
+      "doc_type": "guideline",
+      "summary": "\u805a\u7126\u6025\u6027\u7f3a\u8840\u6027\u8111\u5352\u4e2d\u9759\u8109\u6eb6\u6813\u6307\u5f81\u4e0e\u6d41\u7a0b\u3002",
+      "confidence_grade": "B",
+      "confidence_score": 0.76
+    },
+    {
+      "fileName": "\u6025\u6027\u7f3a\u8840\u5352\u4e2d\u8840\u7ba1\u5185\u6cbb\u7597\u6280\u672f\u4e2d\u56fd\u4e13\u5bb6\u5171\u8bc62025.pdf",
+      "title": "\u6025\u6027\u7f3a\u8840\u5352\u4e2d\u8840\u7ba1\u5185\u6cbb\u7597\u6280\u672f\u4e2d\u56fd\u4e13\u5bb6\u5171\u8bc62025",
+      "source": "\u4e13\u5bb6\u5171\u8bc6",
+      "version": "2025",
+      "doc_type": "consensus",
+      "summary": "\u8840\u7ba1\u5185\u6cbb\u7597\u6280\u672f\u4e0e\u56f4\u624b\u672f\u7ba1\u7406\u63a8\u8350\u610f\u89c1\u3002",
+      "confidence_grade": "C",
+      "confidence_score": 0.61
+    },
+    {
+      "fileName": "csbpr7-acute-stroke-management-module-final-eng-2022-2025.pdf",
+      "title": "CSBPR7 Acute Stroke Management Module (2022-2025)",
+      "source": "Training Module",
+      "version": "2025",
+      "doc_type": "module",
+      "summary": "Practice module for acute stroke management workflows and quality indicators.",
+      "confidence_grade": "D",
+      "confidence_score": 0.45
+    }
+  ]
+}

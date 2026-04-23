@@ -1,0 +1,14 @@
+{
+  "docs": [
+    {
+      "fileName": "中国脑卒中防治指导规范.pdf",
+      "title": "中国脑卒中防治指导规范",
+      "source": "国家级临床指导文件",
+      "version": "v2024.1",
+      "doc_type": "guideline",
+      "summary": "覆盖急性缺血性脑卒中的筛查、影像评估与诊疗流程要点，可作为临床决策依据。",
+      "confidence_grade": "S",
+      "confidence_score": 0.96
+    }
+  ]
+}
