@@ -129,17 +129,18 @@ def colorize_heatmap(cam: np.ndarray) -> np.ndarray:
     return np.stack([red, green, blue], axis=-1)
 
 
-def overlay_heatmap(image: Image.Image, cam: np.ndarray) -> Image.Image:
+def overlay_heatmap(image: Image.Image, cam: np.ndarray, flip_vertical: bool = True) -> Image.Image:
     gray = image.convert("L")
     gray = gray.resize((cam.shape[1], cam.shape[0]))
     base = np.asarray(gray, dtype=np.float32) / 255.0
     base_rgb = np.repeat(base[..., None], 3, axis=-1)
-    heatmap = colorize_heatmap(cam)
+    cam_for_overlay = np.flip(cam, axis=0) if flip_vertical else cam
+    heatmap = colorize_heatmap(cam_for_overlay)
     overlay = np.clip(0.55 * base_rgb + 0.45 * heatmap, 0, 1)
     return Image.fromarray((overlay * 255).astype(np.uint8))
 
 
-def generate_gradcam(file_id, output_base_dir=None):
+def generate_gradcam(file_id, output_base_dir=None, flip_vertical: bool = True):
     """Generate Grad-CAM overlays for NCCT slices under static/processed/<file_id>."""
     try:
         if output_base_dir is None:
@@ -205,7 +206,7 @@ def generate_gradcam(file_id, output_base_dir=None):
                 input_tensor = transform(gray_image).unsqueeze(0).to(device)
 
             cam, probs, pred_idx = grad_cam.generate(input_tensor)
-            overlay = overlay_heatmap(gray_image, cam)
+            overlay = overlay_heatmap(gray_image, cam, flip_vertical=flip_vertical)
             canvas = overlay.convert("RGB")
             draw = ImageDraw.Draw(canvas)
             pred_label = class_names[pred_idx]
