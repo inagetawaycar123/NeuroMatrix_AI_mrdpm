@@ -793,7 +793,6 @@ function loadSlice(sliceIndex) {
     updateAIImage('tmax', sliceData);
     refreshAllLutScales();
     updateStrokeImage();
-    updateGradcamImage();
     updateSliceInfo();
 }
 
@@ -988,14 +987,8 @@ function startStrokeAnalysis() {
 function displayAnalysisResults() {
     if (!analysisResults) return;
     document.getElementById('analysisResults').classList.add('show');
-    const hasGradcam = !!(analysisResults.visualizations && Array.isArray(analysisResults.visualizations.gradcam) && analysisResults.visualizations.gradcam.length > 0);
-    const gradcamPanel = document.getElementById('analysisGradcam');
-    if (gradcamPanel) {
-        gradcamPanel.classList.toggle('show', hasGradcam);
-    }
     document.getElementById('analysisMetrics').classList.add('show');
     updateStrokeImage();
-    updateGradcamImage();
     const report = analysisResults.report?.summary;
     const ncctThreeClass = extractNcctThreeClassInfo();
     const ncctClassEl = document.getElementById('value-ncct-class');
@@ -1090,25 +1083,6 @@ function updateStrokeImage() {
             document.getElementById('status-stroke').className = 'cell-status status-ready';
             document.getElementById('status-stroke').style.display = 'block';
         }
-    }
-}
-
-function updateGradcamImage() {
-    if (!analysisResults) return;
-    const vis = analysisResults.visualizations;
-    const gradcamList = vis && Array.isArray(vis.gradcam) ? vis.gradcam : [];
-    const gradcamImg = document.getElementById('img-gradcam');
-    const gradcamPanel = document.getElementById('analysisGradcam');
-    if (!gradcamImg || !gradcamPanel) return;
-
-    const gradcamUrl = gradcamList[currentSlice] || gradcamList[0] || '';
-    if (gradcamUrl) {
-        gradcamImg.classList.remove('placeholder-image');
-        gradcamImg.src = gradcamUrl;
-        gradcamPanel.classList.add('show');
-    } else {
-        gradcamImg.removeAttribute('src');
-        gradcamPanel.classList.remove('show');
     }
 }
 
