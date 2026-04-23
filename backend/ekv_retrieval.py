@@ -1,7 +1,9 @@
+import json
 import math
 import os
 import re
 import threading
+import unicodedata
 import uuid
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -9,6 +11,10 @@ from typing import Any, Dict, List, Sequence, Tuple
 
 from pypdf import PdfReader
 
+
+_GRADE_SCORE_DEFAULT = {"S": 0.95, "A": 0.85, "B": 0.72, "C": 0.58, "D": 0.42}
+_GRADE_WEIGHT_DEFAULT = {"S": 1.30, "A": 1.15, "B": 1.00, "C": 0.85, "D": 0.70}
+_ALLOWED_GRADES = set(_GRADE_SCORE_DEFAULT.keys())
 
 _CACHE_LOCK = threading.Lock()
 _INDEX_CACHE: Dict[str, Any] = {
@@ -21,11 +27,14 @@ _INDEX_CACHE: Dict[str, Any] = {
 @dataclass
 class EvidenceChunk:
     evidence_id: str
+    source_bucket: str
     doc_name: str
     page: int
     text: str
     norm_text: str
     token_counter: Counter
+    confidence_grade: str
+    confidence_score: float
 
 
 def _project_root() -> str:
@@ -33,7 +42,92 @@ def _project_root() -> str:
 
 
 def get_ekv_docs_dir() -> str:
-    return os.path.join(_project_root(), "EKV_docs")
+    return os.environ.get("EKV_DOCS_DIR", os.path.join(_project_root(), "EKV_docs"))
+
+
+def get_static_kb_dir() -> str:
+    return os.environ.get("KB_PDF_DIR", os.path.join(_project_root(), "static", "kb"))
+
+
+def get_local_kb_dirs() -> List[Tuple[str, str]]:
+    dirs: List[Tuple[str, str]] = []
+    seen = set()
+    for source_bucket, path in (("ekv", get_ekv_docs_dir()), ("kb", get_static_kb_dir())):
+        abs_path = os.path.abspath(path)
+        if abs_path in seen:
+            continue
+        seen.add(abs_path)
+        if os.path.isdir(abs_path):
+            dirs.append((source_bucket, abs_path))
+    return dirs
+
+
+def _normalize_grade(value: Any) -> str:
+    grade = str(value or "").strip().upper()
+    if grade not in _ALLOWED_GRADES:
+        return "C"
+    return grade
+
+
+def _normalize_score(value: Any, grade: str) -> float:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        score = _GRADE_SCORE_DEFAULT.get(_normalize_grade(grade), 0.58)
+    return max(0.0, min(1.0, score))
+
+
+def _normalize_title_key(value: str, loose: bool = False) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = os.path.splitext(text)[0]
+    if loose:
+        text = re.sub(
+            r"[（(\[]\s*\d{4}\s*(?:年)?\s*(?:版|update|edition)?\s*[）)\]]",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        text = re.sub(
+            r"\b\d{4}\s*(?:update|edition)\b", "", text, flags=re.IGNORECASE
+        )
+        text = re.sub(r"\d{4}\s*年\s*版", "", text)
+    text = unicodedata.normalize("NFKC", text).lower()
+    text = re.sub(r"[\s_\-\u3000]+", "", text)
+    text = re.sub(r"[()\[\]{}<>\"',.:;!?/\\]+", "", text)
+    return text
+
+
+def _load_manifest_by_file(docs_dir: str) -> Dict[str, Dict[str, Any]]:
+    manifest_by_file: Dict[str, Dict[str, Any]] = {}
+    manifest_path = os.path.join(docs_dir, "kb_manifest.json")
+    if not os.path.isfile(manifest_path):
+        return manifest_by_file
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        rows = payload.get("docs") if isinstance(payload, dict) else payload
+        if not isinstance(rows, list):
+            return manifest_by_file
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            file_name = str(row.get("fileName") or row.get("filename") or "").strip()
+            if not file_name:
+                continue
+            grade = _normalize_grade(row.get("confidence_grade") or row.get("confidenceGrade"))
+            score = _normalize_score(row.get("confidence_score"), grade)
+            manifest_by_file[file_name.lower()] = {
+                "title": str(row.get("title") or "").strip(),
+                "confidence_grade": grade,
+                "confidence_score": score,
+            }
+    except Exception:
+        return manifest_by_file
+    return manifest_by_file
 
 
 def _normalize_text(text: str) -> str:
@@ -91,32 +185,113 @@ def _split_page_to_chunks(page_text: str, max_chars: int = 520) -> List[str]:
     return chunks
 
 
-def _collect_pdf_files(docs_dir: str) -> List[str]:
+def _collect_pdf_entries(docs_dir: str, source_bucket: str) -> List[Dict[str, Any]]:
+    entries: List[Dict[str, Any]] = []
     if not os.path.isdir(docs_dir):
-        return []
-    files = []
+        return entries
+    manifest_by_file = _load_manifest_by_file(docs_dir)
+
     for name in sorted(os.listdir(docs_dir)):
-        if name.lower().endswith(".pdf"):
-            files.append(os.path.join(docs_dir, name))
-    return files
-
-
-def _index_key(files: Sequence[str]) -> Tuple[Tuple[str, int, int], ...]:
-    key_items = []
-    for path in files:
+        if not name.lower().endswith(".pdf"):
+            continue
+        path = os.path.join(docs_dir, name)
+        meta = manifest_by_file.get(name.lower()) or {}
+        grade = _normalize_grade(meta.get("confidence_grade"))
+        score = _normalize_score(meta.get("confidence_score"), grade)
         try:
             st = os.stat(path)
-            key_items.append((os.path.basename(path), int(st.st_mtime), int(st.st_size)))
+            updated_ts = int(st.st_mtime)
         except Exception:
-            key_items.append((os.path.basename(path), 0, 0))
+            updated_ts = 0
+        entries.append(
+            {
+                "path": path,
+                "title": str(meta.get("title") or os.path.splitext(name)[0]),
+                "source_bucket": source_bucket,
+                "confidence_grade": grade,
+                "confidence_score": score,
+                "updated_ts": updated_ts,
+            }
+        )
+    return entries
+
+
+def _prefer_entry(current_entry: Dict[str, Any], candidate_entry: Dict[str, Any]) -> bool:
+    current_bucket = str(current_entry.get("source_bucket") or "")
+    candidate_bucket = str(candidate_entry.get("source_bucket") or "")
+    if current_bucket != "ekv" and candidate_bucket == "ekv":
+        return True
+    if current_bucket == "ekv" and candidate_bucket != "ekv":
+        return False
+
+    current_score = _normalize_score(
+        current_entry.get("confidence_score"), current_entry.get("confidence_grade")
+    )
+    candidate_score = _normalize_score(
+        candidate_entry.get("confidence_score"), candidate_entry.get("confidence_grade")
+    )
+    if candidate_score > current_score:
+        return True
+    if candidate_score < current_score:
+        return False
+
+    return int(candidate_entry.get("updated_ts") or 0) > int(
+        current_entry.get("updated_ts") or 0
+    )
+
+
+def _collect_pdf_entries_combined() -> List[Dict[str, Any]]:
+    by_strict_key: Dict[str, Dict[str, Any]] = {}
+    for source_bucket, docs_dir in get_local_kb_dirs():
+        for entry in _collect_pdf_entries(docs_dir, source_bucket):
+            strict_key = _normalize_title_key(entry.get("title"), loose=False)
+            if not strict_key:
+                strict_key = f"{source_bucket}:{os.path.basename(str(entry.get('path') or '')).lower()}"
+            existing = by_strict_key.get(strict_key)
+            if existing is None or _prefer_entry(existing, entry):
+                by_strict_key[strict_key] = entry
+
+    by_loose_key: Dict[str, Dict[str, Any]] = {}
+    for entry in by_strict_key.values():
+        loose_key = _normalize_title_key(entry.get("title"), loose=True)
+        if not loose_key:
+            source_bucket = str(entry.get("source_bucket") or "kb")
+            loose_key = (
+                f"{source_bucket}:{os.path.basename(str(entry.get('path') or '')).lower()}"
+            )
+        existing = by_loose_key.get(loose_key)
+        if existing is None or _prefer_entry(existing, entry):
+            by_loose_key[loose_key] = entry
+    return list(by_loose_key.values())
+
+
+def _index_key(entries: Sequence[Dict[str, Any]]) -> Tuple[Tuple[str, str, int, int, str, float], ...]:
+    key_items = []
+    for entry in entries:
+        path = str(entry.get("path") or "")
+        source_bucket = str(entry.get("source_bucket") or "")
+        grade = _normalize_grade(entry.get("confidence_grade"))
+        score = _normalize_score(entry.get("confidence_score"), grade)
+        try:
+            st = os.stat(path)
+            key_items.append(
+                (source_bucket, os.path.basename(path), int(st.st_mtime), int(st.st_size), grade, score)
+            )
+        except Exception:
+            key_items.append((source_bucket, os.path.basename(path), 0, 0, grade, score))
     return tuple(key_items)
 
 
-def _build_index(files: Sequence[str]) -> Tuple[List[EvidenceChunk], Dict[str, float]]:
+def _build_index(entries: Sequence[Dict[str, Any]]) -> Tuple[List[EvidenceChunk], Dict[str, float]]:
     chunks: List[EvidenceChunk] = []
     doc_freq: Dict[str, int] = defaultdict(int)
 
-    for pdf_path in files:
+    for entry in entries:
+        pdf_path = str(entry.get("path") or "")
+        source_bucket = str(entry.get("source_bucket") or "kb")
+        grade = _normalize_grade(entry.get("confidence_grade"))
+        score = _normalize_score(entry.get("confidence_score"), grade)
+
         try:
             reader = PdfReader(pdf_path)
         except Exception:
@@ -138,11 +313,14 @@ def _build_index(files: Sequence[str]) -> Tuple[List[EvidenceChunk], Dict[str, f
                     continue
                 chunk = EvidenceChunk(
                     evidence_id=str(uuid.uuid4()),
+                    source_bucket=source_bucket,
                     doc_name=doc_name,
                     page=page_idx + 1,
                     text=raw_chunk.strip(),
                     norm_text=norm_text,
                     token_counter=token_counter,
+                    confidence_grade=grade,
+                    confidence_score=score,
                 )
                 chunks.append(chunk)
                 for token in token_counter.keys():
@@ -156,9 +334,8 @@ def _build_index(files: Sequence[str]) -> Tuple[List[EvidenceChunk], Dict[str, f
 
 
 def _ensure_index(force_rebuild: bool = False) -> Tuple[List[EvidenceChunk], Dict[str, float]]:
-    docs_dir = get_ekv_docs_dir()
-    files = _collect_pdf_files(docs_dir)
-    key = _index_key(files)
+    entries = _collect_pdf_entries_combined()
+    key = _index_key(entries)
 
     with _CACHE_LOCK:
         if (
@@ -168,7 +345,7 @@ def _ensure_index(force_rebuild: bool = False) -> Tuple[List[EvidenceChunk], Dic
         ):
             return _INDEX_CACHE["chunks"], _INDEX_CACHE["idf"]
 
-        chunks, idf = _build_index(files)
+        chunks, idf = _build_index(entries)
         _INDEX_CACHE["key"] = key
         _INDEX_CACHE["chunks"] = chunks
         _INDEX_CACHE["idf"] = idf
@@ -245,6 +422,8 @@ def _score_chunk(
         score += hits * 1.5
         if hits == 0 and score < 1.0:
             return 0.0
+
+    score *= _GRADE_WEIGHT_DEFAULT.get(chunk.confidence_grade, 1.0)
     return score
 
 
@@ -275,7 +454,7 @@ def search_guideline_evidence(
     top = scored[: max(1, int(top_k))]
 
     results: List[Dict[str, Any]] = []
-    for _, item in top:
+    for weighted_score, item in top:
         snippet = item.text.strip()
         if len(snippet) > 260:
             snippet = snippet[:260] + "..."
@@ -283,10 +462,14 @@ def search_guideline_evidence(
             {
                 "evidence_id": item.evidence_id,
                 "source_type": "guideline_pdf",
-                "source_ref": f"{item.doc_name}#page={item.page}",
+                "source_ref": f"{item.doc_name}#page={item.page}&source={item.source_bucket}",
                 "doc_name": item.doc_name,
+                "source_bucket": item.source_bucket,
                 "page": item.page,
                 "snippet": snippet,
+                "confidence_grade": item.confidence_grade,
+                "confidence_score": item.confidence_score,
+                "weighted_retrieval_score": weighted_score,
             }
         )
     return results

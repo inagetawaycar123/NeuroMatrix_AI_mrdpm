@@ -142,10 +142,20 @@ const STAGE_LANE_MAP = {
 };
 
 const STEP_EVENT_ALIAS = {
+    generate_ctp_maps: ['ctp_generate'],
     generate_structured_report: ['generate_medgemma_report', 'summary'],
     review_confirm: ['human_confirm', 'human_review'],
     review: ['human_review', 'human_confirm'],
 };
+
+const STEP_KEY_CANONICAL_MAP = Object.freeze({
+    ctp_generate: 'generate_ctp_maps',
+});
+
+const CTP_STEP_KEY = 'generate_ctp_maps';
+const CONTEXT_STEP_KEY = 'load_patient_context';
+const STROKE_ANALYSIS_STEP_KEY = 'run_stroke_analysis';
+const CTP_SKIP_MESSAGE = '已提供CTP或本次无需生成，跳过类CTP生成';
 
 function setText(id, value) {
     const el = document.getElementById(id);
@@ -249,7 +259,9 @@ function escapeHtml(raw) {
 }
 
 function normalizeStepKey(raw) {
-    return String(raw || '').trim();
+    const key = String(raw || '').trim();
+    if (!key) return '';
+    return STEP_KEY_CANONICAL_MAP[key] || key;
 }
 
 function getQueryParamsWithContext(extra = {}) {
@@ -635,10 +647,95 @@ function resolveStepEvent(stepKey, toolHintMap) {
     if (direct?.latest) return direct.latest;
     const aliases = STEP_EVENT_ALIAS[key] || [];
     for (const alias of aliases) {
-        const hit = toolHintMap.get(alias);
+        const hit = toolHintMap.get(normalizeStepKey(alias));
         if (hit?.latest) return hit.latest;
     }
     return null;
+}
+
+function normalizeDependsOnList(dependsOn) {
+    if (!Array.isArray(dependsOn)) return [];
+    return dependsOn
+        .map((dep) => {
+            if (dep && typeof dep === 'object') {
+                const depKey = normalizeStepKey(dep.key || dep.tool_name || dep.node_name);
+                if (!depKey) return null;
+                return { ...dep, key: depKey };
+            }
+            const depKey = normalizeStepKey(dep);
+            return depKey || null;
+        })
+        .filter(Boolean);
+}
+
+function normalizeStepList(stepsRaw) {
+    const steps = [];
+    const indexByKey = new Map();
+    (stepsRaw || []).forEach((step, idx) => {
+        const source = step && typeof step === 'object' ? step : {};
+        const stepKey = normalizeStepKey(source.key || source.tool_name || source.node_name || `step_${idx + 1}`);
+        if (!stepKey) return;
+        const normalized = {
+            ...source,
+            key: stepKey,
+            depends_on: normalizeDependsOnList(source.depends_on),
+        };
+        if (indexByKey.has(stepKey)) {
+            const existingIdx = indexByKey.get(stepKey);
+            const existing = steps[existingIdx];
+            const nextStatus = normalizeStatus(normalized.status || 'pending');
+            const prevStatus = normalizeStatus(existing.status || 'pending');
+            if (prevStatus === 'pending' && nextStatus !== 'pending') existing.status = normalized.status;
+            if ((!existing.message || existing.message === '-') && normalized.message) existing.message = normalized.message;
+            if ((!existing.phase || existing.phase === '-') && normalized.phase) existing.phase = normalized.phase;
+            if (existing.retryable !== true && normalized.retryable === true) existing.retryable = true;
+            if ((!existing.attempts || Number(existing.attempts) <= 0) && Number(normalized.attempts) > 0) existing.attempts = normalized.attempts;
+            if ((!Array.isArray(existing.depends_on) || existing.depends_on.length === 0) && normalized.depends_on.length > 0) {
+                existing.depends_on = normalized.depends_on;
+            }
+            return;
+        }
+        indexByKey.set(stepKey, steps.length);
+        steps.push(normalized);
+    });
+    return steps;
+}
+
+function buildSyntheticCtpStep(toolHintMap, run) {
+    const evt = resolveStepEvent(CTP_STEP_KEY, toolHintMap);
+    const modalities = Array.isArray(run?.planner_input?.available_modalities)
+        ? run.planner_input.available_modalities
+        : [];
+    const modalitySet = new Set(modalities.map((x) => String(x || '').trim().toLowerCase()));
+    const hasReadyCtp = ['cbf', 'cbv', 'tmax'].every((k) => modalitySet.has(k))
+        || String(run?.planner_output?.imaging_path || '').trim().toLowerCase() === 'ncct_mcta_ctp';
+    const defaultStatus = hasReadyCtp ? 'completed' : 'skipped';
+    const defaultMessage = hasReadyCtp
+        ? 'CTP灌注图已就绪（含类CTP结果）'
+        : CTP_SKIP_MESSAGE;
+    return {
+        key: CTP_STEP_KEY,
+        title: toolTitle(CTP_STEP_KEY),
+        status: normalizeStatus(evt?.status || defaultStatus),
+        retryable: evt?.retryable === true,
+        attempts: Number(evt?.attempt || 0),
+        message: evt?.message || evt?.result_summary || defaultMessage,
+        phase: evt?.stage || evt?.phase || 'tooling',
+    };
+}
+
+function ensureCtpStep(steps, toolHintMap, run) {
+    if ((steps || []).some((step) => step?.key === CTP_STEP_KEY)) return steps;
+    const nextSteps = [...(steps || [])];
+    const synthetic = buildSyntheticCtpStep(toolHintMap, run);
+    const strokeIdx = nextSteps.findIndex((step) => step?.key === STROKE_ANALYSIS_STEP_KEY);
+    const contextIdx = nextSteps.findIndex((step) => step?.key === CONTEXT_STEP_KEY);
+    let insertAt = nextSteps.length;
+    if (strokeIdx >= 0) insertAt = strokeIdx;
+    else if (contextIdx >= 0) insertAt = contextIdx + 1;
+    else if (nextSteps.length > 0) insertAt = Math.min(1, nextSteps.length);
+    nextSteps.splice(insertAt, 0, synthetic);
+    return nextSteps;
 }
 
 function deriveStepsFromEvents(events) {
@@ -664,8 +761,13 @@ function deriveStepsFromEvents(events) {
 }
 
 function buildGraphModel(run, events) {
-    const stepsRaw = Array.isArray(run?.steps) && run.steps.length > 0 ? run.steps : deriveStepsFromEvents(events);
     const toolHintMap = buildToolHintMap(events);
+    const stepsSource = Array.isArray(run?.steps) && run.steps.length > 0 ? run.steps : deriveStepsFromEvents(events);
+    const stepsRaw = ensureCtpStep(normalizeStepList(stepsSource), toolHintMap, run);
+    const modalities = Array.isArray(run?.planner_input?.available_modalities) ? run.planner_input.available_modalities : [];
+    const modalitySet = new Set(modalities.map((x) => String(x || '').trim().toLowerCase()));
+    const hasReadyCtp = ['cbf', 'cbv', 'tmax'].every((k) => modalitySet.has(k))
+        || String(run?.planner_output?.imaging_path || '').trim().toLowerCase() === 'ncct_mcta_ctp';
     const nodes = [];
     const nodeByKey = new Map();
 
@@ -673,7 +775,12 @@ function buildGraphModel(run, events) {
         const stepKey = normalizeStepKey(step.key || step.tool_name || step.node_name || `step_${idx + 1}`);
         if (!stepKey) return;
         const evt = resolveStepEvent(stepKey, toolHintMap);
-        const status = normalizeStatus(step.status || evt?.status || 'pending');
+        let status = normalizeStatus(step.status || evt?.status || 'pending');
+        if (stepKey === CTP_STEP_KEY && status === 'skipped' && !evt && hasReadyCtp) {
+            status = 'completed';
+        }
+        const ctpReadyMessage = stepKey === CTP_STEP_KEY && status === 'completed' ? 'CTP灌注图已就绪（含类CTP结果）' : '';
+        const nodeMessage = step.message || evt?.message || ctpReadyMessage || '-';
         const stage = String(step.phase || evt?.stage || run?.stage || '').trim().toLowerCase();
         const laneKey = laneForStep(stepKey, stage);
         const node = {
@@ -689,12 +796,12 @@ function buildGraphModel(run, events) {
             risk_level: inferRisk(status, evt),
             source_tag: evt?.source_tag || run?.source_tag || cockpitSourceTag || 'real',
             stage,
-            message: step.message || evt?.message || '-',
+            message: nodeMessage,
             retryable: step.retryable === true || evt?.retryable === true,
             error_code: evt?.error_code || '-',
             event_seq: Number(evt?.event_seq || 0) || null,
-            clinical_summary: evt?.clinical_impact || evt?.result_summary || step.message || '-',
-            output_summary: evt?.result_summary || evt?.message || safeJson(evt?.output_ref || step.message || '-'),
+            clinical_summary: evt?.clinical_impact || evt?.result_summary || nodeMessage,
+            output_summary: evt?.result_summary || evt?.message || safeJson(evt?.output_ref || nodeMessage),
             input_payload: evt?.input_ref || {},
             engineering_payload: evt || {},
             evidence_refs: collectEvidenceRefs(evt),
@@ -733,7 +840,14 @@ function buildGraphModel(run, events) {
         deps.forEach((dep, depIdx) => {
             const fromKey = normalizeStepKey(dep?.key || dep?.tool_name || dep);
             if (!fromKey || fromKey === toKey) return;
-            addEdge(fromKey, toKey, depIdx === 0 ? 'primary' : 'secondary');
+            let edgeType = depIdx === 0 ? 'primary' : 'secondary';
+            if (toKey === STROKE_ANALYSIS_STEP_KEY && fromKey === CONTEXT_STEP_KEY && nodeByKey.has(CTP_STEP_KEY)) {
+                edgeType = 'secondary';
+            }
+            if (toKey === STROKE_ANALYSIS_STEP_KEY && fromKey === CTP_STEP_KEY) {
+                edgeType = 'primary';
+            }
+            addEdge(fromKey, toKey, edgeType);
         });
     });
 
@@ -805,6 +919,28 @@ function computeActiveEdgeIds(graph, targetNodeKey) {
     return edgeSet;
 }
 
+function computeRelatedContext(graph, targetNodeKey) {
+    const relatedNodeIds = new Set();
+    const relatedEdgeIds = new Set();
+    if (!graph || !targetNodeKey) return { relatedNodeIds, relatedEdgeIds };
+    const node = graph.nodeByKey?.get(targetNodeKey);
+    if (!node) return { relatedNodeIds, relatedEdgeIds };
+
+    relatedNodeIds.add(targetNodeKey);
+    (node.parents || []).forEach((id) => relatedNodeIds.add(id));
+    (node.children || []).forEach((id) => relatedNodeIds.add(id));
+
+    graph.edges.forEach((edge) => {
+        if (edge.from === targetNodeKey || edge.to === targetNodeKey) {
+            relatedEdgeIds.add(edge.id);
+            relatedNodeIds.add(edge.from);
+            relatedNodeIds.add(edge.to);
+        }
+    });
+
+    return { relatedNodeIds, relatedEdgeIds };
+}
+
 function orthogonalPath(fromRect, toRect) {
     const fromRightX = fromRect.x + fromRect.w;
     const fromMidY = fromRect.y + fromRect.h / 2;
@@ -837,15 +973,35 @@ function updateDagSelectionStyles() {
     const selectedKey = cockpitSelectedNodeKey || '';
     const targetKey = selectedKey || graph.currentNodeKey || '';
     const activeEdges = computeActiveEdgeIds(graph, targetKey);
+    const pathNodeIds = new Set([targetKey]);
+    graph.edges.forEach((edge) => {
+        if (!activeEdges.has(edge.id)) return;
+        pathNodeIds.add(edge.from);
+        pathNodeIds.add(edge.to);
+    });
+    const { relatedNodeIds, relatedEdgeIds } = computeRelatedContext(graph, targetKey);
+    const shouldDim = Boolean(selectedKey);
+
     document.querySelectorAll('#dagNodeLayer .dag-node').forEach((el) => {
         const key = el.getAttribute('data-step-key') || '';
-        el.classList.toggle('active', Boolean(selectedKey) && key === selectedKey);
-        el.classList.toggle('current', key === graph.currentNodeKey);
+        const isActive = Boolean(selectedKey) && key === selectedKey;
+        const isCurrent = key === graph.currentNodeKey;
+        const isRelated = relatedNodeIds.has(key) || pathNodeIds.has(key);
+        el.classList.toggle('active', isActive);
+        el.classList.toggle('current', isCurrent);
+        el.classList.toggle('related', !isActive && !isCurrent && isRelated);
+        el.classList.toggle('dimmed', shouldDim && !isActive && !isCurrent && !isRelated);
     });
+
     document.querySelectorAll('#dagEdgeLayer path').forEach((el) => {
         const edgeId = el.getAttribute('data-edge-id') || '';
-        el.classList.toggle('active', activeEdges.has(edgeId));
+        const isActive = activeEdges.has(edgeId);
+        const isRelated = relatedEdgeIds.has(edgeId);
+        el.classList.toggle('active', isActive);
+        el.classList.toggle('related', !isActive && isRelated);
+        el.classList.toggle('dimmed', shouldDim && !isActive && !isRelated);
     });
+
     document.querySelectorAll('#stepTimeline .step-item').forEach((el) => {
         const key = el.getAttribute('data-step-key') || '';
         el.classList.toggle('active', Boolean(selectedKey) && key === selectedKey);
@@ -882,15 +1038,15 @@ function renderDagGraph(graph, preserveViewport = true) {
         return;
     }
 
-    const laneWidth = 260;
-    const laneGap = 16;
-    const scenePadding = 14;
+    const laneWidth = 286;
+    const laneGap = 20;
+    const scenePadding = 18;
     const laneTop = 10;
-    const laneHeaderH = 62;
-    const laneBottomPadding = 16;
-    const nodeWidth = 228;
-    const nodeHeight = 124;
-    const nodeGapY = 14;
+    const laneHeaderH = 76;
+    const laneBottomPadding = 20;
+    const nodeWidth = 244;
+    const nodeHeight = 140;
+    const nodeGapY = 18;
 
     const laneHeights = graph.lanes.map((lane) => {
         const count = lane.nodes.length;
@@ -931,6 +1087,7 @@ function renderDagGraph(graph, preserveViewport = true) {
             nodeBtn.className = `dag-node ${statusClass(node.status)}`;
             nodeBtn.style.left = `${x}px`;
             nodeBtn.style.top = `${y}px`;
+            nodeBtn.style.width = `${nodeWidth}px`;
             nodeBtn.setAttribute('data-step-key', node.step_key);
             const aggLine = node.secondary_deps > 0 ? `<span class="dag-node-agg">+${node.secondary_deps} 依赖</span>` : '';
             nodeBtn.innerHTML = `
@@ -959,26 +1116,45 @@ function renderDagGraph(graph, preserveViewport = true) {
     });
     graph.nodePositions = positions;
 
-    const visibleEdges = [];
+    const edgeKinds = new Map();
+    let primaryEdgeCount = 0;
+    let secondaryEdgeCount = 0;
     graph.edges.forEach((edge) => {
         const toNode = graph.nodeByKey.get(edge.to);
-        if (!toNode) return;
-        if (toNode.primary_parent && edge.from !== toNode.primary_parent) return;
-        visibleEdges.push(edge);
+        const kind = toNode?.primary_parent === edge.from ? 'primary' : 'secondary';
+        edgeKinds.set(edge.id, kind);
+        if (kind === 'primary') primaryEdgeCount += 1;
+        else secondaryEdgeCount += 1;
     });
-    const foldedCount = Math.max(0, graph.edges.length - visibleEdges.length);
+
     setText('dagNodeCount', `nodes: ${graph.nodes.length}`);
-    setText('dagEdgeCount', foldedCount > 0 ? `edges: ${visibleEdges.length} (+${foldedCount} folded)` : `edges: ${visibleEdges.length}`);
+    setText('dagEdgeCount', `edges: ${graph.edges.length} (primary ${primaryEdgeCount} / secondary ${secondaryEdgeCount})`);
     edgeLayer.setAttribute('viewBox', `0 0 ${sceneWidth} ${sceneHeight}`);
     edgeLayer.setAttribute('width', `${sceneWidth}`);
     edgeLayer.setAttribute('height', `${sceneHeight}`);
-    visibleEdges.forEach((edge) => {
+
+    const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+    defs.innerHTML = `
+        <marker id="dagArrowPrimary" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="10" markerHeight="8" orient="auto">
+            <path d="M0,0 L10,4 L0,8 z" fill="rgba(147,197,253,0.95)"></path>
+        </marker>
+        <marker id="dagArrowSecondary" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="9" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,4 L0,8 z" fill="rgba(148,163,184,0.52)"></path>
+        </marker>
+    `;
+    edgeLayer.appendChild(defs);
+
+    graph.edges.forEach((edge) => {
         const fromRect = positions.get(edge.from);
         const toRect = positions.get(edge.to);
         if (!fromRect || !toRect) return;
+        const kind = edgeKinds.get(edge.id) || 'secondary';
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         path.setAttribute('d', orthogonalPath(fromRect, toRect));
         path.setAttribute('data-edge-id', edge.id);
+        path.setAttribute('data-edge-kind', kind);
+        path.classList.add(`edge-${kind}`);
+        path.setAttribute('marker-end', kind === 'primary' ? 'url(#dagArrowPrimary)' : 'url(#dagArrowSecondary)');
         edgeLayer.appendChild(path);
     });
 
@@ -1012,11 +1188,13 @@ function switchDrawerTab(tabName) {
 function openNodeDrawer() {
     const drawer = document.getElementById('nodeDrawer');
     if (drawer) drawer.hidden = false;
+    document.body.classList.add('node-drawer-open');
 }
 
 function closeNodeDrawer() {
     const drawer = document.getElementById('nodeDrawer');
     if (drawer) drawer.hidden = true;
+    document.body.classList.remove('node-drawer-open');
 }
 
 function renderNodeDrawer(nodeKey) {
@@ -1154,7 +1332,7 @@ function resolveEventStepKey(event) {
     if (direct && cockpitGraphModel?.nodeByKey?.has(direct)) return direct;
     if (!direct) return '';
     for (const [stepKey, aliases] of Object.entries(STEP_EVENT_ALIAS)) {
-        if (aliases.includes(direct) && cockpitGraphModel?.nodeByKey?.has(stepKey)) return stepKey;
+        if (aliases.some((alias) => normalizeStepKey(alias) === direct) && cockpitGraphModel?.nodeByKey?.has(stepKey)) return stepKey;
     }
     return direct;
 }
@@ -1610,6 +1788,7 @@ function stopPolling() {
 
 document.addEventListener('DOMContentLoaded', () => {
     document.body.classList.add('cockpit-page-body');
+    closeNodeDrawer();
     parseCockpitParams();
     bindActions();
     bindEntryButtons();

@@ -713,9 +713,21 @@ export default function App() {
             </div>
             <div className="modal-kv">
               <div className="kv"><span>step_key</span><strong>{fmt(selectedNode.step_key)}</strong></div>
-              <div className="kv"><span>status</span><strong>{fmt(selectedNode.status)}</strong></div>
-              <div className="kv"><span>latency_ms</span><strong>{fmt(selectedNode.latency_ms)}</strong></div>
+              <div className="kv"><span>confidence</span><strong>{fmt(selectedNode.confidence)}%</strong></div>
+              <div className="kv"><span>latency_ms</span><strong>{fmt(selectedNode.latency_ms)}ms</strong></div>
+              <div className="kv"><span>risk_level</span><strong>{fmt(selectedNode.risk_level || selectedNode.risk || "none")}</strong></div>
               <div className="kv"><span>retryable</span><strong>{String(Boolean(selectedNode.retryable))}</strong></div>
+              <div className="kv"><span>error_code</span><strong>{fmt(selectedNode.error_code || "-")}</strong></div>
+              <div className="kv"><span>message</span><strong className="text-wrap">{fmt(selectedNode.message || "-")}</strong></div>
+              {selectedNode.parents ? (
+                <div className="kv"><span>parents</span><strong>{Array.isArray(selectedNode.parents) ? selectedNode.parents.join(", ") : fmt(selectedNode.parents)}</strong></div>
+              ) : null}
+              {selectedNode.children ? (
+                <div className="kv"><span>children</span><strong>{Array.isArray(selectedNode.children) ? selectedNode.children.join(", ") : fmt(selectedNode.children)}</strong></div>
+              ) : null}
+              {selectedNode.secondary_deps !== undefined ? (
+                <div className="kv"><span>secondary_deps</span><strong>{fmt(selectedNode.secondary_deps)}</strong></div>
+              ) : null}
             </div>
             {nodeLoading ? <p className="muted">节点详情加载中...</p> : null}
             {nodeDetail?.error ? <p className="error-box">{nodeDetail.error}</p> : null}

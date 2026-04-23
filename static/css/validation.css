@@ -285,8 +285,9 @@
 }
 
 .tool-btn.mini {
-    padding: 4px 10px;
+    padding: 5px 11px;
     font-size: 12px;
+    border-radius: 8px;
 }
 
 .validation-pagination {
@@ -304,19 +305,23 @@
 }
 
 .validation-page-btn {
-    border: 1px solid rgba(100, 116, 139, 0.45);
-    background: #0a1220;
-    color: #a7bce0;
-    padding: 4px 10px;
-    border-radius: 6px;
+    border: 1px solid rgba(124, 147, 182, 0.5);
+    background: linear-gradient(165deg, rgba(18, 29, 48, 0.94), rgba(9, 17, 30, 0.96));
+    color: #d5e6ff;
+    padding: 6px 11px;
+    border-radius: 8px;
     cursor: pointer;
     font-size: 12px;
+    font-weight: 600;
     min-width: 66px;
+    transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
 
 .validation-page-btn:hover:not(:disabled) {
-    border-color: #3b82f6;
+    border-color: rgba(106, 190, 255, 0.86);
     color: #ffffff;
+    box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.28), 0 8px 16px rgba(56, 189, 248, 0.2);
+    transform: translateY(-1px);
 }
 
 .validation-page-btn:disabled {
