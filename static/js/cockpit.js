@@ -6,6 +6,7 @@ let cockpitRun = null;
 let cockpitEvents = [];
 let cockpitResult = null;
 let cockpitValidation = null;
+let cockpitUploadResult = null;
 
 let cockpitPollTimer = null;
 let cockpitSourceTag = 'real';
@@ -153,6 +154,7 @@ const STEP_KEY_CANONICAL_MAP = Object.freeze({
 });
 
 const CTP_STEP_KEY = 'generate_ctp_maps';
+const NCCT_STEP_KEY = 'run_ncct_classification';
 const CONTEXT_STEP_KEY = 'load_patient_context';
 const STROKE_ANALYSIS_STEP_KEY = 'run_stroke_analysis';
 const CTP_SKIP_MESSAGE = '已提供CTP或本次无需生成，跳过类CTP生成';
@@ -427,9 +429,143 @@ function toSummaryCount(status, count, listLike) {
     return '-';
 }
 
+function buildThreeClassCountsText(counts) {
+    if (!counts || typeof counts !== 'object') return '';
+    const normalCount = Number(counts.normal || 0);
+    const hemoCount = Number(counts.hemo || 0);
+    const infarctCount = Number(counts.infarct || 0);
+    if (!Number.isFinite(normalCount) && !Number.isFinite(hemoCount) && !Number.isFinite(infarctCount)) {
+        return '';
+    }
+    return `正常 ${Number.isFinite(normalCount) ? normalCount : 0}，脑出血 ${Number.isFinite(hemoCount) ? hemoCount : 0}，脑缺血 ${Number.isFinite(infarctCount) ? infarctCount : 0}`;
+}
+
+function getThreeClassCandidates(run, resultResp) {
+    const candidates = [];
+    const push = (item) => {
+        if (item && typeof item === 'object') candidates.push(item);
+    };
+
+    push(cockpitUploadResult);
+    push(resultResp?.data?.result);
+    push(run?.result);
+
+    const payload = parseResultPayload(resultResp);
+    if (payload && typeof payload === 'object') {
+        push(payload);
+        push(payload.analysis_data);
+        push(payload.analysis);
+        push(payload.upload_result);
+    }
+
+    return candidates;
+}
+
+async function fetchLinkedUploadResult(run) {
+    const linkedJobId = String(run?.linked_upload_job_id || '').trim();
+    if (!linkedJobId) return null;
+    try {
+        const resp = await fetch(`/api/upload/progress/${encodeURIComponent(linkedJobId)}`);
+        const data = await safeJsonFromResponse(resp);
+        if (!resp.ok || !data?.success) return null;
+        return (data?.job?.result && typeof data.job.result === 'object') ? data.job.result : null;
+    } catch (_err) {
+        return null;
+    }
+}
+
+function extractNcctThreeClassSummary(run, resultResp) {
+    const candidates = getThreeClassCandidates(run, resultResp);
+
+    for (const item of candidates) {
+        const summary = item.three_class_summary;
+        if (summary && typeof summary === 'object') {
+            const display = String(summary.display || '').trim();
+            const countsText = buildThreeClassCountsText(summary.counts);
+            if (display) return display;
+            if (countsText) return countsText;
+        }
+
+        if (item.three_class_counts && typeof item.three_class_counts === 'object') {
+            const countsText = buildThreeClassCountsText(item.three_class_counts);
+            if (countsText) return countsText;
+        }
+
+        const topDisplay = String(item.three_class_display || '').trim();
+        if (topDisplay) return topDisplay;
+
+        const topLabel = String(item.three_class_label_cn || item.three_class_label || '').trim();
+        if (topLabel) return topLabel;
+
+        if (Array.isArray(item.rgb_files) && item.rgb_files.length > 0) {
+            const firstLabeled = item.rgb_files.find((x) => String(x?.three_class_label_cn || x?.three_class_label || '').trim());
+            const label = String(firstLabeled?.three_class_label_cn || firstLabeled?.three_class_label || '').trim();
+            if (label) return label;
+        }
+    }
+
+    return '--';
+}
+
+function extractNcctThreeClassConfidence(run, resultResp) {
+    const candidates = getThreeClassCandidates(run, resultResp);
+
+    for (const item of candidates) {
+        const topConfidence = Number(item.three_class_confidence);
+        if (Number.isFinite(topConfidence)) {
+            return formatConfidence(topConfidence);
+        }
+
+        if (Array.isArray(item.rgb_files) && item.rgb_files.length > 0) {
+            let best = null;
+            item.rgb_files.forEach((slice) => {
+                const label = String(slice?.three_class_label || slice?.three_class_label_cn || '').trim();
+                const conf = Number(slice?.three_class_confidence);
+                if (!label || !Number.isFinite(conf)) return;
+                if (best === null || conf > best) best = conf;
+            });
+            if (best !== null) return formatConfidence(best);
+        }
+    }
+
+    return '--';
+}
+
+function buildNcctThreeClassDetail(run, resultResp) {
+    const summary = extractNcctThreeClassSummary(run, resultResp);
+    const confidence = extractNcctThreeClassConfidence(run, resultResp);
+    const parts = [];
+    if (summary && summary !== '--') parts.push(`结果：${summary}`);
+    if (confidence && confidence !== '--') parts.push(`置信度：${confidence}`);
+    return parts.length > 0 ? parts.join(' | ') : '等待 NCCT 三分类结果';
+}
+
+function buildSyntheticNcctStep(toolHintMap, run, resultResp) {
+    const evt = resolveStepEvent(NCCT_STEP_KEY, toolHintMap);
+    const summary = extractNcctThreeClassSummary(run, resultResp);
+    const confidence = extractNcctThreeClassConfidence(run, resultResp);
+    const hasResult = summary !== '--' || confidence !== '--';
+    const defaultStatus = hasResult ? 'completed' : 'pending';
+    const defaultMessage = hasResult ? buildNcctThreeClassDetail(run, resultResp) : '等待 NCCT 三分类结果';
+    return {
+        key: NCCT_STEP_KEY,
+        title: toolTitle(NCCT_STEP_KEY),
+        status: normalizeStatus(evt?.status || defaultStatus),
+        retryable: evt?.retryable === true,
+        attempts: Number(evt?.attempt || 0),
+        message: evt?.message || evt?.result_summary || defaultMessage,
+        phase: evt?.stage || evt?.phase || 'tooling',
+        result_summary: summary,
+        result_confidence: confidence,
+        result_detail: buildNcctThreeClassDetail(run, resultResp),
+    };
+}
+
 function renderRunSummary(run, validation, resultResp) {
     const reportReady = resultResp?.ok || normalizeStatus(run?.status || '') === 'succeeded';
     setText('summaryResultStatus', reportReady ? '已生成' : '生成中');
+    setText('summaryNcctResult', extractNcctThreeClassSummary(run, resultResp));
+    setText('summaryNcctConfidence', extractNcctThreeClassConfidence(run, resultResp));
     setText('summaryLastError', computeLastError(run));
     setText('summaryRetryStep', computeRetryableStep(run));
 
@@ -724,6 +860,24 @@ function buildSyntheticCtpStep(toolHintMap, run) {
     };
 }
 
+function ensureNcctStep(steps, toolHintMap, run, resultResp) {
+    if ((steps || []).some((step) => step?.key === NCCT_STEP_KEY)) return steps;
+    const nextSteps = [...(steps || [])];
+    const synthetic = buildSyntheticNcctStep(toolHintMap, run, resultResp);
+    const contextIdx = nextSteps.findIndex((step) => step?.key === CONTEXT_STEP_KEY);
+    const detectIdx = nextSteps.findIndex((step) => step?.key === 'detect_modalities');
+    const ctpIdx = nextSteps.findIndex((step) => step?.key === CTP_STEP_KEY);
+    const strokeIdx = nextSteps.findIndex((step) => step?.key === STROKE_ANALYSIS_STEP_KEY);
+    let insertAt = nextSteps.length;
+    if (contextIdx >= 0) insertAt = contextIdx + 1;
+    else if (detectIdx >= 0) insertAt = detectIdx + 1;
+    else if (ctpIdx >= 0) insertAt = ctpIdx;
+    else if (strokeIdx >= 0) insertAt = strokeIdx;
+    else if (nextSteps.length > 0) insertAt = Math.min(1, nextSteps.length);
+    nextSteps.splice(insertAt, 0, synthetic);
+    return nextSteps;
+}
+
 function ensureCtpStep(steps, toolHintMap, run) {
     if ((steps || []).some((step) => step?.key === CTP_STEP_KEY)) return steps;
     const nextSteps = [...(steps || [])];
@@ -760,10 +914,11 @@ function deriveStepsFromEvents(events) {
     return steps;
 }
 
-function buildGraphModel(run, events) {
+function buildGraphModel(run, events, resultResp = null) {
     const toolHintMap = buildToolHintMap(events);
     const stepsSource = Array.isArray(run?.steps) && run.steps.length > 0 ? run.steps : deriveStepsFromEvents(events);
-    const stepsRaw = ensureCtpStep(normalizeStepList(stepsSource), toolHintMap, run);
+    const stepsWithNcct = ensureNcctStep(normalizeStepList(stepsSource), toolHintMap, run, resultResp);
+    const stepsRaw = ensureCtpStep(stepsWithNcct, toolHintMap, run);
     const modalities = Array.isArray(run?.planner_input?.available_modalities) ? run.planner_input.available_modalities : [];
     const modalitySet = new Set(modalities.map((x) => String(x || '').trim().toLowerCase()));
     const hasReadyCtp = ['cbf', 'cbv', 'tmax'].every((k) => modalitySet.has(k))
@@ -805,6 +960,9 @@ function buildGraphModel(run, events) {
             input_payload: evt?.input_ref || {},
             engineering_payload: evt || {},
             evidence_refs: collectEvidenceRefs(evt),
+            ncct_result_summary: stepKey === NCCT_STEP_KEY ? extractNcctThreeClassSummary(run, resultResp) : '',
+            ncct_result_confidence: stepKey === NCCT_STEP_KEY ? extractNcctThreeClassConfidence(run, resultResp) : '',
+            ncct_result_detail: stepKey === NCCT_STEP_KEY ? buildNcctThreeClassDetail(run, resultResp) : '',
             parents: [],
             children: [],
             secondary_deps: 0,
@@ -1225,6 +1383,10 @@ function renderNodeDrawer(nodeKey) {
         sourceEl.textContent = sourceTagText(node.source_tag);
     }
 
+    setText('drawerNcctSummary', node.step_key === NCCT_STEP_KEY
+        ? (node.ncct_result_detail || node.ncct_result_summary || node.output_summary || '-')
+        : '-');
+
     setText('drawerClinicalSummary', node.clinical_summary || '-');
     setText('drawerNodeOutput', node.output_summary || '-');
     setText('drawerEngineeringToolKey', node.tool_key || '-');
@@ -1254,9 +1416,14 @@ function renderStepTimeline(run) {
     const wrap = document.getElementById('stepTimeline');
     if (!wrap) return;
     wrap.innerHTML = '';
-    const steps = Array.isArray(run?.steps) && run.steps.length > 0
-        ? run.steps
-        : (cockpitGraphModel?.nodes || []).map((node) => ({
+    let steps = [];
+    if (Array.isArray(run?.steps) && run.steps.length > 0) {
+        const toolHintMap = buildToolHintMap(cockpitEvents || []);
+        const normalized = normalizeStepList(run.steps);
+        const withNcct = ensureNcctStep(normalized, toolHintMap, run, cockpitResult);
+        steps = ensureCtpStep(withNcct, toolHintMap, run);
+    } else {
+        steps = (cockpitGraphModel?.nodes || []).map((node) => ({
             key: node.step_key,
             title: node.title,
             status: node.status,
@@ -1266,6 +1433,7 @@ function renderStepTimeline(run) {
             started_at: node.engineering_payload?.timestamp,
             ended_at: node.engineering_payload?.timestamp,
         }));
+    }
     if (steps.length === 0) {
         wrap.innerHTML = '<div class="empty-block">暂无步骤数据。</div>';
         return;
@@ -1273,12 +1441,15 @@ function renderStepTimeline(run) {
     steps.forEach((step, idx) => {
         const stepKey = normalizeStepKey(step.key || step.tool_name || `step_${idx + 1}`);
         const status = normalizeStatus(step.status || 'pending');
+        const timelineTitle = stepKey === NCCT_STEP_KEY
+            ? 'run_ncct_classification'
+            : (stepKey === CTP_STEP_KEY ? 'run_ctp_analysis' : (step.title || toolTitle(stepKey) || stepKey));
         const item = document.createElement('div');
         item.className = 'step-item interactive';
         item.setAttribute('data-step-key', stepKey);
         item.innerHTML = `
             <div class="step-item-head">
-                <div class="step-item-title">${idx + 1}. ${escapeHtml(step.title || toolTitle(stepKey) || stepKey)}</div>
+                <div class="step-item-title">${idx + 1}. ${escapeHtml(timelineTitle)}</div>
                 <div class="badge ${statusClass(status)}">${escapeHtml(statusText(status))}</div>
             </div>
             <div class="step-item-meta">
@@ -1710,6 +1881,7 @@ async function fetchCockpitData(isManual = false) {
 
         cockpitRun = runBundle.run || {};
         cockpitEvents = Array.isArray(runBundle.events) ? runBundle.events : [];
+        cockpitUploadResult = await fetchLinkedUploadResult(cockpitRun);
 
         const validationData = await safeJsonFromResponse(validationResp);
         cockpitValidation = validationResp.ok && validationData.success ? validationData : null;
@@ -1737,7 +1909,7 @@ async function fetchCockpitData(isManual = false) {
         updateMeta(cockpitRun, cockpitEvents);
         renderRunSummary(cockpitRun, cockpitValidation, cockpitResult);
 
-        const graph = buildGraphModel(cockpitRun, cockpitEvents);
+        const graph = buildGraphModel(cockpitRun, cockpitEvents, cockpitResult);
         cockpitGraphModel = graph;
         cockpitNodes = graph.nodes;
         cockpitEdges = graph.edges;

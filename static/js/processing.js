@@ -3,6 +3,7 @@
 const UPLOAD_NODES = [
     { key: "archive_ready", title: "Case_Intake.parse()", subtitle: "病例接收与归档准备", chip: "Case_Intake", delegated: "" },
     { key: "modality_detect", title: "Modality_Detect.route()", subtitle: "模态识别与路径判定", chip: "Modality", delegated: "" },
+    { key: "three_class", title: "Three_Class.triage()", subtitle: "NCCT三分类与Grad-CAM", chip: "Three_Class", delegated: "" },
     { key: "ctp_generate", title: "CTP_Generate.run()", subtitle: "灌注图谱生成", chip: "CTP_Gen", delegated: "generate_ctp_maps" },
     { key: "stroke_analysis", title: "Stroke_Analysis.segment()", subtitle: "卒中病灶分析", chip: "Analysis", delegated: "run_stroke_analysis" },
     { key: "pseudocolor", title: "Pseudocolor_Render.compose()", subtitle: "伪彩可视化生成", chip: "Pseudocolor", delegated: "generate_pseudocolor" },
@@ -27,7 +28,8 @@ const TEMPLATES = Object.freeze({
     default: ["系统正在执行当前节点。", "处理节点输入并推进流程。", "形成可解释的临床链路。"],
     archive_ready: ["系统已接收病例并创建会话。", "归集 patient_id 与 file_id。", "确保全流程同一病例上下文。"],
     modality_detect: ["系统正在识别可用模态。", "判断可执行分析路径。", "避免输入缺失导致误判。"],
-    ctp_generate: ["系统正在生成 CBF/CBV/Tmax 图谱。", "输出灌注核心参数。", "支撑缺血核心与半暗带判断。"],
+    three_class: ["系统正在执行 NCCT 三分类。", "同步生成 Grad-CAM 解释图。", "为后续临床判读提供快速分诊参考。"],
+    ctp_generate: ["系统将在三分类完成后启动 CTP 生成。", "输出 CBF/CBV/Tmax 灌注核心参数。", "支撑缺血核心与半暗带判断。"],
     stroke_analysis: ["系统正在做病灶分割与体积评估。", "计算病灶侧别与关键指标。", "形成治疗决策依据。"],
     ai_report: ["系统正在组装结构化报告。", "汇总推理证据与关键结论。", "减少医生重复录入负担。"],
     icv: ["系统正在执行 ICV 核验。", "检查关键指标一致性。", "降低指标冲突风险。"],
@@ -111,6 +113,60 @@ function summarize(v) {
 }
 function pretty(v) { try { return typeof v === "object" ? JSON.stringify(v, null, 2) : String(v); } catch (_e) { return summarize(v); } }
 function modalities() { return Array.isArray(state.latestJob?.modalities) && state.latestJob.modalities.length ? state.latestJob.modalities : (Array.isArray(state.latestRun?.planner_input?.available_modalities) ? state.latestRun.planner_input.available_modalities : []); }
+function threeClassSummaryText() {
+    const summary = state.latestJob?.result?.three_class_summary;
+    if (!summary) return "-";
+    if (typeof summary === "string") return summary;
+    if (typeof summary.display === "string" && summary.display.trim()) return summary.display.trim();
+    const counts = summary.counts && typeof summary.counts === "object" ? summary.counts : {};
+    const parts = [];
+    const map = [
+        ["normal", "正常"],
+        ["hemo", "脑出血"],
+        ["infarct", "脑缺血"],
+    ];
+    map.forEach(([key, label]) => {
+        if (counts[key] !== undefined && counts[key] !== null) {
+            parts.push(`${label} ${counts[key]}`);
+        }
+    });
+    return parts.length ? parts.join(" | ") : "-";
+}
+
+function threeClassConfidenceValue() {
+    const result = state.latestJob?.result || {};
+    const direct = Number(result.three_class_confidence);
+    if (Number.isFinite(direct)) return direct;
+
+    const rgbFiles = Array.isArray(result.rgb_files) ? result.rgb_files : [];
+    let best = null;
+    rgbFiles.forEach((slice) => {
+        const label = t(slice?.three_class_label_cn || slice?.three_class_label, "");
+        const conf = Number(slice?.three_class_confidence);
+        if (!label || !Number.isFinite(conf)) return;
+        if (best === null || conf > best) best = conf;
+    });
+    return best;
+}
+
+function threeClassConfidenceText() {
+    const val = threeClassConfidenceValue();
+    if (!Number.isFinite(val)) return "-";
+    const pct = val > 1 ? Math.max(0, Math.min(100, val)) : Math.max(0, Math.min(1, val)) * 100;
+    return `${pct.toFixed(1)}%`;
+}
+
+function augmentImagingSummaryWithNcct(baseText) {
+    const base = t(baseText, "");
+    const triage = threeClassSummaryText();
+    const hasTriage = triage !== "-";
+    if (!hasTriage) {
+        return base || "请确认 NCCT/CTA 的关键影像发现。";
+    }
+    const triageLine = hasTriage ? `NCCT 三分类：${triage}` : "";
+    const merged = [base, triageLine].filter(Boolean).join("\n");
+    return merged || "请确认 NCCT/CTA 的关键影像发现。";
+}
 function getMeta(tool) { const m = TOOL_META[tool] || [`${tool}.run()`, "智能体节点", tool || "Node"]; return { title: m[0], subtitle: m[1], chip: m[2] }; }
 function setPill(elm, s) { if (!elm) return; const k = normStatus(s); elm.className = `runtime-status-pill ${k}`; elm.textContent = STATUS_TEXT[k] || STATUS_TEXT.pending; }
 
@@ -221,7 +277,7 @@ function reviewFallbackDraftForSection(run, sectionSpec) {
         return [t(payload.patient_name, ""), t(payload.patient_age, ""), t(payload.patient_sex, ""), t(payload.onset_to_admission_hours, "")].filter(Boolean).join(" | ") || "请确认患者基本信息与时间窗。";
     }
     if (sectionId === "imaging_summary") {
-        return t(summary.impression || summary.text || payload.imaging_summary_text, "") || "请确认 NCCT/CTA 的关键影像发现。";
+        return augmentImagingSummaryWithNcct(t(summary.impression || summary.text || payload.imaging_summary_text, ""));
     }
     if (sectionId === "ctp_quant") {
         return [t(ctp.core_infarct_volume, ""), t(ctp.penumbra_volume, ""), t(ctp.mismatch_ratio, "")].filter(Boolean).join(" | ") || "请确认 CTP 量化结果与临床解释。";
@@ -269,12 +325,17 @@ function reviewNormalize(reviewState) {
     if (!Array.isArray(base.sections)) base.sections = [];
     base.sections = base.sections.map((sec, idx) => {
         const fallback = REVIEW_FALLBACK_SECTIONS[idx] || {};
+        const sectionId = t(sec?.section_id, fallback.section_id || `section_${idx + 1}`);
+        const draftTextRaw = t(sec?.draft_text, "");
+        const draftText = sectionId === "imaging_summary"
+            ? augmentImagingSummaryWithNcct(draftTextRaw)
+            : draftTextRaw;
         return {
-            section_id: t(sec?.section_id, fallback.section_id || `section_${idx + 1}`),
+            section_id: sectionId,
             title: t(sec?.title, fallback.title || `章节 ${idx + 1}`),
             lead: t(sec?.lead, fallback.lead || ""),
             guide: t(sec?.guide, fallback.guide || ""),
-            draft_text: t(sec?.draft_text, ""),
+            draft_text: draftText,
             evidence_refs: Array.isArray(sec?.evidence_refs) ? sec.evidence_refs.filter(Boolean) : [],
             risk_level: token(sec?.risk_level || fallback.risk_level || "low"),
             review_status: token(sec?.review_status || "pending"),
@@ -476,6 +537,9 @@ function syncRevealQueue() {
     const keep = new Set(order);
     const eligibleOrder = state.nodes.filter((n) => isNodeEligible(n)).map((n) => n.id);
     const eligibleSet = new Set(eligibleOrder);
+    const pendingIds = state.nodes
+        .filter((n) => normStatus(n.status) === "pending")
+        .map((n) => n.id);
 
     state.revealedNodeIds = state.revealedNodeIds.filter((id) => keep.has(id));
     state.revealPendingIds = state.revealPendingIds.filter(
@@ -487,6 +551,15 @@ function syncRevealQueue() {
             state.revealPendingIds.push(id);
         }
     });
+
+    // Pending nodes should be visible immediately in the main timeline.
+    pendingIds.forEach((id) => {
+        if (!state.revealedNodeIds.includes(id)) {
+            state.revealedNodeIds.push(id);
+            state.revealAt[id] = state.revealAt[id] || Date.now();
+        }
+    });
+    state.revealPendingIds = state.revealPendingIds.filter((id) => !pendingIds.includes(id));
 
     if (!state.revealedNodeIds.length && state.revealPendingIds.length) {
         const first = state.revealPendingIds.shift();
@@ -558,12 +631,16 @@ function buildNodes() {
     const nodes = [];
     const jobSteps = Object.create(null); (state.latestJob?.steps || []).forEach((s) => { if (s?.key) jobSteps[s.key] = s; });
     const runSteps = Object.create(null); (state.latestRun?.steps || []).forEach((s) => { if (s?.key) runSteps[s.key] = s; });
+    const threeClassStatus = normStatus(jobSteps.three_class?.status || "pending");
     UPLOAD_NODES.forEach((cfg, idx) => {
         const h = cfg.delegated ? state.hints[cfg.delegated] : null;
         const runStep = cfg.delegated ? runSteps[cfg.delegated] : null;
         const jobStep = jobSteps[cfg.key] || null;
         const status = normStatus(h?.status || runStep?.status || jobStep?.status || "pending");
-        const fallback = t((runStep && runStep.message) || (jobStep && jobStep.message), status === "pending" ? "节点未开始" : status === "running" ? "节点处理中" : status === "waiting" ? "等待人工确认" : status === "completed" ? "节点已完成" : "节点执行异常");
+        const fallbackDefault = status === "pending" ? "节点未开始" : status === "running" ? "节点处理中" : status === "waiting" ? "等待人工确认" : status === "completed" ? "节点已完成" : "节点执行异常";
+        const fallback = cfg.key === "ctp_generate" && status === "pending" && threeClassStatus !== "completed"
+            ? "等待 NCCT 三分类完成后启动"
+            : t((runStep && runStep.message) || (jobStep && jobStep.message), fallbackDefault);
         const inputDefault = cfg.key === "archive_ready" ? { patient_id: state.patientId || "-", file_id: state.fileId || "-" } : cfg.key === "modality_detect" ? { available_modalities: modalities() } : cfg.key === "ai_report" ? { goal_question: t(state.latestRun?.planner_input?.goal_question || state.latestRun?.planner_input?.question) } : { run_id: state.runId, tool_name: cfg.delegated || cfg.key };
         nodes.push({
             id: `upload_${cfg.key}`, key: cfg.key, title: cfg.title, subtitle: cfg.subtitle, chip: cfg.chip, status, group: "upload", order: idx + 1,
@@ -598,11 +675,13 @@ function tableRows(data) { if (data === null || data === undefined) return [{ k:
 function nodeCard(node, ctx = {}) {
     const card = document.createElement("article");
     const classes = [`runtime-node-card`, `status-${node.status}`];
+    if (node.key) classes.push(`runtime-node-${String(node.key).replace(/[^a-z0-9_-]/gi, "_")}`);
     if (ctx.isActive) classes.push("is-active");
     if (ctx.isHistory) classes.push("is-history");
     if (ctx.isNew) classes.push("is-enter");
     card.className = classes.join(" ");
     card.dataset.nodeId = node.id;
+    card.dataset.nodeKey = String(node.key || "");
     card.dataset.nodeOrder = String(node.order || 0);
     const expanded = Boolean(state.expanded[node.id]);
     const riskClass = node.riskLevel || "medium";
@@ -854,6 +933,7 @@ function render() {
     $("runtimeStartAt").textContent = t(state.startedAt);
     $("runtimeFileId").textContent = t(state.fileId);
     $("runtimeModalities").textContent = modalities().join(" + ") || "-";
+    $("runtimeThreeClass").textContent = threeClassSummaryText();
     $("runtimeGoalQuestion").textContent = t(run?.planner_input?.goal_question || run?.planner_input?.question);
     $("runtimeCurrentStage").textContent = t(run.stage || job.current_step);
     $("runtimeCurrentTool").textContent = t(run.current_tool);
@@ -866,7 +946,7 @@ function render() {
         : "上传完成后，系统将依次执行影像处理与多智能体协作，并持续展示临床可读解释。";
     $("runtimeOrchestrationPath").textContent = Array.isArray(plan?.next_tools)
         ? plan.next_tools.map((x) => getMeta(x).chip).join(" → ")
-        : "Case_Intake → Modality_Detect → CTP_Generate → Stroke_Analysis → Report → Agent_Network";
+        : "Case_Intake → Modality_Detect → Three_Class → CTP_Generate → Stroke_Analysis → Report → Agent_Network";
 
     const note = $("runtimeCaseNote");
     note.classList.toggle("error", !!state.error);
@@ -934,7 +1014,8 @@ function render() {
         const done = state.nodes.filter((n) => n.status === "completed").length;
         state.nodes.forEach((n) => {
             const c = document.createElement("span");
-            c.className = `runtime-chip ${n.status}`;
+            c.className = `runtime-chip ${n.status} runtime-chip-${String(n.key || "node").replace(/[^a-z0-9_-]/gi, "_")}`;
+            c.dataset.nodeKey = String(n.key || "");
             if (activeNode?.id === n.id) c.classList.add("current");
             if (!visibleSet.has(n.id)) c.classList.add("pending-reveal");
             c.textContent = n.chip;

@@ -11,6 +11,7 @@ KEY_CLAIM_IDS: List[str] = [
     "core_infarct_volume",
     "penumbra_volume",
     "mismatch_ratio",
+    "three_class_label",
     "significant_mismatch",
     "treatment_window_notice",
 ]
@@ -447,7 +448,8 @@ def _build_llm_question_prompt(
     core_volume = patient_context.get("core_infarct_volume", "未知")
     penumbra_volume = patient_context.get("penumbra_volume", "未知")
     mismatch_ratio = patient_context.get("mismatch_ratio", "未知")
-    hemisphere = patient_context.get("hemisphere", "未知")
+    three_class_confidence = patient_context.get("three_class_confidence", "未知")
+    three_class_label = patient_context.get("three_class_label", "脑缺血")
 
     findings_text = "\n".join(f"  - {p}" for p in key_points) if key_points else "  （无）"
     actions_text = "\n".join(f"  - {a}" for a in next_actions) if next_actions else "  （无）"
@@ -476,7 +478,7 @@ def _build_llm_question_prompt(
 - 核心梗死体积（Core）：{core_volume} ml
 - 半暗带体积（Penumbra）：{penumbra_volume} ml
 - 不匹配比值（Mismatch Ratio）：{mismatch_ratio}
-- 受累侧别：{hemisphere}
+- NCCT 三分类结果：{three_class_label} (置信度：{three_class_confidence})
 
 【系统校验关键发现】
 {findings_text}
@@ -489,14 +491,12 @@ def _build_llm_question_prompt(
 
 【写作要求】
 1. 必须全部使用中文回答，不得出现英文。
-2. 直接针对用户的问题进行回答，不要偏离主题。
 3. 回答需要结合患者的具体数据（核心梗死体积、半暗带体积、不匹配比值等）进行分析。
 4. 参考《中国急性缺血性脑卒中诊治指南》等权威指南给出建议。
 5. 回答应包含以下方面（根据问题相关性选择）：
-   a) 对患者当前影像数据的解读
+   a) 对患者当前影像数据（含 NCCT 三分类）的解读
    b) 可挽救脑组织的评估（如适用）
    c) 治疗建议及依据
-   d) 风险提示和注意事项
 6. 回答应专业但易于理解，长度适中（300-600字）。
 7. 不要使用Markdown格式，使用纯文本段落。"""
 
@@ -597,7 +597,7 @@ def _build_question_answer(
         if str(item.get("claim_id") or "") in focus_claims
     ]
     if not selected_findings:
-        selected_findings = list(key_findings[:4])
+        selected_findings = list(key_findings[:5])
 
     supported_count = 0
     unavailable_count = 0
@@ -699,7 +699,7 @@ def _build_question_answer(
         core_vol = p_ctx.get("core_infarct_volume")
         penumbra_vol = p_ctx.get("penumbra_volume")
         mr = p_ctx.get("mismatch_ratio")
-        hemi = p_ctx.get("hemisphere", "")
+        ncct_conf = p_ctx.get("three_class_confidence")
 
         if core_vol is not None and penumbra_vol is not None and mr is not None:
             hemi_zh = {"right": "右侧", "left": "左侧", "bilateral": "双侧"}.get(
@@ -710,6 +710,7 @@ def _build_question_answer(
                 f"半暗带体积约{penumbra_vol} ml，不匹配比值为{mr}，"
                 f"受累侧别为{hemi_zh}。"
             )
+
             # 判断是否存在可挽救脑组织
             try:
                 mr_val = float(mr)
@@ -781,7 +782,7 @@ def _build_question_answer(
     question_answer = {
         "question": question,
         "direct_answer": direct_answer,
-        "key_points": key_points[:6],
+        "key_points": key_points[:7],
         "recommendations": list(next_actions[:6]),
         "confidence": round(confidence, 4),
         "evidence_refs": evidence_refs,
@@ -910,7 +911,7 @@ def build_summary_artifacts(
         for key in (
             "core_infarct_volume", "penumbra_volume", "mismatch_ratio",
             "hemisphere", "patient_name", "patient_age", "patient_sex",
-            "admission_nihss", "onset_to_admission_hours",
+            "three_class_label_cn", "three_class_confidence",
         ):
             val = payload.get(key)
             if val is not None:

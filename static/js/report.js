@@ -1,4 +1,4 @@
-﻿const { useState, useEffect } = React;
+const { useState, useEffect } = React;
 
 const PatientInfoModule = ({ data, isEditing, onUpdate }) => {
     if (!data) {
@@ -67,6 +67,24 @@ const ImageFindingsModule = ({ data, findings, isEditing, onUpdate }) => {
     if (!data) {
         return React.createElement("div", { className: "module-empty" }, "加载影像分析数据中...");
     }
+    const threeClassSummary = data.three_class_summary || null;
+    const threeClassDisplay = (threeClassSummary && threeClassSummary.display) || data.three_class_display || '';
+    const threeClassCounts = (threeClassSummary && threeClassSummary.counts) || data.three_class_counts || null;
+    const singleLabel = data.three_class_label_cn || data.three_class_label || '--';
+    const singleConfidence = typeof data.three_class_confidence === 'number'
+        ? `${(data.three_class_confidence * 100).toFixed(1)}%`
+        : '--';
+
+    let countsText = '';
+    if (threeClassCounts && typeof threeClassCounts === 'object') {
+        const normalCount = Number(threeClassCounts.normal || 0);
+        const hemoCount = Number(threeClassCounts.hemo || 0);
+        const infarctCount = Number(threeClassCounts.infarct || 0);
+        countsText = `正常 ${normalCount}，脑出血 ${hemoCount}，脑缺血 ${infarctCount}`;
+    }
+
+    const ncctResultText = threeClassDisplay || countsText || singleLabel || '--';
+
     return React.createElement("div", { className: "report-module" },
         React.createElement("div", { className: "module-header", style: { background: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' } }, "影像所见"),
         React.createElement("div", { className: "module-content" },
@@ -111,6 +129,14 @@ const ImageFindingsModule = ({ data, findings, isEditing, onUpdate }) => {
                 React.createElement("div", { className: "metric" },
                     React.createElement("span", null, "不匹配状态："),
                     React.createElement("strong", { style: { color: data.has_mismatch ? '#ff6b6b' : '#51cf66' } }, data.has_mismatch ? '存在明显不匹配' : '无明显不匹配')
+                ),
+                React.createElement("div", { className: "metric" },
+                    React.createElement("span", null, "NCCT 三分类结果："),
+                    React.createElement("strong", null, ncctResultText)
+                ),
+                React.createElement("div", { className: "metric" },
+                    React.createElement("span", null, "NCCT 置信度："),
+                    React.createElement("strong", null, singleConfidence)
                 )
             )
         )
