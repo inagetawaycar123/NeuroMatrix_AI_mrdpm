@@ -734,6 +734,9 @@ body.node-drawer-open {
     inset: 0;
     z-index: 48;
     padding: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .node-drawer[hidden] {
@@ -741,8 +744,7 @@ body.node-drawer-open {
 }
 
 .node-drawer:not([hidden]) {
-    display: grid;
-    place-items: center;
+    display: flex;
 }
 
 .node-drawer-mask {
@@ -760,7 +762,7 @@ body.node-drawer-open {
     border: 1px solid rgba(100, 116, 139, 0.5);
     border-radius: 14px;
     box-shadow: 0 26px 58px rgba(0, 0, 0, 0.58);
-    padding: 18px;
+    padding: 18px 18px 16px;
     overflow-y: auto;
     animation: drawer-card-enter 0.2s ease;
 }
@@ -913,6 +915,7 @@ body.node-drawer-open {
     .node-drawer-panel {
         width: min(100vw - 16px, 100%);
         max-height: calc(100vh - 20px);
+        border-radius: 12px;
         padding: 12px;
     }
 
