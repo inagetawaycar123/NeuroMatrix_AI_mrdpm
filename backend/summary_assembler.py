@@ -462,6 +462,19 @@ def _build_llm_question_prompt(
     penumbra_volume = patient_context.get("penumbra_volume", "未知")
     mismatch_ratio = patient_context.get("mismatch_ratio", "未知")
     hemisphere = patient_context.get("hemisphere", "未知")
+    
+    # 血管堵塞分类信息
+    vessel_occlusion = patient_context.get("vessel_occlusion_classification", {})
+    vessel_class_text = "未评估"
+    if vessel_occlusion and vessel_occlusion.get("success"):
+        class_name = vessel_occlusion.get("class_name", "未分类")
+        confidence = vessel_occlusion.get("confidence", 0)
+        class_name_cn = {
+            "无阻塞": "无明显血管狭窄",
+            "LVO": "大血管闭塞（LVO）",
+            "MEVO": "小血管病变"
+        }.get(class_name, class_name)
+        vessel_class_text = f"{class_name_cn}（置信度：{confidence * 100:.1f}%）"
 
     findings_text = "\n".join(f"  - {p}" for p in key_points) if key_points else "  （无）"
     actions_text = "\n".join(f"  - {a}" for a in next_actions) if next_actions else "  （无）"
@@ -491,6 +504,7 @@ def _build_llm_question_prompt(
 - 半暗带体积（Penumbra）：{penumbra_volume} ml
 - 不匹配比值（Mismatch Ratio）：{mismatch_ratio}
 - 受累侧别：{hemisphere}
+- 血管堵塞分类（AI评估）：{vessel_class_text}
 
 【系统校验关键发现】
 {findings_text}
@@ -929,6 +943,11 @@ def build_summary_artifacts(
             val = payload.get(key)
             if val is not None:
                 effective_patient_ctx[key] = val
+        
+        # 提取血管堵塞分类信息
+        occlusion_data = payload.get("occlusion_classification", {})
+        if occlusion_data and isinstance(occlusion_data, dict):
+            effective_patient_ctx["vessel_occlusion_classification"] = occlusion_data
 
     question_answer, answer_ledger = _build_question_answer(
         goal_question=str(goal_question or ""),

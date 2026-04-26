@@ -6774,6 +6774,9 @@ def mask_patient_context(raw: dict):
             "penumbra_volume": ctp.get("penumbra_volume"),
             "mismatch_ratio": ctp.get("mismatch_ratio"),
         },
+        "vessel_occlusion": {
+            "classification": ctp.get("occlusion_classification", {}),
+        },
         "doctor_notes": {
             "text": notes.get("text") or "",
             "source": notes.get("source") or "unknown",
@@ -6815,6 +6818,32 @@ def _build_context_summary(masked_context: dict, missing_flags):
         lines.append(f"- 核心梗死体积：{core if core is not None else '未提供'}")
         lines.append(f"- 半暗带体积：{penumbra if penumbra is not None else '未提供'}")
         lines.append(f"- Mismatch 比值：{mismatch if mismatch is not None else '未提供'}")
+    lines.append("")
+    
+    # 添加血管堵塞分类信息
+    vessel_occlusion = masked_context.get("vessel_occlusion", {})
+    occlusion_data = vessel_occlusion.get("classification", {})
+    lines.append("【血管堵塞分类（AI评估）】")
+    if occlusion_data and occlusion_data.get("success"):
+        class_name = occlusion_data.get("class_name", "未分类")
+        confidence = occlusion_data.get("confidence", 0)
+        class_name_cn = {
+            "无阻塞": "无明显血管狭窄",
+            "LVO": "大血管闭塞（LVO）",
+            "MEVO": "小血管病变"
+        }.get(class_name, class_name)
+        lines.append(f"- 分类结果：{class_name_cn}")
+        lines.append(f"- 置信度：{confidence * 100:.1f}%")
+        
+        # 添加临床意义
+        if class_name == "无阻塞":
+            lines.append("- 临床意义：大血管通畅，无明显闭塞征象")
+        elif class_name == "LVO":
+            lines.append("- 临床意义：检测到大血管闭塞，可能适合血管内治疗")
+        elif class_name == "MEVO":
+            lines.append("- 临床意义：检测到小血管病变征象")
+    else:
+        lines.append("- 暂未完成血管堵塞AI分类评估。")
     lines.append("")
 
     lines.append("【医生备注】")
@@ -6889,10 +6918,14 @@ def load_patient_context_by_id(patient_id: int):
         if mismatch is None:
             mismatch = _pick_first_numeric(analysis_result, ["mismatch_ratio", "mismatch"])
 
+        # 提取血管堵塞分类信息
+        occlusion_classification = analysis_result.get("occlusion_classification", {})
+        
         raw_context["ctp"] = {
             "core_infarct_volume": core,
             "penumbra_volume": penumbra,
             "mismatch_ratio": mismatch,
+            "occlusion_classification": occlusion_classification,
         }
 
         note_text = str(imaging.get("notes") or "").strip()
@@ -6915,6 +6948,7 @@ def load_patient_context_by_id(patient_id: int):
             "core_infarct_volume": patient_data.get("core_infarct_volume"),
             "penumbra_volume": patient_data.get("penumbra_volume"),
             "mismatch_ratio": patient_data.get("mismatch_ratio"),
+            "occlusion_classification": {},
         }
 
     masked = mask_patient_context(raw_context)
